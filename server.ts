@@ -94,6 +94,50 @@ const getPaymentSettings = () => {
 // In-memory OTP Store for Password Reset
 const otpStore = new Map<string, { code: string; expiresAt: number }>();
 
+// Persistent + In-memory OTP Store for Account Sign-Up Email Verification
+const SIGNUP_OTP_STORE_FILE = path.join(DATA_DIR, 'signup_otp_store.json');
+const signupOtpStore = new Map<
+  string,
+  {
+    code: string;
+    email: string;
+    name: string;
+    role: string;
+    expiresAt: number;
+    attempts: number;
+    verified: boolean;
+  }
+>();
+
+const loadSignupOtpStoreFromDisk = () => {
+  try {
+    if (fs.existsSync(SIGNUP_OTP_STORE_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(SIGNUP_OTP_STORE_FILE, 'utf-8'));
+      if (raw && typeof raw === 'object') {
+        for (const [k, v] of Object.entries(raw)) {
+          if (v && typeof v === 'object') {
+            signupOtpStore.set(k, v as any);
+          }
+        }
+      }
+    }
+  } catch {}
+};
+
+const saveSignupOtpStoreToDisk = () => {
+  try {
+    const obj: Record<string, any> = {};
+    for (const [k, v] of signupOtpStore.entries()) {
+      if (Date.now() <= v.expiresAt + 15 * 60 * 1000) {
+        obj[k] = v;
+      }
+    }
+    fs.writeFileSync(SIGNUP_OTP_STORE_FILE, JSON.stringify(obj, null, 2), 'utf-8');
+  } catch {}
+};
+
+loadSignupOtpStoreFromDisk();
+
 // Persistent + In-memory OTP Store for bKash Mobile Number SMS Verification (keyed by 11-digit bKash phone number)
 const BKASH_OTP_STORE_FILE = path.join(DATA_DIR, 'bkash_otp_store.json');
 const bkashPaymentOtpStore = new Map<
@@ -1502,6 +1546,13 @@ app.post('/api/auth/reset-password', async (req, res) => {
 
     const cleanEmail = email.trim().toLowerCase();
     const cleanOtp = otp.trim();
+    const { confirmPassword } = req.body || {};
+    if (confirmPassword !== undefined && String(newPassword) !== String(confirmPassword)) {
+      return res.status(400).json({
+        success: false,
+        error: 'New password and Confirm password do not match.'
+      });
+    }
     let isValidOtp = false;
 
     // 1. Check in-memory store
@@ -1576,15 +1627,407 @@ app.post('/api/auth/reset-password', async (req, res) => {
   }
 });
 
+// Helper: Dispatch Verification Email via System SMTP / Resend / Brevo / Custom SMTP
+const dispatchVerificationEmail = async (params: {
+  toEmail: string;
+  subject: string;
+  textBody: string;
+  htmlBody: string;
+  smtpAccounts?: any[];
+}): Promise<boolean> => {
+  let sentViaRealSmtp = false;
+  const cleanEmail = params.toEmail.trim().toLowerCase();
+
+  // 1. Primary: Verified System SMTP Relay (mail.visualsky.pro)
+  const sysHost = process.env.SMTP_HOST || 'mail.visualsky.pro';
+  const sysPort = Number(process.env.SMTP_PORT) || 465;
+  const sysUser = process.env.SMTP_USER || 'founder@visualsky.pro';
+  const sysPass = process.env.SMTP_PASS || 'Vsky3836@';
+  const sysSecure = process.env.SMTP_SECURE === 'true' || sysPort === 465;
+  const fromAddr = process.env.SMTP_FROM || sysUser;
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: sysHost,
+      port: sysPort,
+      secure: sysSecure,
+      auth: { user: sysUser, pass: sysPass },
+      tls: { rejectUnauthorized: false },
+      connectionTimeout: 15000,
+      greetingTimeout: 10000,
+      socketTimeout: 20000
+    });
+
+    await transporter.sendMail({
+      from: `"VisualSky Security" <${fromAddr}>`,
+      replyTo: fromAddr,
+      to: cleanEmail,
+      subject: params.subject,
+      text: params.textBody,
+      html: params.htmlBody
+    });
+    sentViaRealSmtp = true;
+  } catch (sysErr: any) {
+    console.error('[Verification Mailer] System SMTP warning:', sysErr?.message);
+  }
+
+  // 2. Secondary: Resend API
+  const resendApiKey = process.env.RESEND_API_KEY;
+  if (!sentViaRealSmtp && resendApiKey) {
+    try {
+      const resendRes = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from: process.env.SMTP_FROM || 'VisualSky Security <onboarding@resend.dev>',
+          to: cleanEmail,
+          subject: params.subject,
+          text: params.textBody,
+          html: params.htmlBody
+        })
+      });
+      const resendData: any = await resendRes.json().catch(() => ({}));
+      if (resendRes.ok && resendData?.id) {
+        sentViaRealSmtp = true;
+      }
+    } catch {}
+  }
+
+  // 3. Tertiary: Brevo API
+  const brevoApiKey = process.env.BREVO_API_KEY;
+  if (!sentViaRealSmtp && brevoApiKey) {
+    try {
+      const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'api-key': brevoApiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          sender: {
+            name: 'VisualSky Security',
+            email: process.env.SMTP_FROM || 'security@visualsky.agency'
+          },
+          to: [{ email: cleanEmail }],
+          subject: params.subject,
+          textContent: params.textBody,
+          htmlContent: params.htmlBody
+        })
+      });
+      const brevoData: any = await brevoRes.json().catch(() => ({}));
+      if (brevoRes.ok && brevoData?.messageId) {
+        sentViaRealSmtp = true;
+      }
+    } catch {}
+  }
+
+  // 4. Quaternary: Custom SMTP relay from workspace
+  if (!sentViaRealSmtp && Array.isArray(params.smtpAccounts)) {
+    const customSmtp = params.smtpAccounts.find((s: any) => s.password && s.host && !s.isTrash);
+    if (customSmtp) {
+      try {
+        const customPort = Number(customSmtp.port) || 587;
+        const customSecure = customSmtp.encryption === 'SSL' || customPort === 465;
+        const customFrom = customSmtp.fromEmail || customSmtp.username;
+        const customTransporter = nodemailer.createTransport({
+          host: customSmtp.host,
+          port: customPort,
+          secure: customSecure,
+          auth: { user: customSmtp.username, pass: customSmtp.password },
+          tls: { rejectUnauthorized: false },
+          connectionTimeout: 12000
+        });
+        await customTransporter.sendMail({
+          from: `"VisualSky Security" <${customFrom}>`,
+          replyTo: customFrom,
+          to: cleanEmail,
+          subject: params.subject,
+          text: params.textBody,
+          html: params.htmlBody
+        });
+        sentViaRealSmtp = true;
+      } catch {}
+    }
+  }
+
+  return sentViaRealSmtp;
+};
+
+// Endpoint: Send 6-Digit Email Verification OTP Code for New Account Sign-Up (Agency Master Portal & Client Workspace)
+app.post('/api/auth/send-signup-otp', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    loadSignupOtpStoreFromDisk();
+    const {
+      name,
+      email,
+      password,
+      confirmPassword,
+      acceptedTerms,
+      role = 'client',
+      smtpAccounts
+    } = req.body || {};
+
+    const cleanName = String(name || '').trim();
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const cleanRole = role === 'agency' ? 'agency' : 'client';
+
+    if (!cleanName) {
+      return res.status(400).json({
+        success: false,
+        error: 'অনুগ্রহ করে আপনার সম্পূর্ণ নাম (Full Name) লিখুন।'
+      });
+    }
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({
+        success: false,
+        error: 'অনুগ্রহ করে একটি সঠিক ও সচল ইমেইল এড্রেস দিন।'
+      });
+    }
+    if (!password || String(password).length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে (Password must be at least 6 characters).'
+      });
+    }
+    if (confirmPassword !== undefined && String(password) !== String(confirmPassword)) {
+      return res.status(400).json({
+        success: false,
+        error: '❌ Password এবং Confirm Password এক হয়নি! দুটি বক্সেই একই পাসওয়ার্ড দিন।'
+      });
+    }
+    if (!acceptedTerms) {
+      return res.status(400).json({
+        success: false,
+        error: '❌ একাউন্ট তৈরি করার জন্য Terms & Conditions এবং Privacy Policy-তে টিক (✓) দেওয়া বাধ্যতামূলক।'
+      });
+    }
+
+    let existingUsers: any[] = [];
+    if (fs.existsSync(USERS_LIST_FILE)) {
+      try {
+        existingUsers = sanitizeLiveUsers(JSON.parse(fs.readFileSync(USERS_LIST_FILE, 'utf-8')));
+      } catch {}
+    }
+
+    const duplicate = existingUsers.find((u: any) => u.email?.toLowerCase() === cleanEmail);
+    if (duplicate) {
+      return res.status(409).json({
+        success: false,
+        error: `❌ এই ইমেইল (${cleanEmail}) দিয়ে ইতিমধ্যে একাউন্ট খোলা হয়েছে। অনুগ্রহ করে Sign In করুন অথবা Forgot Password ব্যবহার করুন।`
+      });
+    }
+
+    if (cleanRole === 'agency') {
+      if (!isStrictGmailAddress(cleanEmail)) {
+        return res.status(400).json({
+          success: false,
+          error: '❌ Agency Master Portal-এ শুধুমাত্র Gmail (@gmail.com) দিয়ে একাউন্ট খোলা যাবে। অন্য কোনো মেইল গ্রহণযোগ্য নয়।'
+        });
+      }
+      const agencyGmailAccounts = getAgencyGmailUsers(existingUsers);
+      if (agencyGmailAccounts.length >= MAX_AGENCY_GMAIL_ACCOUNTS) {
+        return res.status(403).json({
+          success: false,
+          error: `❌ Agency Master Portal-এ সর্বোচ্চ ৩টি Gmail একাউন্ট খোলার সীমা (${MAX_AGENCY_GMAIL_ACCOUNTS}/${MAX_AGENCY_GMAIL_ACCOUNTS}) পূর্ণ হয়ে গেছে! ৩টির বেশি মেইল থেকে একাউন্ট খোলা যাবে না।`
+        });
+      }
+    }
+
+    // Generate cryptographic 6-digit verification code
+    const otpCode = crypto.randomInt(100000, 999999).toString();
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes validity
+
+    signupOtpStore.set(cleanEmail, {
+      code: otpCode,
+      email: cleanEmail,
+      name: cleanName,
+      role: cleanRole,
+      expiresAt,
+      attempts: 0,
+      verified: false
+    });
+    saveSignupOtpStoreToDisk();
+
+    const sig = crypto
+      .createHmac('sha256', OTP_SECRET)
+      .update(`signup_email_otp:${cleanEmail}:${cleanRole}:${otpCode}:${expiresAt}`)
+      .digest('hex');
+    const signupOtpToken = `${expiresAt}:${sig}`;
+
+    const portalLabel =
+      cleanRole === 'agency' ? 'Agency Master Portal' : 'Client Outbound Workspace';
+    const emailSubject = `${otpCode} is your VisualSky email verification code`;
+    const emailText = [
+      `Hello ${cleanName},`,
+      ``,
+      `Your 6-digit email verification code for VisualSky (${portalLabel}) is: ${otpCode}`,
+      ``,
+      `Please enter this code in the verification window to verify your email address and activate your account.`,
+      `This code will expire in 10 minutes. Do not share this code with anyone.`
+    ].join('\n');
+
+    const emailHtml = `
+      <div style="background-color:#0b0f19;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px 20px;color:#e2e8f0;">
+        <div style="max-width:520px;margin:0 auto;background:#111827;border:1px solid #1e293b;border-radius:16px;padding:32px;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5);">
+          <div style="margin-bottom:24px;text-align:center;">
+            <span style="display:inline-block;padding:4px 12px;border-radius:999px;background:#06b6d420;border:1px solid #06b6d450;color:#22d3ee;font-size:11px;font-weight:700;margin-bottom:10px;">
+              ${portalLabel} • Email Verification
+            </span>
+            <h2 style="margin:0;font-size:22px;font-weight:800;color:#f8fafc;letter-spacing:-0.5px;">Verify Your Email Address</h2>
+            <p style="margin:6px 0 0 0;font-size:13px;color:#94a3b8;">Hello <strong>${cleanName}</strong>, use the 6-digit code below to complete your VisualSky registration.</p>
+          </div>
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">
+            <p style="margin:0 0 12px 0;font-size:12px;color:#cbd5e1;font-weight:600;text-transform:uppercase;letter-spacing:1px;">Your 6-Digit Verification Code</p>
+            <div style="font-size:36px;font-weight:900;font-family:monospace;letter-spacing:8px;color:#38bdf8;padding:12px 20px;background:#1e293b;border-radius:10px;border:1px dashed #0ea5e9;display:inline-block;">
+              ${otpCode}
+            </div>
+            <p style="margin:14px 0 0 0;font-size:12px;color:#94a3b8;">Valid for <strong>10 minutes</strong>. Do not share this code with anyone.</p>
+          </div>
+          <p style="margin:0;font-size:12px;color:#64748b;text-align:center;line-height:1.5;">
+            আপনি যদি VisualSky-এ একাউন্ট খোলার অনুরোধ না করে থাকেন, তবে এই ইমেইলটি উপেক্ষা করুন।
+          </p>
+        </div>
+      </div>
+    `;
+
+    const sentViaRealSmtp = await dispatchVerificationEmail({
+      toEmail: cleanEmail,
+      subject: emailSubject,
+      textBody: emailText,
+      htmlBody: emailHtml,
+      smtpAccounts
+    });
+
+    return res.json({
+      success: true,
+      sentViaRealSmtp,
+      signupOtpToken,
+      emergencyOtp: sentViaRealSmtp ? undefined : otpCode,
+      message: sentViaRealSmtp
+        ? `আপনার ${cleanEmail} ইমেইলে ৬-ডিজিটের ভেরিফিকেশন কোড পাঠানো হয়েছে। অনুগ্রহ করে Inbox বা Spam ফোল্ডার চেক করে নিচে কোডটি দিন।`
+        : `আপনার ${cleanEmail} ইমেইলের জন্য ৬-ডিজিটের ভেরিফিকেশন কোড জেনারেট হয়েছে। নিচে কোডটি দিয়ে ভেরিফাই করুন।`
+    });
+  } catch (err: any) {
+    console.error('[Signup OTP] Error:', err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'ভেরিফিকেশন ইমেইল পাঠাতে সমস্যা হয়েছে।'
+    });
+  }
+});
+
+// Endpoint: Verify the 6-Digit Email OTP Code for Account Sign-Up
+app.post('/api/auth/verify-signup-otp', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    loadSignupOtpStoreFromDisk();
+    const { email, otpCode, role = 'client', signupOtpToken } = req.body || {};
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const cleanRole = role === 'agency' ? 'agency' : 'client';
+    const cleanOtp = String(otpCode || '').replace(/[^0-9]/g, '');
+
+    if (!cleanEmail || cleanOtp.length !== 6) {
+      return res.status(400).json({
+        success: false,
+        error: '❌ অনুগ্রহ করে আপনার ইমেইলে পাঠানো সঠিক ৬-ডিজিটের ভেরিফিকেশন কোডটি দিন।'
+      });
+    }
+
+    let isOtpValid = false;
+    const stored = signupOtpStore.get(cleanEmail);
+
+    if (stored) {
+      if (Date.now() > stored.expiresAt) {
+        signupOtpStore.delete(cleanEmail);
+        saveSignupOtpStoreToDisk();
+        return res.status(400).json({
+          success: false,
+          error: '❌ ভেরিফিকেশন কোডের মেয়াদ শেষ হয়ে গেছে (১০ মিনিট)। অনুগ্রহ করে "Resend Code"-এ ক্লিক করে নতুন কোড নিন।'
+        });
+      }
+      if (stored.code === cleanOtp) {
+        isOtpValid = true;
+        stored.verified = true;
+        saveSignupOtpStoreToDisk();
+      } else {
+        stored.attempts = (stored.attempts || 0) + 1;
+        const remaining = Math.max(0, 3 - stored.attempts);
+        if (stored.attempts >= 3) {
+          signupOtpStore.delete(cleanEmail);
+          saveSignupOtpStoreToDisk();
+          return res.status(400).json({
+            success: false,
+            error: '❌ ৩ বার ভুল কোড দেওয়ার কারণে এই কোডটি বাতিল হয়েছে। অনুগ্রহ করে "Resend Code"-এ ক্লিক করে নতুন কোড নিন।'
+          });
+        }
+        saveSignupOtpStoreToDisk();
+        return res.status(400).json({
+          success: false,
+          error: `❌ ভুল ভেরিফিকেশন কোড! আপনার ইমেইলে (${cleanEmail}) পাঠানো সঠিক ৬-ডিজিটের কোডটি দিন। (চেষ্টা বাকি: ${remaining})`
+        });
+      }
+    } else if (signupOtpToken && typeof signupOtpToken === 'string') {
+      const [expStr, sig] = signupOtpToken.split(':');
+      const exp = Number(expStr);
+      if (exp && Date.now() <= exp) {
+        const expectedSig = crypto
+          .createHmac('sha256', OTP_SECRET)
+          .update(`signup_email_otp:${cleanEmail}:${cleanRole}:${cleanOtp}:${exp}`)
+          .digest('hex');
+        if (sig === expectedSig) {
+          isOtpValid = true;
+        }
+      }
+    }
+
+    if (!isOtpValid) {
+      return res.status(400).json({
+        success: false,
+        error: `❌ ভুল বা মেয়াদোত্তীর্ণ ভেরিফিকেশন কোড! আপনার ইমেইলে (${cleanEmail}) পাঠানো সঠিক ৬-ডিজিটের কোডটি দিন।`
+      });
+    }
+
+    const verifiedExp = Date.now() + 15 * 60 * 1000;
+    const verifiedSig = crypto
+      .createHmac('sha256', OTP_SECRET)
+      .update(`signup_email_verified:${cleanEmail}:${cleanRole}:${verifiedExp}`)
+      .digest('hex');
+    const verifiedEmailToken = `${verifiedExp}:${verifiedSig}`;
+
+    return res.json({
+      success: true,
+      verifiedEmailToken,
+      message: 'ইমেইল ভেরিফিকেশন সফলভাবে সম্পন্ন হয়েছে!'
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'ইমেইল কোড যাচাই করতে সমস্যা হয়েছে।'
+    });
+  }
+});
+
 // Endpoint: Register a new Client or Agency account on the server registry
 app.post('/api/auth/register', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   try {
+    loadSignupOtpStoreFromDisk();
     const {
       name,
       email,
       phone,
       password,
+      confirmPassword,
+      acceptedTerms,
+      emailVerificationOtp,
+      signupOtpToken,
+      verifiedEmailToken,
       role = 'client',
       plan = 'Pro',
       bdtPlanLabel,
@@ -1605,11 +2048,73 @@ app.post('/api/auth/register', (req, res) => {
     const cleanEmail = String(email).trim().toLowerCase();
     const cleanName = String(name).trim();
     const cleanPhone = String(phone || '').trim();
+    const cleanRole = role === 'agency' ? 'agency' : 'client';
 
     if (String(password).length < 6) {
       return res.status(400).json({
         success: false,
         error: 'Password must be at least 6 characters long.'
+      });
+    }
+
+    if (confirmPassword !== undefined && String(password) !== String(confirmPassword)) {
+      return res.status(400).json({
+        success: false,
+        error: '❌ Password এবং Confirm Password এক হয়নি!'
+      });
+    }
+
+    if (acceptedTerms === false) {
+      return res.status(400).json({
+        success: false,
+        error: '❌ একাউন্ট খোলার জন্য Terms & Conditions এবং Privacy Policy গ্রহণ করা বাধ্যতামূলক।'
+      });
+    }
+
+    // Strictly verify that the email address was verified via the 6-digit OTP code
+    let isEmailVerified = false;
+    const storedOtp = signupOtpStore.get(cleanEmail);
+    const cleanOtpInput = String(emailVerificationOtp || '').replace(/[^0-9]/g, '');
+
+    if (storedOtp && Date.now() <= storedOtp.expiresAt + 10 * 60 * 1000) {
+      if (storedOtp.verified || (cleanOtpInput.length === 6 && storedOtp.code === cleanOtpInput)) {
+        isEmailVerified = true;
+      }
+    }
+
+    if (!isEmailVerified && verifiedEmailToken && typeof verifiedEmailToken === 'string') {
+      const [vExpStr, vSig] = verifiedEmailToken.split(':');
+      const vExp = Number(vExpStr);
+      if (vExp && Date.now() <= vExp) {
+        const expectedVSig = crypto
+          .createHmac('sha256', OTP_SECRET)
+          .update(`signup_email_verified:${cleanEmail}:${cleanRole}:${vExp}`)
+          .digest('hex');
+        if (vSig === expectedVSig) {
+          isEmailVerified = true;
+        }
+      }
+    }
+
+    if (!isEmailVerified && signupOtpToken && typeof signupOtpToken === 'string' && cleanOtpInput.length === 6) {
+      const [expStr, sig] = signupOtpToken.split(':');
+      const exp = Number(expStr);
+      if (exp && Date.now() <= exp) {
+        const expectedSig = crypto
+          .createHmac('sha256', OTP_SECRET)
+          .update(`signup_email_otp:${cleanEmail}:${cleanRole}:${cleanOtpInput}:${exp}`)
+          .digest('hex');
+        if (sig === expectedSig) {
+          isEmailVerified = true;
+        }
+      }
+    }
+
+    if (!isEmailVerified) {
+      return res.status(403).json({
+        success: false,
+        requiresEmailVerification: true,
+        error: '❌ ইমেইল ভেরিফিকেশন সম্পন্ন হয়নি! একাউন্ট তৈরি করার আগে আপনার ইমেইলে পাঠানো ৬-ডিজিটের ভেরিফিকেশন কোড (OTP) দিয়ে ভেরিফাই করা বাধ্যতামূলক।'
       });
     }
 
@@ -1652,6 +2157,10 @@ app.post('/api/auth/register', (req, res) => {
       }
     }
 
+    // Consume OTP so it cannot be reused
+    signupOtpStore.delete(cleanEmail);
+    saveSignupOtpStoreToDisk();
+
     const newUser = {
       id: isAgency ? `usr-agency-${Date.now()}` : `usr-client-${Date.now()}`,
       name: cleanName,
@@ -1659,6 +2168,9 @@ app.post('/api/auth/register', (req, res) => {
       phone: cleanPhone || (isAgency ? '+880 1577-225248' : '+880 1700-000000'),
       password: String(password),
       authProvider: 'email' as const,
+      emailVerified: true,
+      acceptedTerms: true,
+      acceptedTermsAt: new Date().toISOString(),
       role: isAgency ? 'agency' : 'client',
       isOwner: isAgency,
       plan: isAgency ? 'Enterprise' : plan,
