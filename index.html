@@ -10,7 +10,24 @@
     <meta property="og:description" content="Enterprise-grade AI lead intelligence, outbound SMTP relays, cold email sequences, multi-platform lead miner, unified inbox, and client CRM." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
-    <link rel="stylesheet" href="/prebuilt/app.css?v=20260928-v5" />
+    <link rel="stylesheet" href="/prebuilt/app.css?v=20260928-v6" />
+    <style>
+      .vs-auth-popup-window {
+        width: 100% !important;
+        max-width: 420px !important;
+        max-height: 88vh !important;
+        overflow-y: auto !important;
+        margin: auto !important;
+        border-radius: 16px !important;
+      }
+      .vs-legal-popup-window {
+        width: 100% !important;
+        max-width: 460px !important;
+        max-height: 82vh !important;
+        margin: auto !important;
+        border-radius: 16px !important;
+      }
+    </style>
   </head>
   <body style="background-color: #080c14; color: #f1f5f9; margin: 0; min-height: 100vh;">
     <div id="root">
@@ -29,7 +46,7 @@
           var script = document.createElement('script');
           script.id = 'vs-prebuilt-bundle';
           script.type = 'module';
-          script.src = '/prebuilt/app.js?v=20260928-v5&t=' + Date.now();
+          script.src = '/prebuilt/app.js?v=20260928-v6&t=' + Date.now();
           document.body.appendChild(script);
         }
 

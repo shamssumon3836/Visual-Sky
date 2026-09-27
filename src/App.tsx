@@ -238,7 +238,7 @@ const MainContent: React.FC = () => {
         <Sidebar onOpenBilling={() => setIsBillingOpen(true)} />
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 pb-20 md:pb-6 relative">
-          <div key={activeTab} className="saas-view-enter min-h-full">
+          <div className="min-h-full">
             {renderActiveView()}
           </div>
         </main>

@@ -550,57 +550,6 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
           )}
         </div>
 
-        {/* Real-time Cloud Sync Status */}
-        <button
-          onClick={async () => {
-            if (currentUser?.email) {
-              const ok = await saveWorkspaceToDatabase();
-              if (ok) {
-                addNotification({
-                  title: 'Cloud Synced! ☁️',
-                  message: 'Workspace saved and confirmed synchronized with central cloud database.',
-                  type: 'system'
-                });
-              } else {
-                addNotification({
-                  title: 'Syncing Status',
-                  message: 'Workspace data cached locally. Automatic background sync active.',
-                  type: 'system'
-                });
-              }
-            }
-          }}
-          title={
-            syncStatus === 'syncing' || isWorkspaceLoading
-              ? 'Synchronizing workspace with cloud...'
-              : syncStatus === 'synced'
-              ? 'Workspace Cloud Synced (Click to instantly save to database)'
-              : 'Local Mode (Click to retry cloud connection)'
-          }
-          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 transition cursor-pointer"
-        >
-          {isWorkspaceLoading || syncStatus === 'syncing' ? (
-            <>
-              <RefreshCw className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
-              <span className="text-[11px] text-cyan-300 font-medium hidden lg:inline">Syncing...</span>
-            </>
-          ) : syncStatus === 'synced' ? (
-            <>
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              <Cloud className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="text-[11px] text-slate-300 font-medium hidden lg:inline">Cloud Synced</span>
-            </>
-          ) : (
-            <>
-              <CloudOff className="w-3.5 h-3.5 text-amber-400" />
-              <span className="text-[11px] text-amber-300 font-medium hidden lg:inline">Offline Sync</span>
-            </>
-          )}
-        </button>
-
         {/* Notification Center */}
         <div className="relative" ref={notifRef}>
           <button

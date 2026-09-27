@@ -3348,9 +3348,14 @@ app.post('/api/user-data/:email/smtp', (req, res) => {
   return res.json({ success: true, count: smtpAccounts.length, savedAt: workspace.updatedAt });
 });
 
-// Auto-sync prebuilt client bundle if source files were updated via Git pull on cPanel
+// Auto-sync prebuilt client bundle if source files were updated via Git pull on cPanel (production only)
 let lastBundleSyncCheck = 0;
 function ensureFreshPrebuiltBundle() {
+  const isProdServer =
+    process.env.NODE_ENV === 'production' ||
+    Boolean(process.argv[1] && process.argv[1].includes('server.cjs'));
+  if (!isProdServer) return;
+
   const now = Date.now();
   if (now - lastBundleSyncCheck < 3000) return;
   lastBundleSyncCheck = now;
@@ -3402,7 +3407,9 @@ function ensureFreshPrebuiltBundle() {
       });
 
       if (fs.existsSync(prebuiltAppCss) && fs.existsSync(prebuiltAppJs)) {
-        const cssContent = fs.readFileSync(prebuiltAppCss, 'utf8');
+        const extraPopupCss =
+          '\n.vs-auth-popup-window{width:100%!important;max-width:420px!important;max-height:88vh!important;overflow-y:auto!important;margin:auto!important;border-radius:16px!important;}.vs-legal-popup-window{width:100%!important;max-width:460px!important;max-height:82vh!important;margin:auto!important;border-radius:16px!important;}\n';
+        const cssContent = fs.readFileSync(prebuiltAppCss, 'utf8') + extraPopupCss;
         const jsContent = fs.readFileSync(prebuiltAppJs, 'utf8');
         if (!jsContent.includes('vs-tailwind-inline')) {
           const styleInjector = `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-tailwind-inline')){var s=document.createElement('style');s.id='vs-tailwind-inline';s.textContent=${JSON.stringify(
@@ -3419,7 +3426,7 @@ function ensureFreshPrebuiltBundle() {
 app.get('/api/health', (_req, res) => {
   ensureFreshPrebuiltBundle();
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.json({ status: 'ok', version: '20260928-v5', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', version: '20260928-v6', timestamp: new Date().toISOString() });
 });
 
 // Serve guaranteed-fresh client bundle through Passenger API route
@@ -4675,7 +4682,11 @@ async function startServer() {
   if (!isProdServer) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+        watch: null
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

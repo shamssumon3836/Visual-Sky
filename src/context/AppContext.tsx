@@ -760,6 +760,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     minedLeads,
     columnSettings,
     notificationSettings,
+    lastActiveTab: activeTab,
     userProfile: {
       quotaUsed: currentUser?.quotaUsed || 0,
       quotaLimit: currentUser?.quotaLimit || 50000,
@@ -785,6 +786,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       minedLeads,
       columnSettings,
       notificationSettings,
+      lastActiveTab: activeTab,
       userProfile: {
         quotaUsed: currentUser?.quotaUsed || 0,
         quotaLimit: currentUser?.quotaLimit || 50000,
@@ -808,17 +810,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     minedLeads,
     columnSettings,
     notificationSettings,
+    activeTab,
     currentUser
   ]);
 
-  // Direct manual / immediate workspace save to database (Supabase + Central Backend)
+  // Silent background workspace save to database (never triggers UI re-renders or page refreshes)
   const saveWorkspaceToDatabase = async (): Promise<boolean> => {
     if (!isAuthenticated || !currentUser?.email) return false;
-    if (isHydratingRef.current || isWorkspaceLoading) return false;
+    if (isHydratingRef.current) return false;
 
     const cleanEmail = currentUser.email.trim().toLowerCase();
     const cleanUserId = (currentUser.id || currentUser.supabaseId || '').trim();
-    setSyncStatus('syncing');
 
     try {
       // Collect latest collections, backing up with state or localStorage if ref is empty
@@ -872,20 +874,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (res.success) {
         loadedWorkspaceEmailRef.current = cleanEmail;
         loadedWorkspaceUserIdRef.current = cleanUserId;
-        setSyncStatus('synced');
         return true;
-      } else {
-        setSyncStatus('offline');
-        return false;
       }
+      return false;
     } catch (err) {
       console.warn('Direct workspace save error:', err);
-      setSyncStatus('offline');
       return false;
     }
   };
 
-  // Direct Central Database resource persistence helper (Atomic & Race-Condition Safe)
+  // Direct Central Database resource persistence helper (Silent & Zero-Reload)
   const persistResourceDirectly = async (resource: string, items: any[]) => {
     if (!isAuthenticated || !currentUser?.email) return;
     const cleanEmail = currentUser.email.trim().toLowerCase();
@@ -895,7 +893,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     (latestWorkspaceRef.current as any)[resource] = items;
 
     try {
-      setSyncStatus('syncing');
       await fetch(`/api/user-data/${encodeURIComponent(cleanEmail)}/resource/${encodeURIComponent(resource)}`, {
         method: 'POST',
         headers: { 
@@ -914,21 +911,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           [resource]: items
         }
       });
-      setSyncStatus('synced');
     } catch (e) {
       console.warn(`Direct database persistence error for ${resource}:`, e);
-      setSyncStatus('offline');
     }
   };
 
-  // Load user workspace from database (Non-Destructive Merge: never wipe newly created local items)
+  // Load user workspace once on login/initial mount without resetting active tab or interrupting edits
   const loadUserWorkspace = async (userEmail?: string, userId?: string, seedWorkspaceData?: any): Promise<boolean> => {
     const cleanEmail = (userEmail || currentUser?.email || '').trim().toLowerCase();
     const cleanUserId = (userId || currentUser?.id || currentUser?.supabaseId || '').trim();
     if (!cleanEmail && !cleanUserId) return false;
 
-    setIsWorkspaceLoading(true);
-    setSyncStatus('syncing');
     isHydratingRef.current = true;
 
     try {
@@ -1026,20 +1019,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setCurrentUserState(prev => ({ ...prev, ...data.userProfile }));
         }
 
-        // 13. Active Tab Restoration
-        if (data.lastActiveTab && typeof data.lastActiveTab === 'string') {
-          const storedTab = localStorage.getItem('visualsky_active_tab');
-          if (storedTab === 'owner' && isAgencyUser(currentUser)) {
-            setActiveTabState('owner');
-          } else {
-            setActiveTabState(data.lastActiveTab);
-            try { localStorage.setItem('visualsky_active_tab', data.lastActiveTab); } catch {}
-          }
-        }
-
         loadedWorkspaceEmailRef.current = cleanEmail;
         loadedWorkspaceUserIdRef.current = cleanUserId;
-        setSyncStatus('synced');
         return true;
       } else {
         // If remote has no record yet, only persist if local has genuine content
@@ -1056,46 +1037,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         loadedWorkspaceEmailRef.current = cleanEmail;
         loadedWorkspaceUserIdRef.current = cleanUserId;
-        setSyncStatus('synced');
         return true;
       }
     } catch (err) {
       console.warn('Server workspace sync error:', err);
-      setSyncStatus('offline');
       return false;
     } finally {
-      setIsWorkspaceLoading(false);
       setTimeout(() => {
         isHydratingRef.current = false;
-      }, 500);
+      }, 400);
     }
   };
-
-  // Live Cross-Browser & Tab Focus Sync: automatically pulls latest changes when user switches back to window
-  useEffect(() => {
-    if (!isAuthenticated || !currentUser?.email) return;
-
-    const handleFocusSync = () => {
-      if (document.visibilityState === 'visible' && !isHydratingRef.current) {
-        loadUserWorkspace(currentUser.email, currentUser.id || currentUser.supabaseId);
-      }
-    };
-
-    window.addEventListener('focus', handleFocusSync);
-    window.addEventListener('visibilitychange', handleFocusSync);
-
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible' && !isHydratingRef.current) {
-        loadUserWorkspace(currentUser.email, currentUser.id || currentUser.supabaseId);
-      }
-    }, 20000);
-
-    return () => {
-      window.removeEventListener('focus', handleFocusSync);
-      window.removeEventListener('visibilitychange', handleFocusSync);
-      clearInterval(interval);
-    };
-  }, [isAuthenticated, currentUser?.email, currentUser?.id]);
 
   // Sync all users and initial workspace on mount
   const registryLoadedRef = useRef<boolean>(false);
@@ -1152,15 +1104,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => { try { localStorage.setItem('visualsky_mined_leads', JSON.stringify(minedLeads)); } catch {} }, [minedLeads]);
   useEffect(() => { try { localStorage.setItem('visualsky_notification_settings', JSON.stringify(notificationSettings)); } catch {} }, [notificationSettings]);
 
-  // Debounced database workspace sync
+  // Silent debounced database workspace persistence (never flips UI state or reloads page)
   useEffect(() => {
     if (!isAuthenticated || !currentUser?.email) return;
-    if (isHydratingRef.current || isWorkspaceLoading) return;
+    if (isHydratingRef.current) return;
 
-    setSyncStatus('syncing');
     const timer = setTimeout(() => {
       saveWorkspaceToDatabase();
-    }, 1200);
+    }, 1500);
 
     return () => clearTimeout(timer);
   }, [
@@ -2042,17 +1993,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const processedOpensRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     const pollTrackingEvents = async () => {
       try {
         const res = await fetch('/api/track/events');
         if (!res.ok) return;
         const parsed = await safeParseResponse(res, 'Tracking poll failed');
         const data = parsed.data || {};
-        if (parsed.ok && data.success && Array.isArray(data.events)) {
+        if (parsed.ok && data.success && Array.isArray(data.events) && data.events.length > 0) {
           for (const ev of data.events) {
             const eventKey = `${ev.pixelId}_${ev.openedAt}`;
             if (processedOpensRef.current.has(eventKey)) continue;
             processedOpensRef.current.add(eventKey);
+
+            const hasMatchingSent = (latestWorkspaceRef.current.sentEmails || []).some(
+              s => s.trackingPixelId === ev.pixelId
+            );
+            if (!hasMatchingSent) continue;
 
             setSentEmails(prev => {
               const target = prev.find(s => s.trackingPixelId === ev.pixelId);
@@ -2112,10 +2069,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
-    const interval = setInterval(pollTrackingEvents, 8000);
-    pollTrackingEvents();
+    const interval = setInterval(pollTrackingEvents, 15000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isAuthenticated]);
 
   // Live IMAP Inbox Reply Syncing
   const syncInboxReplies = async (smtpAccountId?: string): Promise<{ success: boolean; count: number; totalChecked: number; error?: string }> => {

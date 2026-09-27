@@ -90,7 +90,9 @@ function buildWithEsbuild() {
 
     // Inject compiled Tailwind CSS inline into prebuilt/app.js so styles never break
     if (fs.existsSync(prebuiltAppCss) && fs.existsSync(prebuiltAppJs)) {
-      const cssContent = fs.readFileSync(prebuiltAppCss, 'utf8');
+      const extraPopupCss =
+        '\n.vs-auth-popup-window{width:100%!important;max-width:420px!important;max-height:88vh!important;overflow-y:auto!important;margin:auto!important;border-radius:16px!important;}.vs-legal-popup-window{width:100%!important;max-width:460px!important;max-height:82vh!important;margin:auto!important;border-radius:16px!important;}\n';
+      const cssContent = fs.readFileSync(prebuiltAppCss, 'utf8') + extraPopupCss;
       const jsContent = fs.readFileSync(prebuiltAppJs, 'utf8');
       if (!jsContent.includes('vs-tailwind-inline')) {
         const styleInjector = `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-tailwind-inline')){var s=document.createElement('style');s.id='vs-tailwind-inline';s.textContent=${JSON.stringify(

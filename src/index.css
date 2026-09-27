@@ -267,3 +267,20 @@
 .saas-float-slow {
   animation: saasFloatSlow 5.5s ease-in-out infinite;
 }
+
+/* Guaranteed Compact Centered Popup Window Sizing (Never Full-Page) */
+.vs-auth-popup-window {
+  width: 100% !important;
+  max-width: 420px !important;
+  max-height: 88vh !important;
+  overflow-y: auto !important;
+  margin: auto !important;
+}
+
+.vs-legal-popup-window {
+  width: 100% !important;
+  max-width: 480px !important;
+  max-height: 82vh !important;
+  margin: auto !important;
+}
+

@@ -519,7 +519,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       } catch {}
 
       loginUser(serverUser, serverUser.role === 'agency' ? 'owner' : 'dashboard');
-      await loadUserWorkspace(serverUser.email, serverUser.id);
 
       setIsGoogleLoading(false);
       addNotification({
@@ -697,7 +696,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       ]);
 
       loginUser(finalUser, isAgency ? 'owner' : 'dashboard');
-      await loadUserWorkspace(finalUser.email, finalUser.id || finalUser.supabaseId);
 
       setIsLoading(false);
       addNotification({
@@ -1037,7 +1035,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       loginUser(newUser, isAgency ? 'owner' : 'dashboard');
-      await loadUserWorkspace(newUser.email, newUser.id);
 
       setIsLoading(false);
       confetti({ particleCount: 80, spread: 70, origin: { y: 0.3 } });
@@ -1145,7 +1142,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       loginUser(serverUser, 'dashboard');
-      await loadUserWorkspace(serverUser.email, serverUser.id);
 
       setIsGoogleLoading(false);
       setPendingGoogleUser(null);
@@ -1318,38 +1314,36 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           if (e.target === e.currentTarget) onClose();
         }}
       >
-        <div
-          className={`saas-modal-pop relative w-full ${
-            authMode === 'signup' ? 'max-w-[490px]' : 'max-w-[440px]'
-          } bg-[#0c1220] border border-slate-800/90 rounded-2xl shadow-2xl p-4 sm:p-7 my-auto transition-all`}
-        >
+        <div className="vs-auth-popup-window saas-modal-pop relative w-full max-w-md bg-[#0c1220] border border-slate-800/90 rounded-2xl shadow-2xl p-4 sm:p-5 my-auto transition-all">
           {/* Close Button */}
           <button
             type="button"
             onClick={onClose}
-            className="absolute top-4 right-4 w-8 h-8 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800/70 flex items-center justify-center transition cursor-pointer"
+            className="absolute top-3.5 right-3.5 w-7 h-7 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800/70 flex items-center justify-center transition cursor-pointer"
             aria-label="Close"
           >
             <X className="w-4 h-4" />
           </button>
 
-          {/* Brand Header */}
-          <div className="flex flex-col items-center text-center mb-4">
-            <VisualSkyLogo size="sm" showText={false} />
-            <h2 className="mt-2.5 text-xl font-bold tracking-tight text-slate-100">
-              {authMode === 'signin'
-                ? portalType === 'agency'
-                  ? 'Agency Master Portal Login'
-                  : 'Sign in to VisualSky'
-                : authMode === 'signup'
-                  ? signupStep === 'verify_otp'
-                    ? 'Verify Your Email Address'
-                    : portalType === 'client'
-                      ? 'Choose Plan & Create Account'
-                      : 'Agency Master Portal Sign Up'
-                  : 'Reset Your Password'}
-            </h2>
-            <p className="mt-1 text-xs text-slate-400">
+          {/* Compact Brand Header */}
+          <div className="flex flex-col items-center text-center mb-2.5">
+            <div className="flex items-center justify-center gap-2">
+              <VisualSkyLogo size="sm" showText={false} />
+              <h2 className="text-base sm:text-lg font-bold tracking-tight text-slate-100">
+                {authMode === 'signin'
+                  ? portalType === 'agency'
+                    ? 'Agency Master Portal Login'
+                    : 'Sign in to VisualSky'
+                  : authMode === 'signup'
+                    ? signupStep === 'verify_otp'
+                      ? 'Verify Your Email Address'
+                      : portalType === 'client'
+                        ? 'Choose Plan & Create Account'
+                        : 'Agency Master Portal Sign Up'
+                    : 'Reset Your Password'}
+              </h2>
+            </div>
+            <p className="mt-0.5 text-[11px] text-slate-400">
               {authMode === 'forgot_password'
                 ? 'Enter your registered email to receive a 6-digit recovery code'
                 : authMode === 'signup' && signupStep === 'verify_otp'
@@ -1357,19 +1351,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   : authMode === 'signup' && portalType === 'client'
                     ? 'ইমেইল ভেরিফিকেশন ও বিকাশ পেমেন্ট সম্পন্ন করলেই একাউন্ট চালু হবে'
                     : authMode === 'signup' && portalType === 'agency'
-                      ? 'Gmail ভেরিফিকেশন কোড (OTP) দিয়ে আপনার Agency Master একাউন্ট তৈরি করুন'
+                      ? 'Gmail ভেরিফিকেশন কোড (OTP) দিয়ে Agency Master একাউন্ট তৈরি করুন'
                       : 'Continue with your Google account or verified email'}
             </p>
 
             {/* Client Workspace / Agency Master Portal Switch + Mode Switcher */}
             {authMode !== 'forgot_password' && signupStep === 'form' && (
-              <div className="mt-3.5 flex flex-col items-center gap-2.5 w-full">
+              <div className="mt-2 flex flex-col items-center gap-1.5 w-full">
                 {/* Portal Switcher */}
-                <div className="inline-flex p-1 rounded-xl bg-slate-900 border border-slate-800 text-xs gap-1">
+                <div className="grid grid-cols-2 w-full p-1 rounded-xl bg-slate-900 border border-slate-800 text-xs gap-1">
                   <button
                     type="button"
                     onClick={() => setPortalType('client')}
-                    className={`px-3.5 py-1.5 rounded-lg font-bold transition cursor-pointer whitespace-nowrap ${
+                    className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer truncate ${
                       portalType === 'client'
                         ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-xs'
                         : 'text-slate-400 hover:text-slate-200 border border-transparent'
@@ -1385,7 +1379,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         setAuthMode('signup');
                       }
                     }}
-                    className={`px-3.5 py-1.5 rounded-lg font-bold transition cursor-pointer whitespace-nowrap ${
+                    className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer truncate ${
                       portalType === 'agency'
                         ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-xs'
                         : 'text-slate-400 hover:text-slate-200 border border-transparent'
@@ -1400,7 +1394,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setAuthMode('signin')}
-                    className={`py-2 rounded-lg font-semibold transition cursor-pointer ${
+                    className={`py-1 rounded-lg font-semibold transition cursor-pointer ${
                       authMode === 'signin'
                         ? 'bg-slate-800 text-white shadow-xs'
                         : 'text-slate-400 hover:text-slate-200'
@@ -1411,7 +1405,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setAuthMode('signup')}
-                    className={`py-2 rounded-lg font-semibold transition cursor-pointer ${
+                    className={`py-1 rounded-lg font-semibold transition cursor-pointer ${
                       authMode === 'signup'
                         ? 'bg-slate-800 text-white shadow-xs'
                         : 'text-slate-400 hover:text-slate-200'
@@ -1423,18 +1417,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                 {portalType === 'agency' && (
                   <div
-                    className={`w-full px-3 py-2 rounded-xl border text-[11px] flex items-center justify-between gap-2 ${
+                    className={`w-full px-2.5 py-1 rounded-lg border text-[11px] flex items-center justify-between gap-2 ${
                       isAgencyLimitReached && authMode === 'signup'
                         ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
                         : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
                     }`}
                   >
-                    <div className="flex items-center gap-1.5 text-left">
+                    <div className="flex items-center gap-1.5 text-left truncate">
                       <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                      <span>শুধুমাত্র ৩টি Gmail (@gmail.com) একাউন্ট অনুমোদিত</span>
+                      <span className="truncate">শুধুমাত্র ৩টি Gmail অনুমোদিত</span>
                     </div>
-                    <span className="font-mono font-bold tabular-nums px-2 py-0.5 rounded-md bg-slate-950/80 border border-slate-800 shrink-0">
-                      {agencyGmailCount} / {MAX_AGENCY_GMAIL_ACCOUNTS} Gmail
+                    <span className="font-mono font-bold tabular-nums px-1.5 py-0.5 rounded bg-slate-950/80 border border-slate-800 shrink-0 text-[10px]">
+                      {agencyGmailCount}/{MAX_AGENCY_GMAIL_ACCOUNTS} Gmail
                     </span>
                   </div>
                 )}
@@ -1599,16 +1593,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <>
               {/* SUBSCRIPTION PLAN SELECTOR (Shown during Client Sign Up) */}
               {authMode === 'signup' && portalType === 'client' && (
-                <div className="mb-4 space-y-2">
+                <div className="mb-3 space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-bold text-slate-300">
                       1. Select Subscription Plan
                     </span>
-                    <span className="text-[11px] font-semibold text-[#f43f8e]">
-                      bKash Checkout
+                    <span className="text-[10px] font-semibold text-[#f43f8e]">
+                      Email OTP → bKash Checkout
                     </span>
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-3 gap-1.5">
                     {BDT_CLIENT_PLANS.map((plan) => {
                       const active = plan.id === selectedPlan.id;
                       return (
@@ -1616,7 +1610,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           key={plan.id}
                           type="button"
                           onClick={() => setSelectedPlanId(plan.id)}
-                          className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                          className={`p-2 rounded-xl border text-left transition cursor-pointer ${
                             active
                               ? 'bg-[#E2136E]/15 border-[#E2136E] shadow-sm'
                               : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
@@ -1625,7 +1619,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           <div className="text-[11px] font-bold text-slate-100 truncate">
                             {plan.name.split(' ')[0]}
                           </div>
-                          <div className="text-xs font-black font-mono tabular-nums text-[#f43f8e] mt-0.5">
+                          <div className="text-xs font-black font-mono tabular-nums text-[#f43f8e]">
                             ৳{plan.priceBDT.toLocaleString()}
                           </div>
                           <div className="text-[10px] text-slate-400 tabular-nums">
@@ -1643,7 +1637,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 type="button"
                 onClick={handleGoogleContinue}
                 disabled={isGoogleLoading || isLoading}
-                className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-semibold text-sm flex items-center justify-center gap-3 shadow-sm transition cursor-pointer disabled:opacity-60"
+                className="w-full py-2 px-3.5 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-semibold text-xs sm:text-sm flex items-center justify-center gap-2.5 shadow-sm transition cursor-pointer disabled:opacity-60"
               >
                 {isGoogleLoading ? (
                   <RefreshCw className="w-4 h-4 animate-spin text-slate-700" />
@@ -1668,18 +1662,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </svg>
                 )}
                 <span className="truncate">
-                  {isGoogleLoading
-                    ? 'Connecting to Google...'
-                    : authMode === 'signup' && portalType === 'client'
-                      ? `Continue with Google & Pay ৳${selectedPlan.priceBDT.toLocaleString()}`
-                      : 'Continue with Google'}
+                  {isGoogleLoading ? 'Connecting to Google...' : 'Continue with Google'}
                 </span>
               </button>
 
               {/* Divider */}
-              <div className="relative flex items-center justify-center my-4">
+              <div className="relative flex items-center justify-center my-2.5">
                 <div className="w-full border-t border-slate-800" />
-                <span className="px-3 bg-[#0c1220] text-[11px] text-slate-500 shrink-0">
+                <span className="px-2.5 bg-[#0c1220] text-[10px] text-slate-500 shrink-0">
                   {authMode === 'signup' ? 'or register with email OTP' : 'or sign in with email'}
                 </span>
                 <div className="w-full border-t border-slate-800" />
@@ -1690,203 +1680,168 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 onSubmit={
                   authMode === 'signin' ? handleSignInSubmit : handleSendSignupVerificationOtp
                 }
-                className="space-y-3"
+                className="space-y-2"
               >
-                {authMode === 'signup' && (
+                <div className={authMode === 'signup' ? 'grid grid-cols-1 sm:grid-cols-2 gap-2' : ''}>
+                  {authMode === 'signup' && (
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                        Full Name <span className="text-rose-400">*</span>
+                      </label>
+                      <div className="relative">
+                        <User className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          required
+                          value={fullName}
+                          onChange={(e) => setFullName(e.target.value)}
+                          placeholder="Your full name"
+                          className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition"
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Full Name <span className="text-rose-400">*</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-medium text-slate-300 truncate">
+                        {portalType === 'agency' ? 'Gmail (@gmail.com)' : 'Email Address'}{' '}
+                        <span className="text-rose-400">*</span>
+                      </label>
+                      {authMode === 'signup' && email.trim().length > 3 && (
+                        <span
+                          className={`text-[10px] font-medium shrink-0 ${
+                            portalType === 'agency'
+                              ? isStrictGmailAddress(email)
+                                ? 'text-emerald-400'
+                                : 'text-rose-400'
+                              : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+                                ? 'text-emerald-400'
+                                : 'text-amber-400'
+                          }`}
+                        >
+                          {portalType === 'agency'
+                            ? isStrictGmailAddress(email)
+                              ? '✓ Gmail'
+                              : '@gmail only'
+                            : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+                              ? '✓ Valid'
+                              : 'Invalid'}
+                        </span>
+                      )}
+                    </div>
                     <div className="relative">
-                      <User className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <Mail className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                       <input
-                        type="text"
+                        type="email"
                         required
-                        value={fullName}
-                        onChange={(e) => setFullName(e.target.value)}
-                        placeholder="Enter your full name"
-                        className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder={portalType === 'agency' ? 'name@gmail.com' : 'you@company.com'}
+                        className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition"
                       />
                     </div>
                   </div>
-                )}
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-slate-300">
-                      {portalType === 'agency'
-                        ? 'Gmail Address (@gmail.com only)'
-                        : 'Email Address'}{' '}
-                      <span className="text-rose-400">*</span>
-                    </label>
-                    {authMode === 'signup' && email.trim().length > 3 && (
-                      <span
-                        className={`text-[10px] font-medium ${
-                          portalType === 'agency'
-                            ? isStrictGmailAddress(email)
-                              ? 'text-emerald-400'
-                              : 'text-rose-400'
-                            : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
-                              ? 'text-emerald-400'
-                              : 'text-amber-400'
-                        }`}
-                      >
-                        {portalType === 'agency'
-                          ? isStrictGmailAddress(email)
-                            ? '✓ Valid Gmail'
-                            : 'Must end with @gmail.com'
-                          : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
-                            ? '✓ Valid Email'
-                            : 'Enter valid email'}
-                      </span>
-                    )}
-                  </div>
-                  <div className="relative">
-                    <Mail className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="email"
-                      required
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder={portalType === 'agency' ? 'yourname@gmail.com' : 'you@company.com'}
-                      className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition"
-                    />
-                  </div>
                 </div>
 
-                {/* Password Field */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-slate-300">
-                      Password <span className="text-rose-400">*</span>
-                    </label>
-                    {authMode === 'signup' && password.length > 0 && (
-                      <span className={`text-[10px] font-semibold ${passwordStrength.textColor}`}>
-                        Strength: {passwordStrength.label}
-                      </span>
-                    )}
-                  </div>
-                  <div className="relative">
-                    <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder={
-                        authMode === 'signup' ? 'Create a strong password (min 6 chars)' : '••••••••'
-                      }
-                      className="w-full pl-10 pr-10 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
+                {/* Password & Confirm Password (side-by-side on Sign Up for a compact popup window) */}
+                <div className={authMode === 'signup' ? 'grid grid-cols-1 sm:grid-cols-2 gap-2' : ''}>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-medium text-slate-300">
+                        Password <span className="text-rose-400">*</span>
+                      </label>
+                      {authMode === 'signup' && password.length > 0 && (
+                        <span className={`text-[10px] font-semibold ${passwordStrength.textColor}`}>
+                          {passwordStrength.label}
+                        </span>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <Lock className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder={authMode === 'signup' ? 'Min 6+ chars' : '••••••••'}
+                        className="w-full pl-9 pr-8 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Password Strength Meter & Checklist (Shown on Sign Up) */}
-                  {authMode === 'signup' && password.length > 0 && (
-                    <div className="mt-2 space-y-1.5">
-                      <div className="grid grid-cols-4 gap-1">
-                        {[1, 2, 3, 4].map((level) => (
-                          <div
-                            key={level}
-                            className={`h-1 rounded-full transition-colors ${
-                              passwordStrength.score >= level
-                                ? passwordStrength.barColor
-                                : 'bg-slate-800'
+                  {authMode === 'signup' && (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[11px] font-medium text-slate-300">
+                          Confirm Password <span className="text-rose-400">*</span>
+                        </label>
+                        {confirmPassword.length > 0 && (
+                          <span
+                            className={`text-[10px] font-semibold ${
+                              confirmPassword === password ? 'text-emerald-400' : 'text-rose-400'
                             }`}
-                          />
-                        ))}
+                          >
+                            {confirmPassword === password ? '✓ Match' : '✕ Mismatch'}
+                          </span>
+                        )}
                       </div>
-                      <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] text-slate-400">
-                        <span
-                          className={
-                            passwordStrength.hasMinLength ? 'text-emerald-400' : 'text-slate-500'
+                      <div className="relative">
+                        <KeyRound className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type={showConfirmPassword ? 'text' : 'password'}
+                          required
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder="Re-enter password"
+                          className={`w-full pl-9 pr-8 py-2 rounded-xl bg-slate-900/90 border text-xs text-slate-100 placeholder-slate-500 focus:outline-none transition ${
+                            confirmPassword.length > 0
+                              ? confirmPassword === password
+                                ? 'border-emerald-500/50 focus:border-emerald-400'
+                                : 'border-rose-500/50 focus:border-rose-400'
+                              : 'border-slate-800 focus:border-cyan-500'
+                          }`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
+                          aria-label={
+                            showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'
                           }
                         >
-                          {passwordStrength.hasMinLength ? '✓' : '○'} Min 6+ characters
-                        </span>
-                        <span
-                          className={
-                            passwordStrength.hasMixedCase ? 'text-emerald-400' : 'text-slate-500'
-                          }
-                        >
-                          {passwordStrength.hasMixedCase ? '✓' : '○'} Upper &amp; lowercase
-                        </span>
-                        <span
-                          className={
-                            passwordStrength.hasNumber ? 'text-emerald-400' : 'text-slate-500'
-                          }
-                        >
-                          {passwordStrength.hasNumber ? '✓' : '○'} At least 1 number
-                        </span>
-                        <span
-                          className={
-                            passwordStrength.hasSymbol ? 'text-emerald-400' : 'text-slate-500'
-                          }
-                        >
-                          {passwordStrength.hasSymbol ? '✓' : '○'} Special symbol (!@#$)
-                        </span>
+                          {showConfirmPassword ? (
+                            <EyeOff className="w-3.5 h-3.5" />
+                          ) : (
+                            <Eye className="w-3.5 h-3.5" />
+                          )}
+                        </button>
                       </div>
                     </div>
                   )}
                 </div>
 
-                {/* Confirm Password Field (Shown on Sign Up) */}
-                {authMode === 'signup' && (
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs font-medium text-slate-300">
-                        Confirm Password <span className="text-rose-400">*</span>
-                      </label>
-                      {confirmPassword.length > 0 && (
-                        <span
-                          className={`text-[10px] font-semibold ${
-                            confirmPassword === password ? 'text-emerald-400' : 'text-rose-400'
-                          }`}
-                        >
-                          {confirmPassword === password
-                            ? '✓ Passwords match'
-                            : '✕ Passwords do not match'}
-                        </span>
-                      )}
-                    </div>
-                    <div className="relative">
-                      <KeyRound className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                      <input
-                        type={showConfirmPassword ? 'text' : 'password'}
-                        required
-                        value={confirmPassword}
-                        onChange={(e) => setConfirmPassword(e.target.value)}
-                        placeholder="Re-enter your password to confirm"
-                        className={`w-full pl-10 pr-10 py-2.5 rounded-xl bg-slate-900/90 border text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition ${
-                          confirmPassword.length > 0
-                            ? confirmPassword === password
-                              ? 'border-emerald-500/50 focus:border-emerald-400'
-                              : 'border-rose-500/50 focus:border-rose-400'
-                            : 'border-slate-800 focus:border-cyan-500'
+                {/* Compact Password Strength Bar (Shown on Sign Up when typing password) */}
+                {authMode === 'signup' && password.length > 0 && (
+                  <div className="grid grid-cols-4 gap-1 pt-0.5">
+                    {[1, 2, 3, 4].map((level) => (
+                      <div
+                        key={level}
+                        className={`h-1 rounded-full transition-colors ${
+                          passwordStrength.score >= level
+                            ? passwordStrength.barColor
+                            : 'bg-slate-800'
                         }`}
                       />
-                      <button
-                        type="button"
-                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
-                        aria-label={
-                          showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'
-                        }
-                      >
-                        {showConfirmPassword ? (
-                          <EyeOff className="w-4 h-4" />
-                        ) : (
-                          <Eye className="w-4 h-4" />
-                        )}
-                      </button>
-                    </div>
+                    ))}
                   </div>
                 )}
 
@@ -1926,83 +1881,56 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                 {/* Terms & Conditions and Privacy Policy Checkbox (Required on Sign Up) */}
                 {authMode === 'signup' && (
-                  <div className="pt-1">
-                    <div
-                      className={`p-3 rounded-xl border transition ${
-                        acceptedTerms
-                          ? 'bg-cyan-500/5 border-cyan-500/30'
-                          : 'bg-slate-900/60 border-slate-800'
-                      }`}
-                    >
-                      <div className="flex items-start gap-2.5">
+                  <div
+                    className={`p-2.5 rounded-xl border transition ${
+                      acceptedTerms
+                        ? 'bg-cyan-500/5 border-cyan-500/30'
+                        : 'bg-slate-900/60 border-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <button
+                        type="button"
+                        role="checkbox"
+                        aria-checked={acceptedTerms}
+                        onClick={() => setAcceptedTerms(!acceptedTerms)}
+                        className={`mt-0.5 w-4 h-4 rounded flex items-center justify-center border shrink-0 transition cursor-pointer ${
+                          acceptedTerms
+                            ? 'bg-cyan-500 border-cyan-500 text-slate-950 shadow-xs'
+                            : 'bg-slate-950 border-slate-600 hover:border-cyan-400 text-transparent'
+                        }`}
+                      >
+                        <Check className="w-3 h-3 stroke-[3]" />
+                      </button>
+                      <div className="text-[11px] text-slate-300 leading-snug text-left">
+                        <span
+                          onClick={() => setAcceptedTerms(!acceptedTerms)}
+                          className="cursor-pointer select-none"
+                        >
+                          I agree to the{' '}
+                        </span>
                         <button
                           type="button"
-                          role="checkbox"
-                          aria-checked={acceptedTerms}
-                          onClick={() => setAcceptedTerms(!acceptedTerms)}
-                          className={`mt-0.5 w-4 h-4 rounded flex items-center justify-center border shrink-0 transition cursor-pointer ${
-                            acceptedTerms
-                              ? 'bg-cyan-500 border-cyan-500 text-slate-950 shadow-xs'
-                              : 'bg-slate-950 border-slate-600 hover:border-cyan-400 text-transparent'
-                          }`}
+                          onClick={() => setLegalModalTab('terms')}
+                          className="text-cyan-400 hover:text-cyan-300 font-semibold underline cursor-pointer"
                         >
-                          <Check className="w-3 h-3 stroke-[3]" />
+                          Terms &amp; Conditions
+                        </button>{' '}
+                        <span>and </span>
+                        <button
+                          type="button"
+                          onClick={() => setLegalModalTab('privacy')}
+                          className="text-cyan-400 hover:text-cyan-300 font-semibold underline cursor-pointer"
+                        >
+                          Privacy Policy
                         </button>
-                        <div className="text-[11px] text-slate-300 leading-relaxed text-left">
-                          <span
-                            onClick={() => setAcceptedTerms(!acceptedTerms)}
-                            className="cursor-pointer select-none"
-                          >
-                            I have read and agree to the{' '}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setLegalModalTab('terms')}
-                            className="text-cyan-400 hover:text-cyan-300 font-semibold underline cursor-pointer"
-                          >
-                            Terms &amp; Conditions
-                          </button>{' '}
-                          <span>and </span>
-                          <button
-                            type="button"
-                            onClick={() => setLegalModalTab('privacy')}
-                            className="text-cyan-400 hover:text-cyan-300 font-semibold underline cursor-pointer"
-                          >
-                            Privacy Policy
-                          </button>
-                          <span
-                            onClick={() => setAcceptedTerms(!acceptedTerms)}
-                            className="cursor-pointer select-none"
-                          >
-                            , and consent to receive account verification emails.
-                          </span>
-                        </div>
+                        <span
+                          onClick={() => setAcceptedTerms(!acceptedTerms)}
+                          className="cursor-pointer select-none"
+                        >
+                          .
+                        </span>
                       </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Payment Method Selected Badge for Client Sign-Up */}
-                {authMode === 'signup' && portalType === 'client' && (
-                  <div className="p-2.5 sm:p-3 rounded-xl bg-[#E2136E]/10 border border-[#E2136E]/30 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-[#E2136E] text-white font-black text-[10px] flex items-center justify-center shrink-0">
-                        bKash
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-[11px] sm:text-xs font-bold text-white truncate">
-                          Step 1: Email OTP → Step 2: bKash Payment
-                        </div>
-                        <div className="text-[10px] text-slate-300 leading-snug">
-                          ইমেইল কোড ভেরিফাই হওয়ার পর বিকাশ পেমেন্ট উইন্ডো ওপেন হবে
-                        </div>
-                      </div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <div className="text-xs font-black font-mono tabular-nums text-[#f43f8e]">
-                        ৳{selectedPlan.priceBDT.toLocaleString()}
-                      </div>
-                      <div className="text-[10px] text-slate-400">{selectedPlan.name.split(' ')[0]}</div>
                     </div>
                   </div>
                 )}
@@ -2010,7 +1938,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <button
                   type="submit"
                   disabled={isLoading || isGoogleLoading}
-                  className={`w-full mt-2 py-3 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 ${
+                  className={`w-full mt-1 py-2.5 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 ${
                     authMode === 'signup' && portalType === 'client'
                       ? 'bg-[#E2136E] hover:bg-[#c91060] text-white shadow-lg shadow-[#E2136E]/25'
                       : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold'
@@ -2045,7 +1973,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </form>
 
               {/* Footer Toggle */}
-              <div className="mt-5 pt-4 border-t border-slate-800/80 text-center text-xs text-slate-400">
+              <div className="mt-3 pt-2.5 border-t border-slate-800/80 text-center text-xs text-slate-400">
                 {authMode === 'signin' ? (
                   <>
                     <span>Don't have an account? </span>
@@ -2279,12 +2207,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       {/* ===================================================================== */}
       {legalModalTab && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
           onClick={(e) => {
             if (e.target === e.currentTarget) setLegalModalTab(null);
           }}
         >
-          <div className="w-full max-w-lg bg-[#0f172a] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[82vh]">
+          <div className="vs-legal-popup-window w-full max-w-lg bg-[#0f172a] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[82vh]">
             <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <FileText className="w-4 h-4 text-cyan-400" />

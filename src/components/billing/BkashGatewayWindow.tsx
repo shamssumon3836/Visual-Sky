@@ -195,8 +195,8 @@ export const BkashGatewayWindow: React.FC<BkashGatewayWindowProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
-      <div className="relative w-full max-w-[450px] my-auto rounded-2xl overflow-hidden shadow-2xl border-2 border-[#E2136E] bg-white text-slate-900 select-none animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
+      <div className="vs-auth-popup-window relative w-full max-w-[440px] max-w-md my-auto rounded-2xl overflow-hidden shadow-2xl border-2 border-[#E2136E] bg-white text-slate-900 select-none animate-in fade-in zoom-in-95 duration-150">
         {/* Top Official bKash Send Money Header */}
         <div className="bg-[#E2136E] text-white px-3.5 sm:px-5 py-3 sm:py-3.5 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
