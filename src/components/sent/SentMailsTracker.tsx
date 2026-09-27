@@ -48,7 +48,9 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
     setActiveTab,
     leads,
     smtpAccounts,
-    addNotification
+    addNotification,
+    syncInboxReplies,
+    persistResourceDirectly
   } = useApp();
 
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -56,8 +58,14 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [selectedMail, setSelectedMail] = useState<SentEmailLog | null>(null);
   const [isCopiedId, setIsCopiedId] = useState<string | null>(null);
-  const [isSimulatingPing, setIsSimulatingPing] = useState<boolean>(false);
+  const [isRefreshingTracker, setIsRefreshingTracker] = useState<boolean>(false);
   const [isRetrying, setIsRetrying] = useState<boolean>(false);
+
+  // Always read the latest version of selectedMail from sentEmails state
+  const currentSelectedMail = useMemo(() => {
+    if (!selectedMail) return null;
+    return sentEmails.find(m => m.id === selectedMail.id) || selectedMail;
+  }, [sentEmails, selectedMail]);
 
   const handleRetrySend = async (mail: SentEmailLog) => {
     setIsRetrying(true);
@@ -142,9 +150,9 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
 
       if (!matchesSearch) return false;
 
-      if (statusFilter === 'opened') return mail.status === 'opened' || (mail.openCount || 0) > 0;
+      if (statusFilter === 'opened') return (mail.openCount || 0) > 0;
       if (statusFilter === 'replied') return mail.status === 'replied';
-      if (statusFilter === 'sent') return mail.status === 'sent';
+      if (statusFilter === 'sent') return mail.status === 'sent' && (mail.openCount || 0) === 0;
       if (statusFilter === 'failed') return mail.status === 'failed';
 
       return true;
@@ -155,7 +163,7 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
   const totalCount = activeSentEmails.length;
   const successfulCount = activeSentEmails.filter(m => m.status !== 'failed').length;
   const failedCount = activeSentEmails.filter(m => m.status === 'failed').length;
-  const openedCount = activeSentEmails.filter(m => m.status === 'opened' || (m.openCount || 0) > 0 || m.status === 'replied').length;
+  const openedCount = activeSentEmails.filter(m => (m.openCount || 0) > 0 || m.status === 'replied').length;
   const repliedCount = activeSentEmails.filter(m => m.status === 'replied').length;
   const openRatePercent = successfulCount > 0 ? ((openedCount / successfulCount) * 100).toFixed(1) : '0';
   const replyRatePercent = successfulCount > 0 ? ((repliedCount / successfulCount) * 100).toFixed(1) : '0';
@@ -196,15 +204,70 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
     setTimeout(() => setIsCopiedId(null), 2000);
   };
 
-  const handleSimulateOpen = (mail: SentEmailLog) => {
-    mail.openCount = (mail.openCount || 0) + 1;
-    mail.status = 'opened';
-    addNotification({
-      title: 'Email Opened Event',
-      message: `${mail.recipientName} (${mail.recipientCompany}) just opened your email!`,
-      type: 'lead'
-    });
-    confetti({ particleCount: 30, spread: 50 });
+  const handleRefreshLiveStatus = async () => {
+    setIsRefreshingTracker(true);
+    try {
+      const res = await fetch('/api/track/events');
+      const parsed = await safeParseResponse(res, 'Tracking check failed');
+      const data = parsed.data || {};
+      if (parsed.ok && data.success && Array.isArray(data.events)) {
+        const eventsByPixel = new Map<string, any[]>();
+        for (const ev of data.events) {
+          if (!ev || !ev.pixelId || !ev.openedAt) continue;
+          const cleanPid = String(ev.pixelId).replace(/\.gif$/i, '').trim();
+          const list = eventsByPixel.get(cleanPid) || [];
+          list.push(ev);
+          eventsByPixel.set(cleanPid, list);
+        }
+
+        setSentEmails(prev => {
+          const next = prev.map(mail => {
+            if (mail.status === 'failed' || mail.status === 'bounced') {
+              return { ...mail, openCount: 0, firstOpenedAt: undefined };
+            }
+            const cleanPid = String(mail.trackingPixelId || '').replace(/\.gif$/i, '').trim();
+            const rawMatches = cleanPid ? (eventsByPixel.get(cleanPid) || []) : [];
+            const sentTimeMs = new Date(mail.sentAt).getTime();
+
+            const verifiedOpens: any[] = [];
+            for (const ev of rawMatches) {
+              const openTimeMs = new Date(ev.openedAt).getTime();
+              if (!Number.isFinite(openTimeMs)) continue;
+              if (Number.isFinite(sentTimeMs) && openTimeMs - sentTimeMs < 15000) continue;
+              const prevAccepted = verifiedOpens[verifiedOpens.length - 1];
+              if (prevAccepted && Math.abs(openTimeMs - new Date(prevAccepted.openedAt).getTime()) < 60000) continue;
+              verifiedOpens.push(ev);
+            }
+
+            const exactOpenCount = verifiedOpens.length;
+            if (exactOpenCount === 0) {
+              return {
+                ...mail,
+                status: (mail.status === 'replied' ? 'replied' : 'sent') as any,
+                openCount: 0,
+                firstOpenedAt: undefined
+              };
+            }
+            return {
+              ...mail,
+              status: (mail.status === 'replied' ? 'replied' : 'opened') as any,
+              openCount: exactOpenCount,
+              firstOpenedAt: verifiedOpens[0]?.openedAt || mail.firstOpenedAt
+            };
+          });
+          persistResourceDirectly('sentEmails', next);
+          return next;
+        });
+      }
+      await syncInboxReplies(undefined, true);
+      addNotification({
+        title: 'Tracking & Replies Synced ✓',
+        message: 'Verified exact open counts and checked IMAP inbox for replies.',
+        type: 'system'
+      });
+    } catch {} finally {
+      setIsRefreshingTracker(false);
+    }
   };
 
   return (
@@ -419,7 +482,7 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
                         <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border ${
                           mail.status === 'replied'
                             ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                            : mail.status === 'opened' || (mail.openCount || 0) > 0
+                            : (mail.openCount || 0) > 0
                             ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
                             : mail.status === 'failed'
                             ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
@@ -598,7 +661,7 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
         )}
 
       {/* INSPECT EMAIL DRAWER / MODAL */}
-      {selectedMail && (
+      {currentSelectedMail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
           <div className="bg-[#090d16] border border-slate-800 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4">
             
@@ -617,57 +680,57 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
             <div className="grid grid-cols-2 gap-3 text-xs bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800">
               <div>
                 <span className="text-slate-500 text-[10px] block">To:</span>
-                <span className="font-bold text-slate-200">{selectedMail.recipientName} &lt;{selectedMail.recipientEmail}&gt;</span>
-                <span className="text-slate-400 block text-[11px]">{selectedMail.recipientCompany}</span>
+                <span className="font-bold text-slate-200">{currentSelectedMail.recipientName} &lt;{currentSelectedMail.recipientEmail}&gt;</span>
+                <span className="text-slate-400 block text-[11px]">{currentSelectedMail.recipientCompany}</span>
               </div>
               <div>
                 <span className="text-slate-500 text-[10px] block">Outbound Relay:</span>
-                <span className="font-mono text-cyan-300 font-bold">{selectedMail.smtpAccountName}</span>
-                <span className="text-slate-400 block text-[10px] font-mono">{selectedMail.smtpHost}</span>
+                <span className="font-mono text-cyan-300 font-bold">{currentSelectedMail.smtpAccountName}</span>
+                <span className="text-slate-400 block text-[10px] font-mono">{currentSelectedMail.smtpHost}</span>
               </div>
               <div>
                 <span className="text-slate-500 text-[10px] block">Campaign / Sequence:</span>
-                <span className="font-bold text-purple-400">{selectedMail.campaignName}</span>
+                <span className="font-bold text-purple-400">{currentSelectedMail.campaignName}</span>
               </div>
               <div>
                 <span className="text-slate-500 text-[10px] block">Tracking Status:</span>
                 <span className={`font-bold ${
-                  selectedMail.status === 'replied'
+                  currentSelectedMail.status === 'replied'
                     ? 'text-emerald-400'
-                    : (selectedMail.openCount || 0) > 0
+                    : (currentSelectedMail.openCount || 0) > 0
                     ? 'text-cyan-400'
-                    : selectedMail.status === 'failed'
+                    : currentSelectedMail.status === 'failed'
                     ? 'text-rose-400'
                     : 'text-slate-200'
                 }`}>
-                  {selectedMail.status === 'replied'
-                    ? `✓ Replied (${selectedMail.repliedAt ? new Date(selectedMail.repliedAt).toLocaleTimeString() : 'Verified'})`
-                    : (selectedMail.openCount || 0) > 0
-                    ? `✓ Opened (${selectedMail.openCount} times)`
-                    : selectedMail.status === 'failed'
+                  {currentSelectedMail.status === 'replied'
+                    ? `✓ Replied (${currentSelectedMail.repliedAt ? new Date(currentSelectedMail.repliedAt).toLocaleTimeString() : 'Verified'})`
+                    : (currentSelectedMail.openCount || 0) > 0
+                    ? `👁️ Opened (${currentSelectedMail.openCount} ${currentSelectedMail.openCount === 1 ? 'time' : 'times'})`
+                    : currentSelectedMail.status === 'failed'
                     ? '❌ Failed to Deliver'
-                    : '✓ Sent'}
+                    : '✓ Sent (0 Opens)'}
                 </span>
               </div>
             </div>
 
             {/* Error message banner if failed */}
-            {selectedMail.status === 'failed' && selectedMail.errorMessage && (
+            {currentSelectedMail.status === 'failed' && currentSelectedMail.errorMessage && (
               <div className="p-3.5 bg-rose-950/60 border border-rose-900 rounded-2xl space-y-2">
                 <div className="text-[11px] font-bold text-rose-300 flex items-center gap-1.5">
                   <X className="w-3.5 h-3.5 text-rose-400" />
                   <span>SMTP Delivery Failure Reason</span>
                 </div>
                 <p className="text-xs text-rose-200 font-mono break-words leading-relaxed">
-                  {selectedMail.errorMessage}
+                  {currentSelectedMail.errorMessage}
                 </p>
 
                 {/* Cloud & Serverless Guidance */}
-                {(selectedMail.errorMessage.includes('FUNCTION_INVOCATION_FAILED') ||
-                  selectedMail.errorMessage.includes('timeout') ||
-                  selectedMail.errorMessage.includes('Serverless') ||
-                  selectedMail.errorMessage.includes('timed out') ||
-                  selectedMail.errorMessage.includes('ETIMEDOUT')) && (
+                {(currentSelectedMail.errorMessage.includes('FUNCTION_INVOCATION_FAILED') ||
+                  currentSelectedMail.errorMessage.includes('timeout') ||
+                  currentSelectedMail.errorMessage.includes('Serverless') ||
+                  currentSelectedMail.errorMessage.includes('timed out') ||
+                  currentSelectedMail.errorMessage.includes('ETIMEDOUT')) && (
                   <div className="bg-slate-900/90 border border-amber-500/30 rounded-xl p-3 text-[11px] text-amber-200/90 space-y-1.5">
                     <div className="font-bold flex items-center gap-1.5 text-amber-400">
                       <Sparkles className="w-3.5 h-3.5" />
@@ -691,19 +754,19 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
 
             {/* Email Subject & Body Preview */}
             <div className="space-y-2">
-              <div className="text-xs font-bold text-slate-300">Subject: {selectedMail.subject}</div>
+              <div className="text-xs font-bold text-slate-300">Subject: {currentSelectedMail.subject}</div>
               <div className="p-4 bg-slate-900/90 rounded-2xl border border-slate-800 font-sans text-xs text-slate-200 whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto">
-                {selectedMail.body}
+                {currentSelectedMail.body}
               </div>
             </div>
 
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-800">
               <div className="flex items-center gap-2">
-                {selectedMail.status === 'failed' && (
+                {currentSelectedMail.status === 'failed' && (
                   <button
                     disabled={isRetrying}
-                    onClick={() => handleRetrySend(selectedMail)}
+                    onClick={() => handleRetrySend(currentSelectedMail)}
                     className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-lg shadow-amber-900/30 transition"
                   >
                     <RotateCw className={`w-3.5 h-3.5 ${isRetrying ? 'animate-spin' : ''}`} />
@@ -712,18 +775,21 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
                 )}
 
                 <button
-                  onClick={() => handleSimulateOpen(selectedMail)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  type="button"
+                  disabled={isRefreshingTracker}
+                  onClick={handleRefreshLiveStatus}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
-                  <Eye className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Simulate Pixel Open</span>
+                  <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isRefreshingTracker ? 'animate-spin' : ''}`} />
+                  <span>{isRefreshingTracker ? 'Checking...' : 'Verify Live Status'}</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => {
-                    deleteSentEmail(selectedMail.id);
+                    deleteSentEmail(currentSelectedMail.id);
                     addNotification({
                       title: 'Outbox Record Deleted',
-                      message: `Email to ${selectedMail.recipientName} removed from delivery tracker.`,
+                      message: `Email to ${currentSelectedMail.recipientName} removed from delivery tracker.`,
                       type: 'system'
                     });
                     setSelectedMail(null);
@@ -737,7 +803,8 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => handleCopyText(selectedMail.body, 'body')}
+                  type="button"
+                  onClick={() => handleCopyText(currentSelectedMail.body, 'body')}
                   className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-1"
                 >
                   {isCopiedId === 'body' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -745,6 +812,7 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
                 </button>
 
                 <button
+                  type="button"
                   onClick={() => setSelectedMail(null)}
                   className="px-4 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold cursor-pointer"
                 >

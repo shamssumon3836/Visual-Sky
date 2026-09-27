@@ -20,6 +20,8 @@ export const FloatingNotificationCorner: React.FC = () => {
     notifications, 
     markNotificationRead, 
     setActiveTab, 
+    threads,
+    setActiveThreadId,
     requestDesktopNotificationPermission,
     playNotificationSound,
     addNotification
@@ -57,13 +59,15 @@ export const FloatingNotificationCorner: React.FC = () => {
     markNotificationRead(id);
   };
 
-  // Auto-dismiss each toast after exactly 3 seconds (3000ms)
+  // Auto-dismiss each toast (8 seconds for incoming mail/reply alerts so user never misses them, 5 seconds for others)
   useEffect(() => {
     activeToastIds.forEach(id => {
       if (!toastTimeoutsRef.current[id]) {
+        const notifObj = notifications.find(n => n.id === id);
+        const durationMs = notifObj?.type === 'reply' || notifObj?.linkTab === 'inbox' ? 8000 : 5000;
         toastTimeoutsRef.current[id] = setTimeout(() => {
           handleDismissToast(id);
-        }, 3000);
+        }, durationMs);
       }
     });
 
@@ -74,7 +78,7 @@ export const FloatingNotificationCorner: React.FC = () => {
         delete toastTimeoutsRef.current[id];
       }
     });
-  }, [activeToastIds]);
+  }, [activeToastIds, notifications]);
 
   useEffect(() => {
     return () => {
@@ -83,6 +87,14 @@ export const FloatingNotificationCorner: React.FC = () => {
   }, []);
 
   const handleOpenNotification = (notif: any) => {
+    if (notif.leadEmail) {
+      const targetThread = threads.find(
+        t => t.leadEmail?.toLowerCase() === String(notif.leadEmail).toLowerCase()
+      );
+      if (targetThread) {
+        setActiveThreadId(targetThread.id);
+      }
+    }
     if (notif.linkTab) {
       setActiveTab(notif.linkTab as any);
     } else if (notif.type === 'reply') {

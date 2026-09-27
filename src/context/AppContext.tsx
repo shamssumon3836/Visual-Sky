@@ -171,7 +171,7 @@ interface AppContextType {
   markEmailOpened: (id: string) => void;
   simulateLeadReplyToSentEmail: (sentEmailId: string, customSnippet?: string) => void;
   sendDirectEmail: (payload: DirectSendMailPayload) => Promise<boolean>;
-  syncInboxReplies: (smtpAccountId?: string) => Promise<{ success: boolean; count: number; totalChecked: number; error?: string }>;
+  syncInboxReplies: (smtpAccountId?: string, silent?: boolean) => Promise<{ success: boolean; count: number; totalChecked: number; error?: string }>;
 
   // Notifications
   notifications: AppNotification[];
@@ -1440,23 +1440,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Inbox Actions - Clean sending WITHOUT hardcoded signature injection
+  // Inbox Actions - Live SMTP reply dispatch + thread persistence
   const sendReply = (threadId: string, replyBody: string) => {
     const thread = threads.find(t => t.id === threadId);
-    if (!thread) return;
+    if (!thread || !replyBody.trim()) return;
+
+    const activeSmtp =
+      smtpAccounts.find(s => !s.isTrash && s.isConnected && (s.password || s.apiKey)) ||
+      smtpAccounts.find(s => !s.isTrash && (s.password || s.apiKey)) ||
+      smtpAccounts[0];
+
+    const cleanRecipientName = thread.leadName || thread.leadEmail.split('@')[0];
+    const cleanFirstName = cleanRecipientName.split(' ')[0] || 'there';
+    const cleanCompany = thread.leadCompany || thread.leadEmail.split('@')[1]?.split('.')[0] || 'your company';
+    const senderName = activeSmtp?.fromName || currentUser.name || 'Outreach Specialist';
+
+    const resolvedBody = replyBody
+      .trim()
+      .replace(/\{\{\s*first_name\s*\}\}/gi, cleanFirstName)
+      .replace(/\{\{\s*name\s*\}\}/gi, cleanRecipientName)
+      .replace(/\{\{\s*company\s*\}\}/gi, cleanCompany)
+      .replace(/\{\{\s*email\s*\}\}/gi, thread.leadEmail)
+      .replace(/\{\{\s*sender_name\s*\}\}/gi, senderName);
+
+    const replySubject = (thread.subject || '').toLowerCase().startsWith('re:')
+      ? thread.subject
+      : `Re: ${thread.subject || 'Quick question'}`;
+
+    const trackingPixelId = `px-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
     const newMsg: EmailMessage = {
       id: `msg-${Date.now()}`,
       threadId,
       sender: 'user',
-      senderName: currentUser.name || 'Outreach Manager',
-      senderEmail: currentUser.email || 'outreach@visualsky.io',
+      senderName,
+      senderEmail: activeSmtp?.fromEmail || activeSmtp?.username || currentUser.email || 'outreach@visualsky.pro',
       recipientName: thread.leadName,
       recipientEmail: thread.leadEmail,
-      timestamp: 'Just now',
-      subject: (thread.subject || '').startsWith('Re:') ? (thread.subject || '') : `Re: ${thread.subject || 'Direct Outreach'}`,
-      body: replyBody.trim(),
-      signatureHtml: undefined, // Pure, clean reply
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      subject: replySubject,
+      body: resolvedBody,
+      signatureHtml: undefined,
       isRead: true,
       status: 'sent',
     };
@@ -1466,30 +1490,85 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!target) return prev;
       const updatedThread = {
         ...target,
-        lastMessage: replyBody.slice(0, 100) + '...',
+        lastMessage: resolvedBody.slice(0, 100),
         lastMessageDate: 'Just now',
         messages: [...target.messages, newMsg]
       };
-      return [updatedThread, ...prev.filter(t => t.id !== threadId)];
+      const nextThreads = [updatedThread, ...prev.filter(t => t.id !== threadId)];
+      persistResourceDirectly('threads', nextThreads);
+      return nextThreads;
     });
 
-    // Record in sent log
-    addSentEmailLog({
-      campaignName: 'Direct Inbox Conversation',
-      recipientName: thread.leadName,
-      recipientEmail: thread.leadEmail,
-      recipientCompany: thread.leadCompany,
-      subject: newMsg.subject,
-      body: replyBody.trim(),
-      smtpAccountName: 'VisualSky Outbound Relay',
-      smtpHost: 'smtp.relay.visualsky.io',
-      status: 'sent',
-      openCount: 0
-    });
+    // Dispatch live reply email over SMTP in background if SMTP account is configured
+    if (activeSmtp && (activeSmtp.host || activeSmtp.apiKey)) {
+      fetch('/api/smtp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: thread.leadEmail,
+          toName: thread.leadName,
+          toCompany: thread.leadCompany,
+          from: activeSmtp.fromEmail || activeSmtp.username,
+          fromName: senderName,
+          subject: replySubject,
+          text: resolvedBody,
+          smtpConfig: activeSmtp,
+          trackingPixelId
+        })
+      })
+        .then(res => safeParseResponse(res, 'Reply send failed'))
+        .then(parsed => {
+          const ok = Boolean(parsed.ok && parsed.data?.success);
+          addSentEmailLog({
+            campaignName: 'Smart Inbox Reply',
+            recipientName: thread.leadName,
+            recipientEmail: thread.leadEmail,
+            recipientCompany: thread.leadCompany,
+            subject: replySubject,
+            body: resolvedBody,
+            smtpAccountName: activeSmtp.name || 'Primary SMTP Relay',
+            smtpHost: `${activeSmtp.host || 'smtp.relay'}:${activeSmtp.port || 465}`,
+            status: ok ? 'sent' : 'failed',
+            errorMessage: ok ? undefined : (parsed.data?.error || 'Failed to send reply'),
+            openCount: 0,
+            trackingPixelId
+          });
+        })
+        .catch((err: any) => {
+          addSentEmailLog({
+            campaignName: 'Smart Inbox Reply',
+            recipientName: thread.leadName,
+            recipientEmail: thread.leadEmail,
+            recipientCompany: thread.leadCompany,
+            subject: replySubject,
+            body: resolvedBody,
+            smtpAccountName: activeSmtp.name || 'Primary SMTP Relay',
+            smtpHost: `${activeSmtp.host || 'smtp.relay'}:${activeSmtp.port || 465}`,
+            status: 'failed',
+            errorMessage: err?.message || 'Network error',
+            openCount: 0,
+            trackingPixelId
+          });
+        });
+    } else {
+      addSentEmailLog({
+        campaignName: 'Smart Inbox Reply',
+        recipientName: thread.leadName,
+        recipientEmail: thread.leadEmail,
+        recipientCompany: thread.leadCompany,
+        subject: replySubject,
+        body: resolvedBody,
+        smtpAccountName: 'VisualSky Outbound Relay',
+        smtpHost: 'smtp.relay.visualsky.pro',
+        status: 'sent',
+        openCount: 0,
+        trackingPixelId
+      });
+    }
 
     addNotification({
-      title: 'Email Sent Successfully 🚀',
-      message: `Sent outbound message to ${thread.leadName} (${thread.leadEmail})`,
+      title: 'Reply Dispatched 🚀',
+      message: `Sent reply to ${thread.leadName} (${thread.leadEmail})`,
       type: 'system',
       linkTab: 'inbox',
       threadId
@@ -1892,19 +1971,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Outbound Sent Emails & Live Tracking
   const addSentEmailLog = (logData: Omit<SentEmailLog, 'id' | 'sentAt'> & { trackingPixelId?: string; errorMessage?: string }): SentEmailLog => {
+    const cleanPixelId = String(logData.trackingPixelId || `px-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`).replace(/\.gif$/i, '').trim();
+    const initialStatus = logData.status === 'failed' ? 'failed' : logData.status === 'bounced' ? 'bounced' : logData.status === 'replied' ? 'replied' : 'sent';
     const newLog: SentEmailLog = {
       ...logData,
       id: `sent-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       sentAt: new Date().toISOString(),
-      trackingPixelId: logData.trackingPixelId || `px-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      status: initialStatus,
+      openCount: 0,
+      firstOpenedAt: undefined,
+      trackingPixelId: cleanPixelId,
       isTrash: false
     };
-    setSentEmails(prev => [newLog, ...prev]);
+    setSentEmails(prev => {
+      const next = [newLog, ...prev];
+      persistResourceDirectly('sentEmails', next);
+      return next;
+    });
     return newLog;
   };
 
   const clearSentEmails = () => {
-    setSentEmails(prev => prev.map(s => ({ ...s, isTrash: true, deletedAt: new Date().toISOString() })));
+    setSentEmails(prev => {
+      const next = prev.map(s => ({ ...s, isTrash: true, deletedAt: new Date().toISOString() }));
+      persistResourceDirectly('sentEmails', next);
+      return next;
+    });
     addNotification({
       title: 'Sent Outbox Cleared 🗑️',
       message: 'All sent logs moved to trash. You can restore them anytime.',
@@ -1914,7 +2006,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteSentEmail = (id: string) => {
-    setSentEmails(prev => prev.map(s => s.id === id ? { ...s, isTrash: true, deletedAt: new Date().toISOString() } : s));
+    setSentEmails(prev => {
+      const next = prev.map(s => s.id === id ? { ...s, isTrash: true, deletedAt: new Date().toISOString() } : s);
+      persistResourceDirectly('sentEmails', next);
+      return next;
+    });
     addNotification({
       title: 'Sent Email Moved to Trash 🗑️',
       message: 'Email log moved to Trash.',
@@ -1924,7 +2020,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const restoreSentEmail = (id: string) => {
-    setSentEmails(prev => prev.map(s => s.id === id ? { ...s, isTrash: false, deletedAt: undefined } : s));
+    setSentEmails(prev => {
+      const next = prev.map(s => s.id === id ? { ...s, isTrash: false, deletedAt: undefined } : s);
+      persistResourceDirectly('sentEmails', next);
+      return next;
+    });
     addNotification({
       title: 'Sent Email Restored 📬',
       message: 'Email log restored to outbox tracker.',
@@ -1934,22 +2034,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const permanentDeleteSentEmail = (id: string) => {
-    setSentEmails(prev => prev.filter(s => s.id !== id));
+    setSentEmails(prev => {
+      const next = prev.filter(s => s.id !== id);
+      persistResourceDirectly('sentEmails', next);
+      return next;
+    });
   };
 
   const markEmailOpened = (id: string) => {
-    setSentEmails(prev => prev.map(s => {
-      if (s.id === id) {
-        const nextCount = (s.openCount || 0) + 1;
-        return {
-          ...s,
-          status: (s.status === 'replied' ? 'replied' : 'opened') as any,
-          openCount: nextCount,
-          firstOpenedAt: s.firstOpenedAt || new Date().toISOString()
-        };
-      }
-      return s;
-    }));
+    setSentEmails(prev => {
+      const next = prev.map(s => {
+        if (s.id === id) {
+          const nextCount = (s.openCount || 0) + 1;
+          return {
+            ...s,
+            status: (s.status === 'replied' ? 'replied' : 'opened') as any,
+            openCount: nextCount,
+            firstOpenedAt: s.firstOpenedAt || new Date().toISOString()
+          };
+        }
+        return s;
+      });
+      persistResourceDirectly('sentEmails', next);
+      return next;
+    });
 
     // Also update lead directory status
     const emailLog = sentEmails.find(s => s.id === id);
@@ -1989,260 +2097,583 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Real-Time Open Tracking Poller (Listens to tracking pixel hits)
-  const processedOpensRef = useRef<Set<string>>(new Set());
+  // Authoritative Real-Time Open Tracking Poller (100% Idempotent: 0 opens = 'sent', 1 open = '1 open', never multiplies on reload!)
+  const notifiedOpenCountsRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     if (!isAuthenticated) return;
+
     const pollTrackingEvents = async () => {
       try {
         const res = await fetch('/api/track/events');
         if (!res.ok) return;
         const parsed = await safeParseResponse(res, 'Tracking poll failed');
         const data = parsed.data || {};
-        if (parsed.ok && data.success && Array.isArray(data.events) && data.events.length > 0) {
-          for (const ev of data.events) {
-            const eventKey = `${ev.pixelId}_${ev.openedAt}`;
-            if (processedOpensRef.current.has(eventKey)) continue;
-            processedOpensRef.current.add(eventKey);
+        if (!parsed.ok || !data.success || !Array.isArray(data.events)) return;
 
-            const hasMatchingSent = (latestWorkspaceRef.current.sentEmails || []).some(
-              s => s.trackingPixelId === ev.pixelId
-            );
-            if (!hasMatchingSent) continue;
+        // Group server events by clean pixelId
+        const eventsByPixel = new Map<string, any[]>();
+        for (const ev of data.events) {
+          if (!ev || !ev.pixelId || !ev.openedAt) continue;
+          const cleanPid = String(ev.pixelId).replace(/\.gif$/i, '').trim();
+          const list = eventsByPixel.get(cleanPid) || [];
+          list.push(ev);
+          eventsByPixel.set(cleanPid, list);
+        }
 
-            setSentEmails(prev => {
-              const target = prev.find(s => s.trackingPixelId === ev.pixelId);
-              if (!target) return prev;
+        setSentEmails(prev => {
+          if (!prev || prev.length === 0) return prev;
+          let changed = false;
 
-              const nextCount = (target.openCount || 0) + 1;
-              const updated = {
-                ...target,
-                status: (target.status === 'replied' ? 'replied' : 'opened') as any,
-                openCount: nextCount,
-                firstOpenedAt: target.firstOpenedAt || ev.openedAt,
-                ipAddress: ev.ip || target.ipAddress,
-                userAgent: ev.userAgent || target.userAgent
-              };
-
-              // Update lead
-              setLeads(lPrev => lPrev.map(l => {
-                if (l.email?.toLowerCase() === target.recipientEmail?.toLowerCase() || l.name === target.recipientName) {
-                  return {
-                    ...l,
-                    status: l.status === 'replied' ? 'replied' : 'opened',
-                    openCount: (l.openCount || 0) + 1,
-                    lastOpenedAt: ev.openedAt || new Date().toISOString()
-                  };
-                }
-                return l;
-              }));
-
-              // Update campaign open count if part of a campaign
-              if (target.campaignId) {
-                setCampaigns(cPrev => cPrev.map(c => {
-                  if (c.id === target.campaignId) {
-                    return {
-                      ...c,
-                      openCount: (c.openCount || 0) + 1
-                    };
-                  }
-                  return c;
-                }));
+          const nextSentEmails = prev.map(mail => {
+            if (mail.status === 'failed' || mail.status === 'bounced') {
+              if ((mail.openCount || 0) !== 0) {
+                changed = true;
+                return { ...mail, openCount: 0, firstOpenedAt: undefined };
               }
+              return mail;
+            }
 
-              // Fire real in-app notification
+            const cleanPid = String(mail.trackingPixelId || '').replace(/\.gif$/i, '').trim();
+            const rawMatches = cleanPid ? (eventsByPixel.get(cleanPid) || []) : [];
+            const sentTimeMs = new Date(mail.sentAt).getTime();
+
+            // Filter out any scanner pre-fetch within 15 seconds of sentAt, and deduplicate within 60-second windows
+            const verifiedOpens: any[] = [];
+            for (const ev of rawMatches) {
+              const openTimeMs = new Date(ev.openedAt).getTime();
+              if (!Number.isFinite(openTimeMs)) continue;
+              if (Number.isFinite(sentTimeMs) && openTimeMs - sentTimeMs < 15000) {
+                continue;
+              }
+              const prevAccepted = verifiedOpens[verifiedOpens.length - 1];
+              if (prevAccepted) {
+                const prevMs = new Date(prevAccepted.openedAt).getTime();
+                if (Math.abs(openTimeMs - prevMs) < 60000) {
+                  continue;
+                }
+              }
+              verifiedOpens.push(ev);
+            }
+
+            const exactOpenCount = verifiedOpens.length;
+            const prevNotified = notifiedOpenCountsRef.current.get(mail.id);
+            if (prevNotified === undefined) {
+              // Initialize baseline so historical opens don't re-trigger toast notifications on reload
+              notifiedOpenCountsRef.current.set(mail.id, exactOpenCount);
+            } else if (exactOpenCount > prevNotified) {
+              notifiedOpenCountsRef.current.set(mail.id, exactOpenCount);
+              const latestEv = verifiedOpens[verifiedOpens.length - 1];
               addNotification({
-                title: `👁️ Real Email Opened: ${target.recipientName}`,
-                message: `${target.recipientCompany || target.recipientEmail} just opened "${(target.subject || '').slice(0, 40)}..." in their mail client.`,
+                title: `👁️ Real Email Opened: ${mail.recipientName}`,
+                message: `${mail.recipientCompany || mail.recipientEmail} opened "${(mail.subject || '').slice(0, 40)}..." (Open #${exactOpenCount}).`,
                 type: 'open',
                 linkTab: 'sent',
-                leadEmail: target.recipientEmail
+                leadEmail: mail.recipientEmail
               });
 
-              return prev.map(s => s.id === target.id ? updated : s);
-            });
+              setLeads(lPrev =>
+                lPrev.map(l => {
+                  if (
+                    l.email?.toLowerCase() === mail.recipientEmail?.toLowerCase() ||
+                    l.name === mail.recipientName
+                  ) {
+                    return {
+                      ...l,
+                      status: l.status === 'replied' ? 'replied' : 'opened',
+                      openCount: exactOpenCount,
+                      lastOpenedAt: latestEv?.openedAt || new Date().toISOString()
+                    };
+                  }
+                  return l;
+                })
+              );
+            }
+
+            if (exactOpenCount === 0) {
+              // Strictly ensure unopened emails show 'sent' with openCount = 0 (unless 'replied')
+              const desiredStatus = mail.status === 'replied' ? 'replied' : 'sent';
+              if (mail.status !== desiredStatus || (mail.openCount || 0) !== 0 || mail.firstOpenedAt) {
+                changed = true;
+                return {
+                  ...mail,
+                  status: desiredStatus as any,
+                  openCount: 0,
+                  firstOpenedAt: undefined
+                };
+              }
+              return mail;
+            } else {
+              // Exact verified open count (1 open = 1, never multiplied!)
+              const desiredStatus = mail.status === 'replied' ? 'replied' : 'opened';
+              const firstOpenIso = verifiedOpens[0]?.openedAt || mail.firstOpenedAt;
+              const latestEv = verifiedOpens[verifiedOpens.length - 1];
+              if (
+                mail.status !== desiredStatus ||
+                mail.openCount !== exactOpenCount ||
+                mail.firstOpenedAt !== firstOpenIso
+              ) {
+                changed = true;
+                return {
+                  ...mail,
+                  status: desiredStatus as any,
+                  openCount: exactOpenCount,
+                  firstOpenedAt: firstOpenIso,
+                  ipAddress: latestEv?.ip || mail.ipAddress,
+                  userAgent: latestEv?.userAgent || mail.userAgent
+                };
+              }
+              return mail;
+            }
+          });
+
+          if (changed) {
+            persistResourceDirectly('sentEmails', nextSentEmails);
+            return nextSentEmails;
           }
-        }
+          return prev;
+        });
       } catch {
         // Polling silent catch
       }
     };
 
-    const interval = setInterval(pollTrackingEvents, 15000);
-    return () => clearInterval(interval);
+    const initialTimer = setTimeout(pollTrackingEvents, 1500);
+    const interval = setInterval(pollTrackingEvents, 10000);
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+    };
   }, [isAuthenticated]);
 
-  // Live IMAP Inbox Reply Syncing
-  const syncInboxReplies = async (smtpAccountId?: string): Promise<{ success: boolean; count: number; totalChecked: number; error?: string }> => {
-    const targetSmtp = smtpAccountId 
-      ? smtpAccounts.find(s => s.id === smtpAccountId) 
-      : smtpAccounts.find(s => s.isConnected && s.password) || smtpAccounts.find(s => s.password) || smtpAccounts[0];
+  // Concurrency lock & seen UIDs cache for fast, conflict-free 5-second background IMAP auto-sync
+  const isImapSyncInFlightRef = useRef<boolean>(false);
 
-    if (!targetSmtp || !targetSmtp.host || !targetSmtp.username || !targetSmtp.password) {
-      addNotification({
-        title: '⚠️ IMAP Sync Error',
-        message: 'No configured SMTP/IMAP credentials with password found. Please check your SMTP settings in Settings -> SMTP Accounts.',
-        type: 'system',
-        linkTab: 'smtp'
-      });
-      return { success: false, count: 0, totalChecked: 0, error: 'No configured SMTP/IMAP credentials with password.' };
+  // Live IMAP Inbox Synchronization (Automatically syncs ALL incoming emails & replies into Smart Inbox without clicking Sync Mailbox)
+  const syncInboxReplies = async (
+    smtpAccountId?: string,
+    silent: boolean = false
+  ): Promise<{ success: boolean; count: number; totalChecked: number; error?: string }> => {
+    if (isImapSyncInFlightRef.current && silent) {
+      return { success: true, count: 0, totalChecked: 0 };
     }
+    isImapSyncInFlightRef.current = true;
 
     try {
-      const res = await fetch('/api/smtp/imap-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          host: targetSmtp.host,
-          port: targetSmtp.port === 465 ? 993 : 993,
-          username: targetSmtp.username,
-          password: targetSmtp.password,
-          encryption: 'SSL',
-          sinceHours: 72
-        })
-      });
+      const currentSmtpList = latestWorkspaceRef.current.smtpAccounts?.length
+        ? latestWorkspaceRef.current.smtpAccounts
+        : smtpAccounts;
 
-      const parsed = await safeParseResponse(res, 'Failed to sync with IMAP server');
-      const data = parsed.data || {};
-      if (!parsed.ok || !data.success) {
-        throw new Error(data.error || 'Failed to sync with IMAP server');
-      }
+      const configuredAccounts = smtpAccountId
+        ? currentSmtpList.filter(s => s.id === smtpAccountId && s.host && s.username && s.password)
+        : currentSmtpList.filter(s => !s.isTrash && s.host && s.username && s.password);
 
-      let matchedReplies = 0;
-      const incomingMsgs: any[] = data.messages || [];
+      // If user has connected SMTP/IMAP accounts, sync all of them; also fallback to system default if none configured
+      const accountsToSync: Array<any> =
+        configuredAccounts.length > 0
+          ? configuredAccounts
+          : [{ id: 'system-default', host: '', username: '', password: '', useSystemDefault: true }];
 
-      for (const msg of incomingMsgs) {
-        const senderEmail = (msg.from || '').trim().toLowerCase();
-        if (!senderEmail) continue;
+      let totalNewReplies = 0;
+      let totalMessagesChecked = 0;
+      let lastError = '';
+      let anyAccountSucceeded = false;
 
-        // Check if matching lead or sent email exists
-        const matchingLead = leads.find(l => l.email?.toLowerCase() === senderEmail);
-        const matchingSentLog = sentEmails.find(s => s.recipientEmail?.toLowerCase() === senderEmail);
+      const normalizeSubject = (sub: string) =>
+        String(sub || '')
+          .replace(/^(re|fwd|fw)\s*:\s*/gi, '')
+          .trim()
+          .toLowerCase();
 
-        if (matchingLead || matchingSentLog) {
-          matchedReplies++;
-          const replyText = msg.text || msg.html || 'Incoming reply message';
+      // Work with mutable copies across the poll cycle so multiple incoming emails never overwrite each other
+      let workingThreads = [...(latestWorkspaceRef.current.threads || threads)];
+      let workingSent = [...(latestWorkspaceRef.current.sentEmails || sentEmails)];
+      let workingLeads = [...(latestWorkspaceRef.current.leads || leads)];
+      let workingCampaigns = [...(latestWorkspaceRef.current.campaigns || campaigns)];
 
-          // Update sent email status
-          setSentEmails(prev => prev.map(s => {
-            if (s.recipientEmail?.toLowerCase() === senderEmail) {
-              return {
-                ...s,
-                status: 'replied',
-                repliedAt: msg.date || new Date().toISOString()
-              };
-            }
-            return s;
-          }));
+      let threadsChanged = false;
+      let sentChanged = false;
+      let leadsChanged = false;
+      let campaignsChanged = false;
+      let newestArrivedThreadId: string | null = null;
+      const notificationsToFire: Array<{
+        title: string;
+        message: string;
+        type: 'reply';
+        linkTab: string;
+        leadEmail: string;
+      }> = [];
 
-          // Update lead
-          setLeads(prev => prev.map(l => {
-            if (l.email?.toLowerCase() === senderEmail) {
-              return {
-                ...l,
-                status: 'replied',
-                isReplied: true,
-                lastRepliedAt: msg.date || new Date().toISOString(),
-                replySnippet: replyText.slice(0, 120)
-              };
-            }
-            return l;
-          }));
+      for (const targetSmtp of accountsToSync) {
+        try {
+          const res = await fetch('/api/smtp/imap-sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              host: targetSmtp.host,
+              port: 993,
+              username: targetSmtp.username,
+              password: targetSmtp.password,
+              useSystemDefault: Boolean(targetSmtp.useSystemDefault),
+              encryption: 'SSL',
+              sinceHours: 168
+            })
+          });
 
-          // Update campaign reply count
-          if (matchingSentLog?.campaignId) {
-            setCampaigns(prev => prev.map(c => {
-              if (c.id === matchingSentLog.campaignId) {
-                return {
-                  ...c,
-                  replyCount: (c.replyCount || 0) + 1
-                };
-              }
-              return c;
-            }));
+          const parsed = await safeParseResponse(res, 'Failed to sync with IMAP server');
+          const data = parsed.data || {};
+          if (!parsed.ok || !data.success) {
+            lastError = data.error || 'Failed to sync with IMAP server';
+            continue;
           }
 
-          // Add message to smart inbox thread
-          const threadLeadEmail = matchingLead?.email || matchingSentLog?.recipientEmail || senderEmail;
-          const leadName = matchingLead?.name || matchingSentLog?.recipientName || msg.fromName || senderEmail.split('@')[0];
+          anyAccountSucceeded = true;
+          const incomingMsgs: any[] = Array.isArray(data.messages) ? data.messages : [];
+          totalMessagesChecked += incomingMsgs.length;
 
-          setThreads(prev => {
-            const existingThread = prev.find(t => t.leadEmail?.toLowerCase() === threadLeadEmail.toLowerCase());
+          const mailboxUsername = String(targetSmtp.username || '').trim().toLowerCase();
+          const mailboxFromEmail = String(targetSmtp.fromEmail || '').trim().toLowerCase();
+          const mailboxKey = mailboxUsername || targetSmtp.id || 'default';
+
+          for (const msg of incomingMsgs) {
+            const senderEmail = String(msg.from || '').trim().toLowerCase();
+            if (!senderEmail || !senderEmail.includes('@')) continue;
+
+            // Skip automated mail server bounces and noreply daemons
+            if (
+              senderEmail.startsWith('mailer-daemon@') ||
+              senderEmail.startsWith('postmaster@') ||
+              senderEmail.startsWith('no-reply@') ||
+              senderEmail.startsWith('noreply@')
+            ) {
+              continue;
+            }
+
+            const msgSubject = String(msg.subject || 'No Subject').trim();
+            const normSub = normalizeSubject(msgSubject);
+
+            // Skip system OTP verification or password reset emails
+            if (
+              normSub.includes('verification code') ||
+              normSub.includes('password reset') ||
+              normSub.includes('verify your email')
+            ) {
+              continue;
+            }
+
+            const replyText =
+              String(msg.text || msg.fullText || msg.html || '').trim() || 'Incoming message';
+
+            // If sender is the exact same mailbox being synced, only skip if it's an outbound copy of a mail we sent from the app
+            if (senderEmail === mailboxUsername || (mailboxFromEmail && senderEmail === mailboxFromEmail)) {
+              const isOutboundCopy = workingSent.some(
+                s =>
+                  normalizeSubject(s.subject) === normSub &&
+                  s.recipientEmail?.toLowerCase() !== senderEmail
+              );
+              if (isOutboundCopy) continue;
+            }
+
+            // Deduplicate strictly by unique IMAP UID / Message-ID (so even repeated short messages like "hi" or "ok" are never dropped!)
+            const cleanUidPart = String(msg.uid || msg.messageId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+            const msgUniqueId = `imap-msg-${mailboxKey}-${cleanUidPart}`;
+
+            const alreadyExistsInAnyThread = workingThreads.some(t =>
+              t.messages.some(m => m.id === msgUniqueId)
+            );
+            if (alreadyExistsInAnyThread) {
+              continue;
+            }
+
+            const isReplySubjectOrHeader =
+              Boolean(msg.inReplyTo) ||
+              (Array.isArray(msg.references) && msg.references.length > 0) ||
+              /^re\s*:/i.test(msgSubject);
+
+            // Match by sender email OR by subject line
+            const matchingLead = workingLeads.find(l => l.email?.toLowerCase() === senderEmail);
+            const matchingSentLog =
+              workingSent.find(s => s.recipientEmail?.toLowerCase() === senderEmail) ||
+              (isReplySubjectOrHeader && normSub
+                ? workingSent.find(s => normalizeSubject(s.subject) === normSub)
+                : undefined);
+            const matchingThread =
+              workingThreads.find(t => t.leadEmail?.toLowerCase() === senderEmail) ||
+              (isReplySubjectOrHeader && normSub
+                ? workingThreads.find(t => normalizeSubject(t.subject) === normSub)
+                : undefined);
+
+            const msgDateIso = msg.date ? new Date(msg.date).toISOString() : new Date().toISOString();
+            const msgTimeFormatted = msg.date
+              ? new Date(msg.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : 'Just now';
+
+            const threadLeadEmail =
+              matchingThread?.leadEmail ||
+              matchingLead?.email ||
+              matchingSentLog?.recipientEmail ||
+              senderEmail;
+            const leadName =
+              msg.fromName ||
+              matchingThread?.leadName ||
+              matchingLead?.name ||
+              matchingSentLog?.recipientName ||
+              senderEmail.split('@')[0].replace(/[._-]/g, ' ');
+            const leadCompany =
+              matchingThread?.leadCompany ||
+              matchingLead?.company ||
+              matchingSentLog?.recipientCompany ||
+              senderEmail.split('@')[1]?.split('.')[0] ||
+              'Direct Inbox';
+
+            totalNewReplies++;
+
+            // 1. Update matching sent email status to 'replied'
+            if (matchingSentLog || matchingLead) {
+              workingSent = workingSent.map(s => {
+                if (
+                  s.recipientEmail?.toLowerCase() === senderEmail ||
+                  s.recipientEmail?.toLowerCase() === threadLeadEmail.toLowerCase() ||
+                  (matchingSentLog && s.id === matchingSentLog.id)
+                ) {
+                  sentChanged = true;
+                  return {
+                    ...s,
+                    status: 'replied' as const,
+                    repliedAt: msgDateIso
+                  };
+                }
+                return s;
+              });
+            }
+
+            // 2. Update matching lead status to 'replied'
+            if (matchingLead) {
+              workingLeads = workingLeads.map(l => {
+                if (l.id === matchingLead.id || l.email?.toLowerCase() === senderEmail) {
+                  leadsChanged = true;
+                  return {
+                    ...l,
+                    status: 'replied' as const,
+                    isReplied: true,
+                    lastRepliedAt: msgDateIso,
+                    replySnippet: replyText.slice(0, 120)
+                  };
+                }
+                return l;
+              });
+            }
+
+            // 3. Update campaign reply count if applicable
+            if (matchingSentLog?.campaignId) {
+              workingCampaigns = workingCampaigns.map(c => {
+                if (c.id === matchingSentLog.campaignId) {
+                  campaignsChanged = true;
+                  return {
+                    ...c,
+                    replyCount: (c.replyCount || 0) + 1
+                  };
+                }
+                return c;
+              });
+            }
+
+            // 4. Add or update conversation thread directly at the top of Smart Inbox
+            const targetThread = workingThreads.find(
+              t =>
+                t.leadEmail?.toLowerCase() === threadLeadEmail.toLowerCase() ||
+                (matchingThread && t.id === matchingThread.id)
+            );
+
+            const targetThreadId =
+              targetThread?.id ||
+              `thread-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+
             const newMsg: EmailMessage = {
-              id: `imap-msg-${msg.uid || Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-              threadId: existingThread?.id || `thread-${Date.now()}`,
+              id: msgUniqueId,
+              threadId: targetThreadId,
               sender: 'lead',
               senderName: leadName,
-              senderEmail: threadLeadEmail,
-              recipientName: currentUser.name,
-              recipientEmail: targetSmtp.username,
-              timestamp: msg.date ? new Date(msg.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now',
-              subject: msg.subject || 'Re: Cold Outreach',
+              senderEmail: senderEmail,
+              recipientName: currentUser.name || 'Me',
+              recipientEmail: targetSmtp.fromEmail || targetSmtp.username || currentUser.email,
+              timestamp: msgTimeFormatted,
+              subject: msgSubject,
               body: replyText,
               isRead: false,
               status: 'replied'
             };
 
-            if (existingThread) {
-              // Avoid duplicate messages
-              if (existingThread.messages.some(m => m.subject === newMsg.subject && m.body === newMsg.body)) {
-                return prev;
-              }
-              const updated = {
-                ...existingThread,
+            if (targetThread) {
+              const updatedThread: EmailThread = {
+                ...targetThread,
+                isTrash: false,
+                subject: msgSubject || targetThread.subject,
                 lastMessage: replyText.slice(0, 100),
-                lastMessageDate: 'Just now',
-                unreadCount: existingThread.unreadCount + 1,
-                messages: [...existingThread.messages, newMsg]
+                lastMessageDate: msgTimeFormatted,
+                updatedAt: msgTimeFormatted,
+                unreadCount: (targetThread.unreadCount || 0) + 1,
+                labels: Array.from(
+                  new Set([
+                    ...(targetThread.labels || []),
+                    matchingSentLog || isReplySubjectOrHeader ? 'Real Reply' : 'Direct Mail',
+                    'Hot Lead'
+                  ])
+                ),
+                messages: [...targetThread.messages, newMsg]
               };
-              return [updated, ...prev.filter(t => t.id !== existingThread.id)];
+              workingThreads = [
+                updatedThread,
+                ...workingThreads.filter(t => t.id !== targetThread.id)
+              ];
             } else {
+              const initialMessages: EmailMessage[] = [];
+              if (matchingSentLog) {
+                initialMessages.push({
+                  id: `msg-sent-${matchingSentLog.id}`,
+                  threadId: targetThreadId,
+                  sender: 'user',
+                  senderName: currentUser.name || targetSmtp.fromName || 'Me',
+                  senderEmail: targetSmtp.fromEmail || targetSmtp.username || currentUser.email,
+                  recipientName: leadName,
+                  recipientEmail: threadLeadEmail,
+                  timestamp: new Date(matchingSentLog.sentAt).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  }),
+                  subject: matchingSentLog.subject,
+                  body: matchingSentLog.body,
+                  isRead: true,
+                  status: 'sent'
+                });
+              }
+              initialMessages.push(newMsg);
+
               const newThread: EmailThread = {
-                id: newMsg.threadId,
+                id: targetThreadId,
                 leadId: matchingLead?.id || `lead-${Date.now()}`,
                 leadName,
                 leadEmail: threadLeadEmail,
-                leadCompany: matchingLead?.company || matchingSentLog?.recipientCompany || threadLeadEmail.split('@')[1] || 'Company',
-                subject: msg.subject || 'Outreach Conversation',
+                leadCompany,
+                subject: matchingSentLog?.subject || msgSubject,
                 lastMessage: replyText.slice(0, 100),
-                lastMessageDate: 'Just now',
+                lastMessageDate: msgTimeFormatted,
+                updatedAt: msgTimeFormatted,
                 unreadCount: 1,
-                labels: ['Real Reply', 'Hot Lead'],
+                labels: [
+                  matchingSentLog || isReplySubjectOrHeader ? 'Real Reply' : 'Direct Mail',
+                  'Hot Lead'
+                ],
                 isStarred: true,
                 isTrash: false,
-                messages: [newMsg]
+                messages: initialMessages
               };
-              return [newThread, ...prev];
+              workingThreads = [newThread, ...workingThreads];
             }
-          });
 
-          addNotification({
-            title: `🔥 Real Inbox Reply from ${leadName}`,
-            message: `"${replyText.slice(0, 70)}..."`,
-            type: 'reply',
-            linkTab: 'inbox'
-          });
+            threadsChanged = true;
+            newestArrivedThreadId = targetThreadId;
+
+            const isReplyToSent = Boolean(matchingSentLog || isReplySubjectOrHeader);
+            notificationsToFire.push({
+              title: isReplyToSent
+                ? `🔥 New Reply from ${leadName}`
+                : `📩 New Email from ${leadName}`,
+              message: `${senderEmail} • "${msgSubject}": "${replyText.slice(0, 70)}${replyText.length > 70 ? '...' : ''}"`,
+              type: 'reply',
+              linkTab: 'inbox',
+              leadEmail: threadLeadEmail
+            });
+          }
+        } catch (err: any) {
+          lastError = err?.message || 'Could not connect to incoming mail server.';
         }
       }
 
-      addNotification({
-        title: '📬 Mailbox Synced Successfully',
-        message: `Checked ${incomingMsgs.length} messages from ${targetSmtp.name}. Found ${matchedReplies} matching lead replies.`,
-        type: 'system',
-        linkTab: 'inbox'
-      });
+      // Commit all state updates and persist immediately
+      if (sentChanged) {
+        setSentEmails(workingSent);
+        persistResourceDirectly('sentEmails', workingSent);
+      }
+      if (leadsChanged) {
+        setLeads(workingLeads);
+        persistResourceDirectly('leads', workingLeads);
+      }
+      if (campaignsChanged) {
+        setCampaigns(workingCampaigns);
+        persistResourceDirectly('campaigns', workingCampaigns);
+      }
+      if (threadsChanged) {
+        setThreads(workingThreads);
+        persistResourceDirectly('threads', workingThreads);
+        if (newestArrivedThreadId) {
+          setActiveThreadId(newestArrivedThreadId);
+        }
+      }
 
-      return { success: true, count: matchedReplies, totalChecked: incomingMsgs.length };
-    } catch (err: any) {
-      addNotification({
-        title: '❌ IMAP Mailbox Sync Failed',
-        message: err.message || 'Could not connect to incoming mail server.',
-        type: 'system'
-      });
-      return { success: false, count: 0, totalChecked: 0, error: err.message };
+      // Fire real-time notifications (ALWAYS notify when new mail arrives, even during silent background auto-sync!)
+      if (notificationsToFire.length > 0) {
+        // Fire up to the latest 3 notifications so the user gets immediate sound + popup alert
+        const recentNotifs = notificationsToFire.slice(-3);
+        for (const notif of recentNotifs) {
+          addNotification(notif);
+        }
+      }
+
+      if (!anyAccountSucceeded) {
+        if (!silent) {
+          addNotification({
+            title: '❌ IMAP Mailbox Sync Failed',
+            message: lastError || 'Could not connect to incoming mail server.',
+            type: 'system'
+          });
+        }
+        return { success: false, count: 0, totalChecked: 0, error: lastError };
+      }
+
+      if (!silent && notificationsToFire.length === 0) {
+        addNotification({
+          title: '📬 Smart Inbox Up-to-Date',
+          message: `Checked ${totalMessagesChecked} messages across ${accountsToSync.length} mailbox(es). All incoming emails are synced.`,
+          type: 'system',
+          linkTab: 'inbox'
+        });
+      }
+
+      return { success: true, count: totalNewReplies, totalChecked: totalMessagesChecked };
+    } finally {
+      isImapSyncInFlightRef.current = false;
     }
   };
+
+  // Continuous Real-Time Background IMAP Auto-Sync (Every 5 seconds + on tab focus — zero manual button clicks needed!)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const initialSyncTimer = setTimeout(() => {
+      syncInboxReplies(undefined, true).catch(() => {});
+    }, 1000);
+
+    const imapInterval = setInterval(() => {
+      syncInboxReplies(undefined, true).catch(() => {});
+    }, 5000);
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        syncInboxReplies(undefined, true).catch(() => {});
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    return () => {
+      clearTimeout(initialSyncTimer);
+      clearInterval(imapInterval);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
+  }, [isAuthenticated, smtpAccounts.length]);
 
   const simulateLeadReplyToSentEmail = (sentEmailId: string, customSnippet?: string) => {
     const emailLog = sentEmails.find(s => s.id === sentEmailId);
@@ -2312,11 +2743,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Direct Outbound Email Sender
+  // Direct Outbound Email Sender (100% Primary Inbox + Auto Placeholder Resolution + Outbox & Thread Sync)
   const sendDirectEmail = async (payload: DirectSendMailPayload): Promise<boolean> => {
-    const smtp = smtpAccounts.find(s => s.id === payload.senderSmtpId) || smtpAccounts[0];
+    const smtp = smtpAccounts.find(s => s.id === payload.senderSmtpId) || smtpAccounts.find(s => !s.isTrash) || smtpAccounts[0];
 
-    if (!smtp || !smtp.host || !smtp.username || !smtp.password) {
+    if (!smtp || (!smtp.host && !smtp.apiKey) || (!smtp.password && !smtp.apiKey)) {
       addNotification({
         title: '❌ Sending Failed: No SMTP Account',
         message: 'Please connect a valid SMTP account with password in Settings -> SMTP Accounts before sending.',
@@ -2325,6 +2756,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return false;
     }
+
+    const cleanEmail = payload.recipientEmail.trim();
+    const matchedLead = leads.find(l => l.email?.toLowerCase() === cleanEmail.toLowerCase());
+    const domainCompany = cleanEmail.split('@')[1]?.split('.')[0] || 'Company';
+    const resolvedCompany = matchedLead?.company || (domainCompany.charAt(0).toUpperCase() + domainCompany.slice(1));
+    const resolvedName =
+      (payload.recipientName && !payload.recipientName.includes('@') ? payload.recipientName.trim() : '') ||
+      matchedLead?.name ||
+      cleanEmail.split('@')[0].replace(/[._-]/g, ' ');
+    const resolvedFirstName = resolvedName.split(' ')[0] || 'there';
+    const senderName = smtp?.fromName || currentUser.name || 'Outreach Specialist';
+
+    const replaceTokens = (txt: string) =>
+      String(txt || '')
+        .replace(/\{\{\s*first_name\s*\}\}/gi, resolvedFirstName)
+        .replace(/\{\{\s*name\s*\}\}/gi, resolvedName)
+        .replace(/\{\{\s*company\s*\}\}/gi, resolvedCompany)
+        .replace(/\{\{\s*email\s*\}\}/gi, cleanEmail)
+        .replace(/\{\{\s*title\s*\}\}/gi, matchedLead?.title || 'Executive')
+        .replace(/\{\{\s*website\s*\}\}/gi, matchedLead?.website || resolvedCompany)
+        .replace(/\{\{\s*niche\s*\}\}/gi, matchedLead?.niche || 'your industry')
+        .replace(/\{\{\s*sender_name\s*\}\}/gi, senderName)
+        .trim();
+
+    const cleanSubject = replaceTokens(payload.subject);
+    const cleanBody = replaceTokens(payload.body);
 
     const trackingPixelId = `px-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     let isSuccess = false;
@@ -2335,12 +2792,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          to: payload.recipientEmail,
-          toName: payload.recipientName,
+          to: cleanEmail,
+          toName: resolvedName,
+          toCompany: resolvedCompany,
           from: smtp?.fromEmail || smtp?.username,
-          fromName: smtp?.fromName || currentUser.name || 'Visual Sky Outreach',
-          subject: payload.subject,
-          text: payload.body,
+          fromName: senderName,
+          subject: cleanSubject,
+          text: cleanBody,
           smtpConfig: smtp,
           trackingPixelId
         })
@@ -2360,14 +2818,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (isSuccess) {
-      // Add sent log
+      // Add sent log with status strictly 'sent' and openCount strictly 0
       addSentEmailLog({
         campaignName: 'Direct Outreach Mailer',
-        recipientName: payload.recipientName || payload.recipientEmail.split('@')[0],
-        recipientEmail: payload.recipientEmail,
-        recipientCompany: payload.recipientEmail.split('@')[1]?.split('.')[0] || 'Direct Contact',
-        subject: payload.subject,
-        body: payload.body,
+        recipientName: resolvedName,
+        recipientEmail: cleanEmail,
+        recipientCompany: resolvedCompany,
+        subject: cleanSubject,
+        body: cleanBody,
         smtpAccountName: smtp?.name || 'Primary SMTP Relay',
         smtpHost: `${smtp?.host || 'smtp.relay'}:${smtp?.port || 587}`,
         status: 'sent',
@@ -2376,21 +2834,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       // Update lead if in database
-      setLeads(prev => prev.map(l => {
-        if (l.email.toLowerCase() === payload.recipientEmail.toLowerCase()) {
-          return {
-            ...l,
-            status: l.status === 'new' ? 'contacted' : l.status,
-            lastActivityDate: new Date().toISOString(),
-            daysAgo: 0
-          };
-        }
-        return l;
-      }));
+      setLeads(prev => {
+        const next = prev.map(l => {
+          if (l.email.toLowerCase() === cleanEmail.toLowerCase()) {
+            return {
+              ...l,
+              status: l.status === 'new' ? ('contacted' as const) : l.status,
+              lastActivityDate: new Date().toISOString(),
+              daysAgo: 0
+            };
+          }
+          return l;
+        });
+        persistResourceDirectly('leads', next);
+        return next;
+      });
 
       addNotification({
         title: 'Outbound Email Dispatched 🚀',
-        message: `Sent live email to ${payload.recipientName || payload.recipientEmail} via ${smtp.name}.`,
+        message: `Sent live email to ${resolvedName} (${cleanEmail}) via ${smtp.name}.`,
         type: 'reply'
       });
 
@@ -2399,11 +2861,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Add failed log
       addSentEmailLog({
         campaignName: 'Direct Outreach Mailer',
-        recipientName: payload.recipientName || payload.recipientEmail.split('@')[0],
-        recipientEmail: payload.recipientEmail,
-        recipientCompany: payload.recipientEmail.split('@')[1]?.split('.')[0] || 'Direct Contact',
-        subject: payload.subject,
-        body: payload.body,
+        recipientName: resolvedName,
+        recipientEmail: cleanEmail,
+        recipientCompany: resolvedCompany,
+        subject: cleanSubject,
+        body: cleanBody,
         smtpAccountName: smtp?.name || 'Primary SMTP Relay',
         smtpHost: `${smtp?.host || 'smtp.relay'}:${smtp?.port || 587}`,
         status: 'failed',
@@ -2414,7 +2876,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       addNotification({
         title: '❌ Email Transmission Failed',
-        message: `Could not send to ${payload.recipientEmail}: ${errorMessage}`,
+        message: `Could not send to ${cleanEmail}: ${errorMessage}`,
         type: 'system'
       });
 

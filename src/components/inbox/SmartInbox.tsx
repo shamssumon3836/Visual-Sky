@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { safeParseResponse } from '../../lib/safeFetch';
 import { EmailThread, EmailMessage } from '../../types';
@@ -77,6 +77,15 @@ export const SmartInbox: React.FC = () => {
   } = useApp();
 
   const [isSyncingImap, setIsSyncingImap] = useState<boolean>(false);
+
+  // Automatically sync IMAP replies in background when SmartInbox opens & every 5s while open (no manual button click required!)
+  useEffect(() => {
+    syncInboxReplies(undefined, true).catch(() => {});
+    const timer = setInterval(() => {
+      syncInboxReplies(undefined, true).catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
 
   const handleManualImapSync = async () => {
     setIsSyncingImap(true);
@@ -176,6 +185,7 @@ export const SmartInbox: React.FC = () => {
 
       // Folder matching
       if (selectedFolder === 'starred' && !thread.isStarred) return false;
+      if (selectedFolder === 'sent' && !thread.messages.some(m => m.sender === 'user')) return false;
       if (selectedFolder === 'high_intent' && !thread.labels.includes('Hot Lead')) return false;
       if (selectedFolder === 'meetings' && !thread.labels.includes('Meeting Scheduled')) return false;
       if (selectedFolder === 'unread' && thread.unreadCount === 0) return false;
@@ -200,6 +210,13 @@ export const SmartInbox: React.FC = () => {
       return true;
     });
   }, [threads, selectedFolder, primaryTab, searchQuery]);
+
+  // Ensure a valid thread is selected if available
+  useEffect(() => {
+    if (filteredThreads.length > 0 && !filteredThreads.some(t => t.id === activeThreadId)) {
+      setActiveThreadId(filteredThreads[0].id);
+    }
+  }, [filteredThreads, activeThreadId, setActiveThreadId]);
 
   const handleSelectThread = (thread: EmailThread) => {
     setActiveThreadId(thread.id);
@@ -411,16 +428,20 @@ export const SmartInbox: React.FC = () => {
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-          {/* Real-time IMAP Sync Button */}
+          {/* Live Auto-Sync Status Indicator (Works automatically every 5s without needing manual clicks) */}
           <button
             type="button"
             onClick={handleManualImapSync}
             disabled={isSyncingImap}
-            className="px-3.5 py-2 rounded-2xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-bold text-xs flex items-center gap-1.5 transition cursor-pointer disabled:opacity-60 shadow-md"
-            title="Fetch and sync replies directly from your SMTP/IMAP mailbox"
+            className="px-3.5 py-2 rounded-2xl bg-emerald-950/30 hover:bg-emerald-900/40 border border-emerald-500/30 text-emerald-300 hover:text-emerald-200 font-bold text-xs flex items-center gap-2 transition cursor-pointer disabled:opacity-60 shadow-md"
+            title="Live IMAP Auto-Sync is active (automatically receives incoming emails in real time)"
           >
-            <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncingImap ? 'animate-spin' : ''}`} />
-            <span>{isSyncingImap ? 'Checking IMAP...' : 'Sync Mailbox'}</span>
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400"></span>
+            </span>
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingImap ? 'animate-spin' : ''}`} />
+            <span>{isSyncingImap ? 'Syncing Live...' : 'Auto-Sync Live'}</span>
           </button>
 
           {selectedThreadIds.length > 0 ? (
