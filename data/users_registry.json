@@ -1,0 +1,12 @@
+[
+  {
+    "id": "user-agency-1",
+    "name": "Rafiqul VisualSky",
+    "email": "rafiqulvisualsky@gmail.com",
+    "role": "agency",
+    "isOwner": true,
+    "plan": "Enterprise",
+    "phone": "+880 1712-345678",
+    "joinedAt": "2026-08-29"
+  }
+]

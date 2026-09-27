@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" width="100%" height="100%">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="v_cyan_blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00A3FF" />
+      <stop offset="50%" stop-color="#0080FF" />
+      <stop offset="100%" stop-color="#0052CC" />
+    </linearGradient>
+
+    <linearGradient id="v_dark_purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#11162B" />
+      <stop offset="50%" stop-color="#3B1745" />
+      <stop offset="100%" stop-color="#8F1D65" />
+    </linearGradient>
+
+    <linearGradient id="s_top_cyan" x1="0%" y1="0%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#00C0FF" />
+      <stop offset="50%" stop-color="#0080FF" />
+      <stop offset="100%" stop-color="#3A66DB" />
+    </linearGradient>
+
+    <linearGradient id="s_bottom_magenta" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6F23B2" />
+      <stop offset="50%" stop-color="#B71D78" />
+      <stop offset="100%" stop-color="#E92C5B" />
+    </linearGradient>
+
+    <linearGradient id="visual_text_grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00B2FE" />
+      <stop offset="50%" stop-color="#3B7FE5" />
+      <stop offset="100%" stop-color="#7B5BAF" />
+    </linearGradient>
+
+    <linearGradient id="sky_text_grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#8A51A5" />
+      <stop offset="50%" stop-color="#C2386E" />
+      <stop offset="100%" stop-color="#E83353" />
+    </linearGradient>
+
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0088ff" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- VS EMBLEM -->
+  <g transform="translate(40, 60)" filter="url(#shadow)">
+    <!-- V Left Arm -->
+    <path d="M 20 20 L 70 20 L 125 190 L 80 190 Z" fill="url(#v_cyan_blue)" />
+    <!-- V Right Arm / Intersection -->
+    <path d="M 80 190 L 125 190 L 175 20 L 130 20 Z" fill="url(#v_dark_purple)" opacity="0.95" />
+    
+    <!-- S Top Curve & Loop -->
+    <path d="M 170 20 C 235 20, 275 55, 275 95 C 275 130, 240 155, 175 160 L 155 162 C 145 163, 140 168, 140 173 C 140 178, 145 183, 155 184 L 270 184 C 270 220, 270 220, 230 220 L 150 220 C 105 220, 75 185, 75 145 C 75 110, 110 85, 175 80 L 195 78 C 205 77, 210 72, 210 67 C 210 62, 205 57, 195 56 L 120 56 L 140 20 Z" fill="url(#s_top_cyan)" />
+    
+    <!-- S Bottom Flare / Magenta Tail -->
+    <path d="M 135 155 C 150 150, 185 150, 220 155 C 265 162, 280 190, 280 220 C 280 260, 240 280, 175 280 L 85 280 L 105 240 L 175 240 C 205 240, 220 230, 220 215 C 220 200, 205 190, 175 188 L 135 185 Z" fill="url(#s_bottom_magenta)" />
+  </g>
+
+  <!-- TEXT LOGO: VISUAL SKY -->
+  <g transform="translate(360, 60)">
+    <!-- VISUAL -->
+    <text x="0" y="115" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="110" letter-spacing="-2" fill="url(#visual_text_grad)">VISUAL</text>
+    <!-- SKY -->
+    <text x="0" y="235" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="115" letter-spacing="-1" fill="url(#sky_text_grad)">SKY</text>
+  </g>
+</svg>

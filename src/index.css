@@ -1,0 +1,269 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: #080c14;
+    color: #f1f5f9;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    overflow-x: hidden;
+  }
+
+  /* Universal Modern SaaS Tactile Physics for Buttons & Interactive Controls */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    transition:
+      transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+      background-color 0.2s ease,
+      border-color 0.2s ease,
+      color 0.2s ease,
+      opacity 0.2s ease;
+    will-change: transform;
+  }
+
+  button:not(:disabled):hover,
+  [role="button"]:not([aria-disabled="true"]):hover {
+    transform: translateY(-1.5px);
+  }
+
+  button:not(:disabled):active,
+  [role="button"]:not([aria-disabled="true"]):active {
+    transform: translateY(0.5px) scale(0.965) !important;
+    transition-duration: 0.08s;
+  }
+}
+
+/* Custom modern SaaS scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0b1120;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Subtle glow utilities */
+.glow-cyan {
+  box-shadow: 0 0 20px -5px rgba(6, 182, 212, 0.3);
+}
+
+.glow-blue {
+  box-shadow: 0 0 25px -5px rgba(59, 130, 246, 0.3);
+}
+
+.glow-emerald {
+  box-shadow: 0 0 20px -5px rgba(16, 185, 129, 0.25);
+}
+
+.glow-purple {
+  box-shadow: 0 0 20px -5px rgba(168, 85, 247, 0.25);
+}
+
+/* Glass background */
+.glass-panel {
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-panel-hover:hover {
+  background: rgba(30, 41, 59, 0.85);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+/* ========================================================= */
+/* MODERN SAAS GLOBAL CLICK & TRANSITION ANIMATION ENGINE    */
+/* ========================================================= */
+
+@keyframes pulseSubtle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.02); }
+}
+
+.animate-subtle-pulse {
+  animation: pulseSubtle 3s infinite ease-in-out;
+}
+
+@keyframes saasClickCore {
+  0% {
+    width: 6px;
+    height: 6px;
+    opacity: 0.95;
+  }
+  100% {
+    width: 34px;
+    height: 34px;
+    opacity: 0;
+  }
+}
+
+@keyframes saasClickRing {
+  0% {
+    width: 8px;
+    height: 8px;
+    opacity: 0.95;
+    border-width: 2px;
+  }
+  100% {
+    width: 58px;
+    height: 58px;
+    opacity: 0;
+    border-width: 1px;
+  }
+}
+
+@keyframes saasClickRingOuter {
+  0% {
+    width: 12px;
+    height: 12px;
+    opacity: 0.75;
+    border-width: 1.5px;
+  }
+  100% {
+    width: 82px;
+    height: 82px;
+    opacity: 0;
+    border-width: 0.5px;
+  }
+}
+
+@keyframes saasClickSpark {
+  0% {
+    transform: translateX(3px) scale(1.15);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(28px) scale(0.1);
+    opacity: 0;
+  }
+}
+
+.saas-click-core {
+  animation: saasClickCore 0.42s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.saas-click-ring {
+  animation: saasClickRing 0.52s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.saas-click-ring-outer {
+  animation: saasClickRingOuter 0.58s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.saas-click-spark {
+  animation: saasClickSpark 0.48s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Smooth Page / Tab View Entrance Animation */
+@keyframes saasViewEnter {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.992);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.saas-view-enter {
+  animation: saasViewEnter 0.32s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Modal Spring Pop Animation */
+@keyframes saasModalPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.94) translateY(14px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.saas-modal-pop {
+  animation: saasModalPop 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Interactive Card Lift & Glow */
+.saas-card-interactive {
+  transition:
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.25s ease,
+    background-color 0.25s ease;
+}
+
+.saas-card-interactive:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 18px 38px -12px rgba(6, 182, 212, 0.16), 0 8px 20px -8px rgba(0, 0, 0, 0.6);
+}
+
+.saas-card-interactive:active {
+  transform: translateY(-1px) scale(0.992);
+}
+
+/* Subtle Shimmer Sweep on Primary Action Buttons */
+@keyframes saasShimmerSweep {
+  0% {
+    transform: translateX(-120%) skewX(-18deg);
+  }
+  45%, 100% {
+    transform: translateX(220%) skewX(-18deg);
+  }
+}
+
+.saas-shimmer-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.saas-shimmer-btn::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.22),
+    transparent
+  );
+  animation: saasShimmerSweep 4.2s infinite ease-in-out;
+  pointer-events: none;
+}
+
+/* Gentle Floating Hero Showcase */
+@keyframes saasFloatSlow {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.saas-float-slow {
+  animation: saasFloatSlow 5.5s ease-in-out infinite;
+}

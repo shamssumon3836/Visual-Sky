@@ -1,0 +1,11 @@
+node_modules/
+dist/
+prebuilt/
+assets/index-*
+build/
+coverage/
+.DS_Store
+*.log
+*.map
+.env*
+!.env.example

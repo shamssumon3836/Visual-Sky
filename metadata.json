@@ -1,0 +1,6 @@
+{
+  "name": "VisualSky - Cold Outreach & Lead Engine",
+  "description": "Enterprise-grade AI lead intelligence, outbound SMTP relays, cold email sequences, multi-platform lead miner, unified inbox, and client CRM.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,14 @@
+{
+  "bkashPersonalNumber": "01577-225248",
+  "bkashCleanNumber": "01577225248",
+  "accountType": "bKash Personal / Merchant Gateway",
+  "instruction": "আপনার সচল বিকাশ নাম্বার দিন, আপনার বিকাশ নাম্বারে (SMS-এ) পাঠানো আসল ৬-ডিজিট ভেরিফিকেশন কোড (OTP) এবং পিন দিয়ে পেমেন্ট সম্পন্ন করুন।",
+  "paymentAuthPin": "38360",
+  "smsApiKey": "",
+  "smsSenderId": "",
+  "bkashAppKey": "",
+  "bkashAppSecret": "",
+  "bkashUsername": "",
+  "bkashPassword": "",
+  "updatedAt": "2026-09-27T02:05:00.000Z"
+}
