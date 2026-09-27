@@ -10,6 +10,7 @@
     <meta property="og:description" content="Enterprise-grade AI lead intelligence, outbound SMTP relays, cold email sequences, multi-platform lead miner, unified inbox, and client CRM." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <link rel="stylesheet" href="/prebuilt/app.css?v=20260928-v3" />
   </head>
   <body style="background-color: #080c14; color: #f1f5f9; margin: 0; min-height: 100vh;">
     <div id="root">
@@ -24,24 +25,20 @@
       (function () {
         // Instant production loader for cPanel / static document-root serving
         function bootProductionBundle() {
-          // If Vite dev server is active (@vite/client injected), let Vite handle /src/main.tsx
+          // If Vite dev server is active or Vite's built /assets/index-*.js is already present, do not double-inject
           if (
             window.__vite_plugin_react_preamble_installed__ ||
-            document.querySelector('script[src*="@vite/client"]')
+            document.querySelector('script[src*="@vite/client"]') ||
+            document.querySelector('script[src*="/assets/index-"]')
           ) {
             return;
           }
           if (document.getElementById('vs-prebuilt-bundle')) return;
 
-          var css = document.createElement('link');
-          css.rel = 'stylesheet';
-          css.href = '/prebuilt/app.css';
-          document.head.appendChild(css);
-
           var script = document.createElement('script');
           script.id = 'vs-prebuilt-bundle';
           script.type = 'module';
-          script.src = '/prebuilt/app.js';
+          script.src = '/prebuilt/app.js?v=20260928-v3';
           document.body.appendChild(script);
 
           // Wake up Passenger backend asynchronously in the background (never blocks UI rendering)

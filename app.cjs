@@ -57,11 +57,30 @@ function buildWithEsbuild() {
     });
   }
 
-  if (!fs.existsSync(prebuiltAppCss)) {
-    const rawCssPath = path.join(__dirname, 'src', 'index.css');
-    if (fs.existsSync(rawCssPath)) {
-      const rawCss = fs.readFileSync(rawCssPath, 'utf8').replace(/@import\s+["']tailwindcss["'];?/g, '');
-      fs.writeFileSync(prebuiltAppCss, rawCss, 'utf8');
+  const hasFullCss =
+    fs.existsSync(prebuiltAppCss) && fs.statSync(prebuiltAppCss).size > 50000;
+  if (!hasFullCss) {
+    const tailwindBackup = path.join(prebuiltDir, 'tailwind-bundle.css');
+    const rootAssetsDir = path.join(__dirname, 'assets');
+    let restored = false;
+    if (fs.existsSync(tailwindBackup) && fs.statSync(tailwindBackup).size > 50000) {
+      fs.copyFileSync(tailwindBackup, prebuiltAppCss);
+      restored = true;
+    } else if (fs.existsSync(rootAssetsDir)) {
+      const cssCandidate = fs
+        .readdirSync(rootAssetsDir)
+        .find((f) => f.endsWith('.css') && fs.statSync(path.join(rootAssetsDir, f)).size > 50000);
+      if (cssCandidate) {
+        fs.copyFileSync(path.join(rootAssetsDir, cssCandidate), prebuiltAppCss);
+        restored = true;
+      }
+    }
+    if (!restored && !fs.existsSync(prebuiltAppCss)) {
+      const rawCssPath = path.join(__dirname, 'src', 'index.css');
+      if (fs.existsSync(rawCssPath)) {
+        const rawCss = fs.readFileSync(rawCssPath, 'utf8').replace(/@import\s+["']tailwindcss["'];?/g, '');
+        fs.writeFileSync(prebuiltAppCss, rawCss, 'utf8');
+      }
     }
   }
 
@@ -81,8 +100,9 @@ function buildWithEsbuild() {
 try {
   const hasServerBundle = fs.existsSync(distServer) || fs.existsSync(prebuiltServer);
   const hasClientBundle = fs.existsSync(prebuiltAppJs);
-  if (!hasServerBundle || !hasClientBundle) {
-    console.log('[Bootstrap] Prebuilt bundle missing, compiling with esbuild...');
+  const hasFullCss = fs.existsSync(prebuiltAppCss) && fs.statSync(prebuiltAppCss).size > 50000;
+  if (!hasServerBundle || !hasClientBundle || !hasFullCss) {
+    console.log('[Bootstrap] Prebuilt bundle missing or incomplete, syncing/compiling...');
     buildWithEsbuild();
   }
 } catch (buildErr) {

@@ -4066,6 +4066,10 @@ app.use('/api', (err: any, req: express.Request, res: express.Response, next: ex
 
 // Vite / Production handler
 async function startServer() {
+  const prebuiltCandidate = path.join(process.cwd(), 'prebuilt');
+  app.use('/prebuilt', express.static(prebuiltCandidate));
+  app.use('/assets', express.static(path.join(process.cwd(), 'assets')));
+
   const isProdServer =
     process.env.NODE_ENV === 'production' ||
     Boolean(process.argv[1] && process.argv[1].includes('server.cjs'));
@@ -4079,14 +4083,11 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distCandidate = path.join(process.cwd(), 'dist');
-    const prebuiltCandidate = path.join(process.cwd(), 'prebuilt');
     const distPath = fs.existsSync(path.join(distCandidate, 'index.html'))
       ? distCandidate
       : fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
       ? prebuiltCandidate
       : distCandidate;
-    app.use('/prebuilt', express.static(prebuiltCandidate));
-    app.use('/assets', express.static(path.join(process.cwd(), 'assets')));
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

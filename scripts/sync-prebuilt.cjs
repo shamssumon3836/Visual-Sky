@@ -15,6 +15,20 @@ if (!fs.existsSync(distDir)) {
 // 1. Copy full dist/ to prebuilt/
 fs.cpSync(distDir, prebuiltDir, { recursive: true, force: true });
 
+// Read compiled Tailwind v4 CSS produced by Vite build
+let compiledCss = '';
+if (fs.existsSync(distAssetsDir)) {
+  const assetFiles = fs.readdirSync(distAssetsDir);
+  const cssAsset = assetFiles.find((f) => f.startsWith('index-') && f.endsWith('.css'));
+  if (cssAsset) {
+    compiledCss = fs.readFileSync(path.join(distAssetsDir, cssAsset), 'utf8');
+  }
+}
+
+const cssInjectorBanner = compiledCss
+  ? `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-inline-tw')){var s=document.createElement('style');s.id='vs-inline-tw';s.textContent=${JSON.stringify(compiledCss)};document.head.appendChild(s);}})();`
+  : '';
+
 // Verify that esbuild frontend bundler (used by app.cjs on cPanel) compiles src/main.tsx cleanly
 const esbuild = require('esbuild');
 esbuild.buildSync({
@@ -25,6 +39,7 @@ esbuild.buildSync({
   platform: 'browser',
   target: ['es2020'],
   outfile: path.join(prebuiltDir, 'app.js'),
+  banner: cssInjectorBanner ? { js: cssInjectorBanner } : undefined,
   loader: {
     '.css': 'empty',
     '.svg': 'dataurl',
@@ -50,11 +65,20 @@ esbuild.buildSync({
 
 // 2. Copy dist/assets/ to root assets/ so LiteSpeed/Apache can serve /assets/* directly from DocumentRoot
 if (fs.existsSync(distAssetsDir)) {
-  fs.cpSync(distAssetsDir, rootAssetsDir, { recursive: true, force: true });
-
   const files = fs.readdirSync(distAssetsDir);
   const jsFile = files.find((f) => f.startsWith('index-') && f.endsWith('.js'));
   const cssFile = files.find((f) => f.startsWith('index-') && f.endsWith('.css'));
+
+  if (jsFile && cssInjectorBanner) {
+    const distJsPath = path.join(distAssetsDir, jsFile);
+    const existingJs = fs.readFileSync(distJsPath, 'utf8');
+    if (!existingJs.includes('vs-inline-tw')) {
+      fs.writeFileSync(distJsPath, cssInjectorBanner + '\n' + existingJs, 'utf8');
+    }
+  }
+
+  fs.cpSync(distAssetsDir, rootAssetsDir, { recursive: true, force: true });
+  fs.cpSync(distAssetsDir, path.join(prebuiltDir, 'assets'), { recursive: true, force: true });
 
   if (jsFile) {
     fs.copyFileSync(
@@ -63,10 +87,10 @@ if (fs.existsSync(distAssetsDir)) {
     );
   }
   if (cssFile) {
-    fs.copyFileSync(
-      path.join(distAssetsDir, cssFile),
-      path.join(prebuiltDir, 'app.css')
-    );
+    const compiledCssPath = path.join(distAssetsDir, cssFile);
+    fs.copyFileSync(compiledCssPath, path.join(prebuiltDir, 'app.css'));
+    fs.copyFileSync(compiledCssPath, path.join(prebuiltDir, 'tailwind-bundle.css'));
+    fs.copyFileSync(compiledCssPath, path.join(rootAssetsDir, 'app.css'));
   }
 }
 
