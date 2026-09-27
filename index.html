@@ -10,7 +10,7 @@
     <meta property="og:description" content="Enterprise-grade AI lead intelligence, outbound SMTP relays, cold email sequences, multi-platform lead miner, unified inbox, and client CRM." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
-    <link rel="stylesheet" href="/prebuilt/app.css?v=20260928-v4" />
+    <link rel="stylesheet" href="/prebuilt/app.css?v=20260928-v5" />
   </head>
   <body style="background-color: #080c14; color: #f1f5f9; margin: 0; min-height: 100vh;">
     <div id="root">
@@ -23,7 +23,16 @@
     <script type="module" src="/src/main.tsx"></script>
     <script>
       (function () {
-        // Instant production loader for cPanel / static document-root serving
+        // Production loader for cPanel / static document-root serving
+        function injectPrebuiltScript() {
+          if (document.getElementById('vs-prebuilt-bundle')) return;
+          var script = document.createElement('script');
+          script.id = 'vs-prebuilt-bundle';
+          script.type = 'module';
+          script.src = '/prebuilt/app.js?v=20260928-v5&t=' + Date.now();
+          document.body.appendChild(script);
+        }
+
         function bootProductionBundle() {
           // If Vite dev server is active or Vite's built /assets/index-*.js is already present, do not double-inject
           if (
@@ -35,14 +44,30 @@
           }
           if (document.getElementById('vs-prebuilt-bundle')) return;
 
-          var script = document.createElement('script');
-          script.id = 'vs-prebuilt-bundle';
-          script.type = 'module';
-          script.src = '/prebuilt/app.js?v=20260928-v4';
-          document.body.appendChild(script);
+          // Wake up Passenger backend first so app.cjs compiles latest src/main.tsx & server.ts before serving app.js
+          var loaded = false;
+          var fallbackTimer = setTimeout(function () {
+            if (!loaded) {
+              loaded = true;
+              injectPrebuiltScript();
+            }
+          }, 3500);
 
-          // Wake up Passenger backend asynchronously in the background (never blocks UI rendering)
-          fetch('/api/health', { cache: 'no-store' }).catch(function () {});
+          fetch('/api/health?t=' + Date.now(), { cache: 'no-store' })
+            .then(function () {
+              if (!loaded) {
+                loaded = true;
+                clearTimeout(fallbackTimer);
+                injectPrebuiltScript();
+              }
+            })
+            .catch(function () {
+              if (!loaded) {
+                loaded = true;
+                clearTimeout(fallbackTimer);
+                injectPrebuiltScript();
+              }
+            });
         }
 
         if (document.readyState === 'loading') {

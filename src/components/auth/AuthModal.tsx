@@ -360,13 +360,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMessage('');
     setSuccessMessage('');
 
-    if (authMode === 'signup' && !acceptedTerms) {
-      setErrorMessage(
-        '❌ একাউন্ট তৈরি করার আগে অনুগ্রহ করে নিচে Terms & Conditions এবং Privacy Policy বক্সে টিক (✓) দিন।'
-      );
-      return;
-    }
-
     // Block new Agency Sign-Up immediately if 3 Gmail accounts are already registered
     if (portalType === 'agency' && authMode === 'signup' && isAgencyLimitReached) {
       setErrorMessage(
@@ -407,26 +400,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
       }
 
-      // Check if user already has a verified live bKash payment
       const localExisting = allUsers.find((u) => u.email?.toLowerCase() === cleanEmail);
-      if (!isAgencyPortal && localExisting?.paymentInfo?.status === 'pending') {
-        setIsGoogleLoading(false);
-        setErrorMessage(
-          `⏳ আপনার বিকাশ পেমেন্ট (TrxID: ${localExisting.paymentInfo.trxId}) বর্তমানে এডমিন ভেরিফিকেশনের অপেক্ষায় (Pending) আছে। এডমিন যাচাই করে অ্যাক্টিভ করলেই আপনি লগইন করতে পারবেন।`
-        );
-        return;
-      }
 
-      const hasVerifiedLocalPayment = Boolean(
-        localExisting?.paymentInfo?.trxId &&
-          localExisting?.paymentInfo?.trxId !== 'BKA9823KL12' &&
-          localExisting?.paymentInfo?.trxId !== 'BKEV6RCP8X' &&
-          localExisting?.paymentInfo?.status === 'verified'
-      );
-
-      // If in Client Workspace Sign-Up OR Client does not have a verified payment -> STOP & OPEN BKASH WINDOW!
-      if (!isAgencyPortal && (authMode === 'signup' || !hasVerifiedLocalPayment)) {
-        let serverHasVerifiedPayment = false;
+      // If user is in Sign-Up mode OR does not yet have an account -> pre-fill Name & Email and require Password + Confirm Password + Terms (✓) + 6-Digit Email OTP!
+      if (authMode === 'signup' || !localExisting) {
+        // Double-check on server if user already exists when in signin mode
+        let serverExists = false;
         if (authMode === 'signin') {
           try {
             const checkRes = await fetch('/api/auth/google', {
@@ -437,39 +416,41 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 email: cleanEmail,
                 name: cleanName,
                 avatar: googleUser.photoURL || undefined,
-                role: 'client',
-                checkOnly: true,
-                forceClientPayment: true
+                role: isAgencyPortal ? 'agency' : 'client',
+                checkOnly: true
               })
             });
             const checkParsed = await safeParseResponse(checkRes, 'Google check failed');
-            if (
-              checkParsed.ok &&
-              checkParsed.data?.exists &&
-              !checkParsed.data?.requiresPayment &&
-              checkParsed.data?.user?.paymentInfo?.trxId
-            ) {
-              serverHasVerifiedPayment = true;
+            if (checkParsed.ok && checkParsed.data?.exists) {
+              serverExists = true;
             }
           } catch {}
         }
 
-        if (!serverHasVerifiedPayment) {
+        if (authMode === 'signup' || !serverExists) {
           setIsGoogleLoading(false);
-          setPendingGoogleUser({
-            uid: googleUser.uid,
-            email: cleanEmail,
-            name: cleanName,
-            avatar: googleUser.photoURL || undefined
-          });
-          setIsBkashWindowOpen(true);
+          setFullName(cleanName);
+          setEmail(cleanEmail);
+          setAuthMode('signup');
+          setSignupStep('form');
+          setSuccessMessage(
+            `✅ Google থেকে আপনার নাম ও ইমেইল (${cleanEmail}) যুক্ত হয়েছে! এখন নিচে Password, Confirm Password এবং Terms & Conditions (✓) পূরণ করে ইমেইলে ৬-ডিজিট ভেরিফিকেশন কোড পাঠান।`
+          );
           return;
         }
       }
 
+      if (!isAgencyPortal && localExisting?.paymentInfo?.status === 'pending') {
+        setIsGoogleLoading(false);
+        setErrorMessage(
+          `⏳ আপনার বিকাশ পেমেন্ট (TrxID: ${localExisting.paymentInfo.trxId}) বর্তমানে এডমিন ভেরিফিকেশনের অপেক্ষায় (Pending) আছে। এডমিন যাচাই করে অ্যাক্টিভ করলেই আপনি লগইন করতে পারবেন।`
+        );
+        return;
+      }
+
       const isAgency = isAgencyPortal;
 
-      // Existing verified paid client or Agency Admin -> Sign in directly
+      // Existing verified paid client or existing Agency Admin -> Sign in directly
       const res = await fetch('/api/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -483,6 +464,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       });
 
       const parsed = await safeParseResponse(res, 'Google sign-in failed');
+      if (parsed.data?.requiresSignupVerification) {
+        setIsGoogleLoading(false);
+        setFullName(cleanName);
+        setEmail(cleanEmail);
+        setAuthMode('signup');
+        setSignupStep('form');
+        setSuccessMessage(
+          `✅ Google থেকে আপনার নাম ও ইমেইল (${cleanEmail}) যুক্ত হয়েছে! নতুন একাউন্ট তৈরি করতে নিচে Password, Confirm Password এবং Terms & Conditions (✓) দিয়ে ৬-ডিজিট ভেরিফিকেশন কোড পাঠান।`
+        );
+        return;
+      }
+
       if (parsed.data?.requiresPayment && !isAgency) {
         setIsGoogleLoading(false);
         setPendingGoogleUser({
@@ -648,6 +641,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       if (!authenticatedUser) {
         setIsLoading(false);
+        const existsInRegistry = allUsers.some((u) => u.email?.toLowerCase() === cleanEmail);
+        if (!existsInRegistry && !serverRejectedAgency) {
+          setErrorMessage(
+            `❌ "${cleanEmail}" দিয়ে এখনো কোনো একাউন্ট খোলা হয়নি! নতুন একাউন্ট তৈরি করতে উপরে "Create Account" ট্যাবে গিয়ে Password, Confirm Password, Terms & Conditions (✓) পূরণ করে ইমেইল ভেরিফিকেশন কোড (OTP) দিন।`
+          );
+          return;
+        }
         setErrorMessage(serverError || 'Invalid email or password.');
         return;
       }
@@ -1379,7 +1379,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setPortalType('agency')}
+                    onClick={() => {
+                      setPortalType('agency');
+                      if (agencyGmailCount === 0) {
+                        setAuthMode('signup');
+                      }
+                    }}
                     className={`px-3.5 py-1.5 rounded-lg font-bold transition cursor-pointer whitespace-nowrap ${
                       portalType === 'agency'
                         ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-xs'
@@ -2012,7 +2017,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   }`}
                 >
                   {isLoading ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>
+                        {authMode === 'signup'
+                          ? 'Sending 6-Digit Verification Code...'
+                          : 'Signing In...'}
+                      </span>
+                    </>
                   ) : authMode === 'signup' ? (
                     <>
                       <Mail className="w-4 h-4" />

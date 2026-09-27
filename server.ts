@@ -1638,7 +1638,7 @@ const dispatchVerificationEmail = async (params: {
   let sentViaRealSmtp = false;
   const cleanEmail = params.toEmail.trim().toLowerCase();
 
-  // 1. Primary: Verified System SMTP Relay (mail.visualsky.pro)
+  // 1. Primary: Verified System SMTP Relay (mail.visualsky.pro) with Port 465 + 587 fallback
   const sysHost = process.env.SMTP_HOST || 'mail.visualsky.pro';
   const sysPort = Number(process.env.SMTP_PORT) || 465;
   const sysUser = process.env.SMTP_USER || 'founder@visualsky.pro';
@@ -1653,9 +1653,9 @@ const dispatchVerificationEmail = async (params: {
       secure: sysSecure,
       auth: { user: sysUser, pass: sysPass },
       tls: { rejectUnauthorized: false },
-      connectionTimeout: 15000,
-      greetingTimeout: 10000,
-      socketTimeout: 20000
+      connectionTimeout: 8000,
+      greetingTimeout: 6000,
+      socketTimeout: 10000
     });
 
     await transporter.sendMail({
@@ -1668,7 +1668,30 @@ const dispatchVerificationEmail = async (params: {
     });
     sentViaRealSmtp = true;
   } catch (sysErr: any) {
-    console.error('[Verification Mailer] System SMTP warning:', sysErr?.message);
+    console.error('[Verification Mailer] Primary SMTP warning:', sysErr?.message);
+    if (sysPort === 465) {
+      try {
+        const fallback587 = nodemailer.createTransport({
+          host: sysHost,
+          port: 587,
+          secure: false,
+          auth: { user: sysUser, pass: sysPass },
+          tls: { rejectUnauthorized: false },
+          connectionTimeout: 6000,
+          greetingTimeout: 5000,
+          socketTimeout: 8000
+        });
+        await fallback587.sendMail({
+          from: `"VisualSky Security" <${fromAddr}>`,
+          replyTo: fromAddr,
+          to: cleanEmail,
+          subject: params.subject,
+          text: params.textBody,
+          html: params.htmlBody
+        });
+        sentViaRealSmtp = true;
+      } catch {}
+    }
   }
 
   // 2. Secondary: Resend API
@@ -2332,37 +2355,23 @@ app.post('/api/auth/google', (req, res) => {
       return res.json({
         success: true,
         exists: Boolean(user),
+        requiresSignupVerification: !user,
         requiresPayment: !isAgency && !hasValidPayment,
-        user: hasValidPayment || isAgency ? user : null
+        user: user && (hasValidPayment || isAgency) ? user : null
       });
     }
 
     if (!user) {
-      user = {
-        id: uid || (isAgency ? `usr-agency-${Date.now()}` : `usr-client-${Date.now()}`),
-        name: name?.trim() || cleanEmail.split('@')[0].replace(/[._-]/g, ' '),
+      // Never bypass Password, Confirm Password, Terms & Conditions, and 6-Digit Email OTP for new account creation!
+      return res.status(403).json({
+        success: false,
+        exists: false,
+        requiresSignupVerification: true,
         email: cleanEmail,
-        phone: phone || paymentInfo?.senderPhone || '+880 1700-000000',
-        authProvider: 'google' as const,
-        role: isAgency ? 'agency' : 'client',
-        isOwner: isAgency,
-        plan: isAgency ? 'Enterprise' : plan,
-        bdtPlanLabel: bdtPlanLabel || (isAgency ? 'Agency Master Admin (Free Unlimited)' : 'Scale Business (BDT 4,999/mo)'),
-        quotaUsed: 0,
-        quotaLimit: Number(quotaLimit) || (isAgency ? 50000 : 10000),
-        aiCredits: Number(aiCredits) || (isAgency ? 10000 : 2500),
-        company: isAgency ? 'VisualSky Agency Platform' : 'Growth Workspace',
-        title: isAgency ? 'Agency Principal & Master Admin' : 'Workspace Owner',
-        avatar:
-          avatar ||
-          (isAgency
-            ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
-            : 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80'),
-        paymentInfo: paymentInfo || undefined,
-        joinedAt: new Date().toISOString().split('T')[0],
-        lastLoginAt: new Date().toISOString()
-      };
-      existingUsers.unshift(user);
+        name: name?.trim() || cleanEmail.split('@')[0].replace(/[._-]/g, ' '),
+        error:
+          'এই ইমেইলে এখনো কোনো একাউন্ট খোলা হয়নি। নতুন একাউন্ট তৈরি করতে Password, Confirm Password, Terms & Conditions (✓) পূরণ করে ইমেইলে পাঠানো ৬-ডিজিট ভেরিফিকেশন কোড (OTP) দিন।'
+      });
     } else {
       if (name && (!user.name || user.name === cleanEmail.split('@')[0])) {
         user.name = name.trim();
@@ -3339,9 +3348,86 @@ app.post('/api/user-data/:email/smtp', (req, res) => {
   return res.json({ success: true, count: smtpAccounts.length, savedAt: workspace.updatedAt });
 });
 
-// Health check endpoint
+// Auto-sync prebuilt client bundle if source files were updated via Git pull on cPanel
+let lastBundleSyncCheck = 0;
+function ensureFreshPrebuiltBundle() {
+  const now = Date.now();
+  if (now - lastBundleSyncCheck < 3000) return;
+  lastBundleSyncCheck = now;
+  try {
+    const prebuiltAppJs = path.join(process.cwd(), 'prebuilt', 'app.js');
+    const prebuiltAppCss = path.join(process.cwd(), 'prebuilt', 'app.css');
+    const authModalSrc = path.join(process.cwd(), 'src', 'components', 'auth', 'AuthModal.tsx');
+    const mainSrc = path.join(process.cwd(), 'src', 'main.tsx');
+
+    if (!fs.existsSync(mainSrc)) return;
+    const bundleMtime = fs.existsSync(prebuiltAppJs) ? fs.statSync(prebuiltAppJs).mtimeMs : 0;
+    const srcMtime = Math.max(
+      fs.existsSync(authModalSrc) ? fs.statSync(authModalSrc).mtimeMs : 0,
+      fs.statSync(mainSrc).mtimeMs
+    );
+
+    if (srcMtime > bundleMtime + 1000) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const esbuild = require('esbuild');
+      esbuild.buildSync({
+        entryPoints: [mainSrc],
+        bundle: true,
+        minify: true,
+        format: 'esm',
+        platform: 'browser',
+        target: ['es2020'],
+        outfile: prebuiltAppJs,
+        loader: {
+          '.css': 'empty',
+          '.svg': 'dataurl',
+          '.png': 'dataurl',
+          '.jpg': 'dataurl',
+          '.jpeg': 'dataurl',
+          '.gif': 'dataurl',
+          '.woff': 'dataurl',
+          '.woff2': 'dataurl'
+        },
+        define: {
+          'process.env.NODE_ENV': '"production"',
+          'import.meta.env': JSON.stringify({
+            MODE: 'production',
+            PROD: true,
+            DEV: false,
+            SSR: false,
+            VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || '',
+            VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY || ''
+          })
+        }
+      });
+
+      if (fs.existsSync(prebuiltAppCss) && fs.existsSync(prebuiltAppJs)) {
+        const cssContent = fs.readFileSync(prebuiltAppCss, 'utf8');
+        const jsContent = fs.readFileSync(prebuiltAppJs, 'utf8');
+        if (!jsContent.includes('vs-tailwind-inline')) {
+          const styleInjector = `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-tailwind-inline')){var s=document.createElement('style');s.id='vs-tailwind-inline';s.textContent=${JSON.stringify(
+            cssContent
+          )};document.head.appendChild(s);}})();\n`;
+          fs.writeFileSync(prebuiltAppJs, styleInjector + jsContent, 'utf8');
+        }
+      }
+    }
+  } catch {}
+}
+
+// Health check endpoint (also ensures prebuilt bundle is synced on cPanel wakeup)
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  ensureFreshPrebuiltBundle();
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.json({ status: 'ok', version: '20260928-v5', timestamp: new Date().toISOString() });
+});
+
+// Serve guaranteed-fresh client bundle through Passenger API route
+app.get('/api/client-app.js', (_req, res) => {
+  ensureFreshPrebuiltBundle();
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.sendFile(path.join(process.cwd(), 'prebuilt', 'app.js'));
 });
 
 // Initialize Google Gemini SDK
@@ -4595,13 +4681,22 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distCandidate = path.join(process.cwd(), 'dist');
-    const distPath = fs.existsSync(path.join(distCandidate, 'index.html'))
-      ? distCandidate
-      : fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
+    const distPath = fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
       ? prebuiltCandidate
-      : distCandidate;
-    app.use(express.static(distPath));
+      : fs.existsSync(path.join(distCandidate, 'index.html'))
+      ? distCandidate
+      : prebuiltCandidate;
+    app.use(
+      express.static(distPath, {
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('.html') || filePath.endsWith('.js') || filePath.endsWith('.css')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          }
+        }
+      })
+    );
     app.get('*', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
