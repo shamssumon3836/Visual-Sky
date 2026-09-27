@@ -63,6 +63,7 @@ export interface EmailMessage {
   senderEmail: string;
   recipientName: string;
   recipientEmail: string;
+  smtpAccountId?: string;
   timestamp: string;
   subject: string;
   body: string; // Clean body without '>' prefixes
@@ -78,9 +79,12 @@ export interface EmailThread {
   leadCompany: string;
   leadEmail: string;
   leadAvatar?: string;
+  smtpAccountId?: string;
+  smtpEmail?: string;
   subject: string;
   lastMessage: string;
   lastMessageDate: string;
+  updatedAt?: string;
   unreadCount: number;
   labels: string[]; // e.g. "Hot Lead", "Follow Up Needed", "Negotiation", "VIP"
   isStarred: boolean;
@@ -290,6 +294,8 @@ export interface SentEmailLog {
   recipientCompany: string;
   subject: string;
   body: string;
+  smtpAccountId?: string;
+  senderEmail?: string;
   smtpAccountName: string;
   smtpHost: string;
   sentAt: string;

@@ -4792,36 +4792,66 @@ app.post('/api/smtp/send', async (req, res) => {
   }
 });
 
-// Helper: Extract clean latest reply body from raw email text (strips quoted history lines while keeping the message readable)
+// Helper: Extract clean latest reply body from raw email text (completely strips '>' quote signs, multi-line "On ... wrote:" blocks, and raw {{...}} tokens)
 function extractCleanReplyBody(rawText: string): string {
   if (!rawText) return '';
-  const lines = rawText.replace(/\r\n/g, '\n').split('\n');
-  const cleanedLines: string[] = [];
+
+  // 1. Normalize line endings and strip multi-line Gmail/Outlook/Apple Mail quote headers and everything below them
+  let text = String(rawText).replace(/\r\n/g, '\n');
+
+  // Strip "On <date/time>, <name/email> wrote:" even when wrapped across 1-4 lines
+  text = text.replace(/(\n|^)\s*On\s+[\s\S]{1,320}?wrote:\s*(\n|$)[\s\S]*$/i, '');
+  // Strip Outlook / Webmail separator blocks
+  text = text.replace(/(\n|^)\s*-{2,}\s*Original Message\s*-{2,}[\s\S]*$/i, '');
+  text = text.replace(/(\n|^)\s*_{5,}[\s\S]*$/i, '');
+  text = text.replace(/(\n|^)\s*From:\s+[^\n]+\n\s*Sent:\s+[^\n]+[\s\S]*$/i, '');
+
+  const lines = text.split('\n');
+  const nonQuotedLines: string[] = [];
+  const strippedQuoteLines: string[] = [];
 
   for (const line of lines) {
     const trimmed = line.trim();
-    // Stop at standard email client quote headers ("On Tue, Sep 27, ... wrote:", "-----Original Message-----", "From: ...")
     if (
       /^On\s+.+wrote:$/i.test(trimmed) ||
-      /^-{3,}\s*Original Message\s*-{3,}/i.test(trimmed) ||
-      /^_{5,}/.test(trimmed) ||
-      (/^From:\s+/i.test(trimmed) && cleanedLines.length > 0)
+      /^-{2,}\s*Original Message\s*-{2,}/i.test(trimmed) ||
+      (/^From:\s+/i.test(trimmed) && nonQuotedLines.length > 0)
     ) {
       break;
     }
-    if (trimmed.startsWith('>')) continue;
-    cleanedLines.push(line);
+    if (trimmed.startsWith('>')) {
+      const withoutBracket = line.replace(/^\s*>+\s?/g, '');
+      strippedQuoteLines.push(withoutBracket);
+    } else {
+      nonQuotedLines.push(line);
+    }
   }
 
-  const result = cleanedLines.join('\n').trim();
-  return result || rawText.trim();
+  // Prefer actual non-quoted reply lines; if the entire message was prefixed with '>', use the '>'-stripped lines
+  const chosenLines = nonQuotedLines.join('\n').trim()
+    ? nonQuotedLines
+    : strippedQuoteLines;
+
+  const cleaned = chosenLines
+    .map(l => l.replace(/^\s*>+\s?/g, ''))
+    .join('\n')
+    .replace(/\{\{\s*website\s*\}\}/gi, 'your website')
+    .replace(/\{\{\s*company\s*\}\}/gi, 'your company')
+    .replace(/\{\{\s*first_name\s*\}\}/gi, 'there')
+    .replace(/\{\{\s*name\s*\}\}/gi, 'there')
+    .replace(/\{\{\s*niche\s*\}\}/gi, 'your industry')
+    .trim();
+
+  return cleaned;
 }
 
-// In-memory caches for ultra-fast (<300ms) real-time incremental IMAP polling
+// In-memory caches & warm connection pool for ultra-fast (<100ms) real-time IMAP auto-sync
 const verifiedImapHostCache = new Map<string, string>();
 const imapUidMessageCache = new Map<string, any>();
+const imapClientPool = new Map<string, ImapFlow>();
+const imapPoolBusy = new Set<string>();
 
-// Endpoint: Live IMAP Reply Synchronization from Mailbox (Multi-Host Auto-Discovery & Instant Incremental UID Sync)
+// Endpoint: Live IMAP Reply Synchronization from Mailbox (Warm Persistent Pool + Instant Incremental UID Sync)
 app.post('/api/smtp/imap-sync', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
 
@@ -4840,6 +4870,7 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
     const cleanUser = String(rawUsername).trim();
     const userLower = cleanUser.toLowerCase();
     const userDomain = userLower.includes('@') ? userLower.split('@')[1] : '';
+    const poolKey = `${cleanHost}::${userLower}`;
 
     // Build prioritized list of candidate IMAP hosts (putting previously verified working host first!)
     const candidateHosts: string[] = [];
@@ -4847,7 +4878,7 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
       if (h && !candidateHosts.includes(h)) candidateHosts.push(h);
     };
 
-    const cachedWorkingHost = verifiedImapHostCache.get(`${cleanHost}::${userLower}`);
+    const cachedWorkingHost = verifiedImapHostCache.get(poolKey);
     if (cachedWorkingHost) {
       addCandidate(cachedWorkingHost);
     }
@@ -4887,64 +4918,107 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
     const imapPort = Number(rawPort) === 143 ? 143 : 993;
     const isSecure = imapPort === 993;
 
-    let connectedClient: ImapFlow | null = null;
-    let lastConnectErr: any = null;
-
-    for (const candidateHost of candidateHosts) {
-      const testClient = new ImapFlow({
-        host: candidateHost,
-        port: imapPort,
-        secure: isSecure,
-        auth: {
-          user: cleanUser,
-          pass: rawPassword
-        },
-        logger: false,
-        tls: {
-          rejectUnauthorized: false
-        }
-      });
-
-      try {
-        const connectPromise = testClient.connect();
-        const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => {
-            const tErr: any = new Error(`IMAP connection to ${candidateHost}:${imapPort} timed out.`);
-            tErr.code = 'ETIMEDOUT';
-            reject(tErr);
-          }, 8000);
+    // Helper to connect a fresh ImapFlow client and register it in the warm pool
+    const createAndConnectClient = async (): Promise<ImapFlow> => {
+      let lastConnectErr: any = null;
+      for (const candidateHost of candidateHosts) {
+        const testClient = new ImapFlow({
+          host: candidateHost,
+          port: imapPort,
+          secure: isSecure,
+          auth: {
+            user: cleanUser,
+            pass: rawPassword
+          },
+          logger: false,
+          tls: {
+            rejectUnauthorized: false
+          }
         });
 
-        await Promise.race([connectPromise, timeoutPromise]);
-        connectedClient = testClient;
-        verifiedImapHostCache.set(`${cleanHost}::${userLower}`, candidateHost);
-        break;
-      } catch (connErr: any) {
-        lastConnectErr = connErr;
+        testClient.on('error', () => {
+          if (imapClientPool.get(poolKey) === testClient) {
+            imapClientPool.delete(poolKey);
+          }
+        });
+        testClient.on('close', () => {
+          if (imapClientPool.get(poolKey) === testClient) {
+            imapClientPool.delete(poolKey);
+          }
+        });
+
         try {
-          testClient.close();
-        } catch {}
-        if (connErr?.authenticationFailed || String(connErr?.message || '').toLowerCase().includes('authentication')) {
-          break;
+          const connectPromise = testClient.connect();
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => {
+              const tErr: any = new Error(`IMAP connection to ${candidateHost}:${imapPort} timed out.`);
+              tErr.code = 'ETIMEDOUT';
+              reject(tErr);
+            }, 7500);
+          });
+
+          await Promise.race([connectPromise, timeoutPromise]);
+          verifiedImapHostCache.set(poolKey, candidateHost);
+          return testClient;
+        } catch (connErr: any) {
+          lastConnectErr = connErr;
+          try {
+            testClient.close();
+          } catch {}
+          if (connErr?.authenticationFailed || String(connErr?.message || '').toLowerCase().includes('authentication')) {
+            break;
+          }
         }
       }
-    }
-
-    if (!connectedClient) {
       throw lastConnectErr || new Error(`Could not connect to IMAP server (${candidateHosts[0]}:${imapPort})`);
+    };
+
+    // Reuse warm pooled client if available and not currently busy; otherwise open a fresh client
+    let connectedClient: ImapFlow | null = null;
+    let usingPooledClient = false;
+
+    const existingPooled = imapClientPool.get(poolKey);
+    if (existingPooled && (existingPooled as any).usable && !imapPoolBusy.has(poolKey)) {
+      connectedClient = existingPooled;
+      usingPooledClient = true;
+      imapPoolBusy.add(poolKey);
+    } else {
+      connectedClient = await createAndConnectClient();
+      if (!imapPoolBusy.has(poolKey)) {
+        imapClientPool.set(poolKey, connectedClient);
+        usingPooledClient = true;
+        imapPoolBusy.add(poolKey);
+      }
     }
 
     const incomingMessages: any[] = [];
 
     try {
-      const lock = await connectedClient.getMailboxLock('INBOX');
+      let lock: any;
       try {
+        lock = await connectedClient.getMailboxLock('INBOX');
+      } catch {
+        // Warm connection went stale; reconnect transparently right now
+        try {
+          connectedClient.close();
+        } catch {}
+        imapClientPool.delete(poolKey);
+        connectedClient = await createAndConnectClient();
+        imapClientPool.set(poolKey, connectedClient);
+        lock = await connectedClient.getMailboxLock('INBOX');
+      }
+
+      try {
+        // Issue fast NOOP so the server flushes any newly arrived messages in INBOX immediately
+        try {
+          await connectedClient.noop();
+        } catch {}
+
         const mailboxInfo: any = connectedClient.mailbox || {};
         const totalExists = Number(mailboxInfo.exists) || 0;
         let recentUids: number[] = [];
 
         if (totalExists > 0) {
-          // Fast path: directly grab UIDs of the latest 30 messages in INBOX by sequence number (no slow full-mailbox SEARCH needed)
           try {
             const startSeq = Math.max(1, totalExists - 29);
             const seqRange = `${startSeq}:*`;
@@ -4954,7 +5028,6 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
               }
             }
           } catch {
-            // Fallback to date search if sequence fetch fails
             const searchDate = new Date();
             const lookbackDays = Number(sinceHours) ? Math.max(3, Math.ceil(Number(sinceHours) / 24)) : 14;
             searchDate.setDate(searchDate.getDate() - lookbackDays);
@@ -4965,7 +5038,6 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
         }
 
         if (recentUids.length > 0) {
-          // Check which UIDs are NOT yet cached in memory so we only download raw source for brand-new emails!
           const uncachedUids = recentUids.filter(uid => !imapUidMessageCache.has(`${userLower}::${uid}`));
 
           if (uncachedUids.length > 0) {
@@ -5012,8 +5084,8 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
                     subject: parsed.subject || message.envelope?.subject || 'No Subject',
                     date:
                       parsed.date || message.envelope?.date || new Date().toISOString(),
-                    text: cleanReplyText || rawText,
-                    fullText: rawText,
+                    text: cleanReplyText,
+                    fullText: cleanReplyText,
                     html: parsed.html || parsed.textAsHtml || '',
                     inReplyTo: parsed.inReplyTo || message.envelope?.inReplyTo || '',
                     references: refs
@@ -5027,17 +5099,23 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
             }
           }
 
-          // Assemble messages in ascending UID order so the newest message is processed last (landing at the very top of Smart Inbox)
+          // Assemble messages in ascending UID order (always passing text through extractCleanReplyBody)
           const sortedUids = [...recentUids].sort((a, b) => a - b);
           for (const uid of sortedUids) {
             const cached = imapUidMessageCache.get(`${userLower}::${uid}`);
             if (cached) {
-              incomingMessages.push(cached);
+              incomingMessages.push({
+                ...cached,
+                text: extractCleanReplyBody(cached.text || cached.fullText || ''),
+                fullText: extractCleanReplyBody(cached.text || cached.fullText || '')
+              });
             }
           }
         }
       } finally {
-        lock.release();
+        try {
+          lock.release();
+        } catch {}
       }
 
       return res.json({
@@ -5046,9 +5124,13 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
         messages: incomingMessages
       });
     } finally {
-      try {
-        await connectedClient.logout();
-      } catch {}
+      if (usingPooledClient) {
+        imapPoolBusy.delete(poolKey);
+      } else {
+        try {
+          await connectedClient.logout();
+        } catch {}
+      }
     }
   } catch (err: any) {
     console.error('IMAP sync failed:', err?.message);

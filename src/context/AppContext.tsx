@@ -112,7 +112,7 @@ interface AppContextType {
   setThreads: React.Dispatch<React.SetStateAction<EmailThread[]>>;
   activeThreadId: string | null;
   setActiveThreadId: (id: string | null) => void;
-  sendReply: (threadId: string, replyBody: string) => void;
+  sendReply: (threadId: string, replyBody: string, smtpAccountId?: string) => void;
   markThreadRead: (threadId: string) => void;
   toggleThreadStar: (threadId: string) => void;
   addThreadLabel: (threadId: string, label: string) => void;
@@ -282,6 +282,73 @@ const DEMO_SMTP_IDS = new Set([
 ]);
 
 const DEMO_SENT_IDS = new Set(['sent-init-1', 'sent-init-2']);
+
+// Helper: Strip '>' quote signs, multi-line "On ... wrote:" blocks, and raw {{...}} tokens from any email text
+export const cleanEmailBodyText = (rawText: string, fallbackWebsite?: string, fallbackCompany?: string, fallbackName?: string): string => {
+  if (!rawText) return '';
+  let text = String(rawText).replace(/\r\n/g, '\n');
+
+  // Strip multi-line "On <date>, <name> wrote:" quote headers and everything below them
+  text = text.replace(/(\n|^)\s*On\s+[\s\S]{1,320}?wrote:\s*(\n|$)[\s\S]*$/i, '');
+  text = text.replace(/(\n|^)\s*-{2,}\s*Original Message\s*-{2,}[\s\S]*$/i, '');
+  text = text.replace(/(\n|^)\s*_{5,}[\s\S]*$/i, '');
+  text = text.replace(/(\n|^)\s*From:\s+[^\n]+\n\s*Sent:\s+[^\n]+[\s\S]*$/i, '');
+
+  const lines = text.split('\n');
+  const nonQuotedLines: string[] = [];
+  const strippedQuoteLines: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (
+      /^On\s+.+wrote:$/i.test(trimmed) ||
+      /^-{2,}\s*Original Message\s*-{2,}/i.test(trimmed) ||
+      (/^From:\s+/i.test(trimmed) && nonQuotedLines.length > 0)
+    ) {
+      break;
+    }
+    if (trimmed.startsWith('>')) {
+      strippedQuoteLines.push(line.replace(/^\s*>+\s?/g, ''));
+    } else {
+      nonQuotedLines.push(line);
+    }
+  }
+
+  const chosenLines = nonQuotedLines.join('\n').trim() ? nonQuotedLines : strippedQuoteLines;
+
+  return chosenLines
+    .map(l => l.replace(/^\s*>+\s?/g, ''))
+    .join('\n')
+    .replace(/\{\{\s*website\s*\}\}/gi, fallbackWebsite || fallbackCompany || 'your website')
+    .replace(/\{\{\s*company\s*\}\}/gi, fallbackCompany || 'your company')
+    .replace(/\{\{\s*first_name\s*\}\}/gi, (fallbackName || 'there').split(' ')[0] || 'there')
+    .replace(/\{\{\s*name\s*\}\}/gi, fallbackName || 'there')
+    .replace(/\{\{\s*niche\s*\}\}/gi, 'your industry')
+    .trim();
+};
+
+const sanitizeThreadsArray = (list: EmailThread[]): EmailThread[] => {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter(t => t && !DEMO_THREAD_IDS.has(t.id))
+    .map(t => {
+      const cleanedMessages = Array.isArray(t.messages)
+        ? t.messages.map(m => ({
+            ...m,
+            body: cleanEmailBodyText(m.body, t.leadCompany, t.leadCompany, t.leadName)
+          }))
+        : [];
+      const latestMsgBody =
+        cleanedMessages.length > 0
+          ? cleanedMessages[cleanedMessages.length - 1].body
+          : cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName);
+      return {
+        ...t,
+        lastMessage: (latestMsgBody || cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName)).slice(0, 100),
+        messages: cleanedMessages
+      };
+    });
+};
 
 export const MAX_AGENCY_GMAIL_ACCOUNTS = 3;
 
@@ -622,12 +689,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  // Threads (Filter out legacy demo IDs)
+  // Threads (Filter out legacy demo IDs and strip any '>' quote prefixes or raw tokens)
   const [threads, setThreads] = useState<EmailThread[]>(() => {
     try {
       const saved = localStorage.getItem('visualsky_threads');
       const parsed: EmailThread[] = saved ? JSON.parse(saved) : INITIAL_THREADS;
-      return Array.isArray(parsed) ? parsed.filter((t) => t && !DEMO_THREAD_IDS.has(t.id)) : [];
+      return sanitizeThreadsArray(parsed);
     } catch {
       return INITIAL_THREADS;
     }
@@ -979,9 +1046,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (latestWorkspaceRef.current as any).templateCategories = data.templateCategories;
         }
         
-        // 7. Threads Hydration (strip legacy demo IDs)
+        // 7. Threads Hydration (strip legacy demo IDs and clean '>' quotes / tokens)
         if (Array.isArray(data.threads)) {
-          const liveThreads = data.threads.filter((t: any) => t && !DEMO_THREAD_IDS.has(t.id));
+          const liveThreads = sanitizeThreadsArray(data.threads);
           setThreads(liveThreads);
           try { localStorage.setItem('visualsky_threads', JSON.stringify(liveThreads)); } catch {}
           (latestWorkspaceRef.current as any).threads = liveThreads;
@@ -1440,28 +1507,99 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Inbox Actions - Live SMTP reply dispatch + thread persistence
-  const sendReply = (threadId: string, replyBody: string) => {
+  // Inbox Actions - Live SMTP reply dispatch + exact multi-SMTP auto-detection + thread persistence
+  const sendReply = (threadId: string, replyBody: string, explicitSmtpId?: string) => {
     const thread = threads.find(t => t.id === threadId);
     if (!thread || !replyBody.trim()) return;
 
-    const activeSmtp =
-      smtpAccounts.find(s => !s.isTrash && s.isConnected && (s.password || s.apiKey)) ||
-      smtpAccounts.find(s => !s.isTrash && (s.password || s.apiKey)) ||
-      smtpAccounts[0];
+    const validSmtpPool = smtpAccounts.filter(s => !s.isTrash);
+    const matchSmtpByEmailOrId = (idOrNull?: string, emailOrNull?: string, nameOrNull?: string) => {
+      if (idOrNull) {
+        const byId = validSmtpPool.find(s => s.id === idOrNull);
+        if (byId) return byId;
+      }
+      if (emailOrNull) {
+        const normEmail = emailOrNull.trim().toLowerCase();
+        const byEmail = validSmtpPool.find(
+          s =>
+            s.fromEmail?.trim().toLowerCase() === normEmail ||
+            s.username?.trim().toLowerCase() === normEmail
+        );
+        if (byEmail) return byEmail;
+      }
+      if (nameOrNull) {
+        const byName = validSmtpPool.find(s => s.name === nameOrNull);
+        if (byName) return byName;
+      }
+      return undefined;
+    };
 
+    // 1. Explicit selection from SmartInbox
+    let activeSmtp = explicitSmtpId ? matchSmtpByEmailOrId(explicitSmtpId) : undefined;
+
+    // 2. Thread's stored smtpAccountId or smtpEmail
+    if (!activeSmtp) {
+      activeSmtp = matchSmtpByEmailOrId(thread.smtpAccountId, thread.smtpEmail);
+    }
+
+    // 3. Inspect thread messages in reverse chronological order to find which SMTP sent or received mail in this thread
+    if (!activeSmtp && Array.isArray(thread.messages)) {
+      for (let i = thread.messages.length - 1; i >= 0; i--) {
+        const m = thread.messages[i];
+        const candidateEmail = m.sender === 'user' ? m.senderEmail : m.recipientEmail;
+        const matched = matchSmtpByEmailOrId(m.smtpAccountId, candidateEmail);
+        if (matched) {
+          activeSmtp = matched;
+          break;
+        }
+      }
+    }
+
+    // 4. Inspect SentEmails log for this lead's email address
+    if (!activeSmtp && thread.leadEmail) {
+      const normLeadEmail = thread.leadEmail.trim().toLowerCase();
+      const matchingSent = sentEmails.find(
+        s => !s.isTrash && s.recipientEmail?.trim().toLowerCase() === normLeadEmail
+      );
+      if (matchingSent) {
+        activeSmtp = matchSmtpByEmailOrId(
+          matchingSent.smtpAccountId,
+          matchingSent.senderEmail,
+          matchingSent.smtpAccountName
+        );
+      }
+    }
+
+    // 5. Fallback to connected SMTP account
+    if (!activeSmtp) {
+      activeSmtp =
+        validSmtpPool.find(s => s.isConnected && (s.password || s.apiKey)) ||
+        validSmtpPool.find(s => s.password || s.apiKey) ||
+        validSmtpPool[0] ||
+        smtpAccounts[0];
+    }
+
+    const matchedLead = leads.find(l => l.email?.toLowerCase() === thread.leadEmail?.toLowerCase());
     const cleanRecipientName = thread.leadName || thread.leadEmail.split('@')[0];
     const cleanFirstName = cleanRecipientName.split(' ')[0] || 'there';
-    const cleanCompany = thread.leadCompany || thread.leadEmail.split('@')[1]?.split('.')[0] || 'your company';
+    const cleanCompany = thread.leadCompany || matchedLead?.company || thread.leadEmail.split('@')[1]?.split('.')[0] || 'your company';
+    const cleanWebsite = matchedLead?.website || cleanCompany;
     const senderName = activeSmtp?.fromName || currentUser.name || 'Outreach Specialist';
+    const senderFromEmail = activeSmtp?.fromEmail || activeSmtp?.username || currentUser.email || 'outreach@visualsky.pro';
 
-    const resolvedBody = replyBody
-      .trim()
-      .replace(/\{\{\s*first_name\s*\}\}/gi, cleanFirstName)
-      .replace(/\{\{\s*name\s*\}\}/gi, cleanRecipientName)
-      .replace(/\{\{\s*company\s*\}\}/gi, cleanCompany)
-      .replace(/\{\{\s*email\s*\}\}/gi, thread.leadEmail)
-      .replace(/\{\{\s*sender_name\s*\}\}/gi, senderName);
+    const resolvedBody = cleanEmailBodyText(
+      replyBody
+        .trim()
+        .replace(/\{\{\s*first_name\s*\}\}/gi, cleanFirstName)
+        .replace(/\{\{\s*name\s*\}\}/gi, cleanRecipientName)
+        .replace(/\{\{\s*company\s*\}\}/gi, cleanCompany)
+        .replace(/\{\{\s*website\s*\}\}/gi, cleanWebsite)
+        .replace(/\{\{\s*email\s*\}\}/gi, thread.leadEmail)
+        .replace(/\{\{\s*sender_name\s*\}\}/gi, senderName),
+      cleanWebsite,
+      cleanCompany,
+      cleanRecipientName
+    );
 
     const replySubject = (thread.subject || '').toLowerCase().startsWith('re:')
       ? thread.subject
@@ -1474,9 +1612,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       threadId,
       sender: 'user',
       senderName,
-      senderEmail: activeSmtp?.fromEmail || activeSmtp?.username || currentUser.email || 'outreach@visualsky.pro',
+      senderEmail: senderFromEmail,
       recipientName: thread.leadName,
       recipientEmail: thread.leadEmail,
+      smtpAccountId: activeSmtp?.id,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       subject: replySubject,
       body: resolvedBody,
@@ -1488,8 +1627,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setThreads(prev => {
       const target = prev.find(t => t.id === threadId);
       if (!target) return prev;
-      const updatedThread = {
+      const updatedThread: EmailThread = {
         ...target,
+        smtpAccountId: activeSmtp?.id || target.smtpAccountId,
+        smtpEmail: senderFromEmail || target.smtpEmail,
         lastMessage: resolvedBody.slice(0, 100),
         lastMessageDate: 'Just now',
         messages: [...target.messages, newMsg]
@@ -1499,7 +1640,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return nextThreads;
     });
 
-    // Dispatch live reply email over SMTP in background if SMTP account is configured
+    // Dispatch live reply email over the exact matched SMTP account in background
     if (activeSmtp && (activeSmtp.host || activeSmtp.apiKey)) {
       fetch('/api/smtp/send', {
         method: 'POST',
@@ -1508,7 +1649,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           to: thread.leadEmail,
           toName: thread.leadName,
           toCompany: thread.leadCompany,
-          from: activeSmtp.fromEmail || activeSmtp.username,
+          from: senderFromEmail,
           fromName: senderName,
           subject: replySubject,
           text: resolvedBody,
@@ -1526,6 +1667,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             recipientCompany: thread.leadCompany,
             subject: replySubject,
             body: resolvedBody,
+            smtpAccountId: activeSmtp?.id,
+            senderEmail: senderFromEmail,
             smtpAccountName: activeSmtp.name || 'Primary SMTP Relay',
             smtpHost: `${activeSmtp.host || 'smtp.relay'}:${activeSmtp.port || 465}`,
             status: ok ? 'sent' : 'failed',
@@ -1542,6 +1685,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             recipientCompany: thread.leadCompany,
             subject: replySubject,
             body: resolvedBody,
+            smtpAccountId: activeSmtp?.id,
+            senderEmail: senderFromEmail,
             smtpAccountName: activeSmtp.name || 'Primary SMTP Relay',
             smtpHost: `${activeSmtp.host || 'smtp.relay'}:${activeSmtp.port || 465}`,
             status: 'failed',
@@ -1558,7 +1703,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recipientCompany: thread.leadCompany,
         subject: replySubject,
         body: resolvedBody,
-        smtpAccountName: 'VisualSky Outbound Relay',
+        smtpAccountId: activeSmtp?.id,
+        senderEmail: senderFromEmail,
+        smtpAccountName: activeSmtp?.name || 'VisualSky Outbound Relay',
         smtpHost: 'smtp.relay.visualsky.pro',
         status: 'sent',
         openCount: 0,
@@ -1568,7 +1715,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     addNotification({
       title: 'Reply Dispatched 🚀',
-      message: `Sent reply to ${thread.leadName} (${thread.leadEmail})`,
+      message: `Sent reply to ${thread.leadName} (${thread.leadEmail}) via ${senderFromEmail}`,
       type: 'system',
       linkTab: 'inbox',
       threadId
@@ -2246,10 +2393,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [isAuthenticated]);
 
-  // Concurrency lock & seen UIDs cache for fast, conflict-free 5-second background IMAP auto-sync
+  // Concurrency lock for fast, conflict-free 2.5-second background IMAP auto-sync
   const isImapSyncInFlightRef = useRef<boolean>(false);
 
-  // Live IMAP Inbox Synchronization (Automatically syncs ALL incoming emails & replies into Smart Inbox without clicking Sync Mailbox)
+  // Live IMAP Inbox Synchronization (Automatically syncs ALL incoming emails & replies into Smart Inbox & links exact SMTP account)
   const syncInboxReplies = async (
     smtpAccountId?: string,
     silent: boolean = false
@@ -2268,7 +2415,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ? currentSmtpList.filter(s => s.id === smtpAccountId && s.host && s.username && s.password)
         : currentSmtpList.filter(s => !s.isTrash && s.host && s.username && s.password);
 
-      // If user has connected SMTP/IMAP accounts, sync all of them; also fallback to system default if none configured
+      if (configuredAccounts.length === 0 && isHydratingRef.current) {
+        return { success: true, count: 0, totalChecked: 0 };
+      }
+
       const accountsToSync: Array<any> =
         configuredAccounts.length > 0
           ? configuredAccounts
@@ -2279,14 +2429,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let lastError = '';
       let anyAccountSucceeded = false;
 
+      // 1. Fetch incoming IMAP messages from all mailboxes in parallel for maximum speed
+      const fetchedBatches = await Promise.all(
+        accountsToSync.map(async targetSmtp => {
+          try {
+            const res = await fetch('/api/smtp/imap-sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                host: targetSmtp.host,
+                port: 993,
+                username: targetSmtp.username,
+                password: targetSmtp.password,
+                useSystemDefault: Boolean(targetSmtp.useSystemDefault),
+                encryption: 'SSL',
+                sinceHours: 168
+              })
+            });
+            const parsed = await safeParseResponse(res, 'Failed to sync with IMAP server');
+            const data = parsed.data || {};
+            if (!parsed.ok || !data.success) {
+              return { targetSmtp, ok: false, error: data.error || 'Failed to sync with IMAP server', messages: [] };
+            }
+            return {
+              targetSmtp,
+              ok: true,
+              error: '',
+              messages: Array.isArray(data.messages) ? data.messages : []
+            };
+          } catch (err: any) {
+            return {
+              targetSmtp,
+              ok: false,
+              error: err?.message || 'Could not connect to incoming mail server.',
+              messages: []
+            };
+          }
+        })
+      );
+
       const normalizeSubject = (sub: string) =>
         String(sub || '')
           .replace(/^(re|fwd|fw)\s*:\s*/gi, '')
           .trim()
           .toLowerCase();
 
-      // Work with mutable copies across the poll cycle so multiple incoming emails never overwrite each other
-      let workingThreads = [...(latestWorkspaceRef.current.threads || threads)];
+      // 2. Read fresh workspace state AFTER network fetch completes so we never overwrite threads created during the fetch!
+      let workingThreads = sanitizeThreadsArray([...(latestWorkspaceRef.current.threads || threads)]);
       let workingSent = [...(latestWorkspaceRef.current.sentEmails || sentEmails)];
       let workingLeads = [...(latestWorkspaceRef.current.leads || leads)];
       let workingCampaigns = [...(latestWorkspaceRef.current.campaigns || campaigns)];
@@ -2304,289 +2493,303 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         leadEmail: string;
       }> = [];
 
-      for (const targetSmtp of accountsToSync) {
-        try {
-          const res = await fetch('/api/smtp/imap-sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              host: targetSmtp.host,
-              port: 993,
-              username: targetSmtp.username,
-              password: targetSmtp.password,
-              useSystemDefault: Boolean(targetSmtp.useSystemDefault),
-              encryption: 'SSL',
-              sinceHours: 168
-            })
-          });
+      for (const batch of fetchedBatches) {
+        if (!batch.ok) {
+          lastError = batch.error;
+          continue;
+        }
+        anyAccountSucceeded = true;
+        const targetSmtp = batch.targetSmtp;
+        const incomingMsgs: any[] = batch.messages;
+        totalMessagesChecked += incomingMsgs.length;
 
-          const parsed = await safeParseResponse(res, 'Failed to sync with IMAP server');
-          const data = parsed.data || {};
-          if (!parsed.ok || !data.success) {
-            lastError = data.error || 'Failed to sync with IMAP server';
+        const mailboxUsername = String(targetSmtp.username || '').trim().toLowerCase();
+        const mailboxFromEmail = String(targetSmtp.fromEmail || '').trim().toLowerCase();
+        const mailboxKey = mailboxUsername || targetSmtp.id || 'default';
+
+        for (const msg of incomingMsgs) {
+          const senderEmail = String(msg.from || '').trim().toLowerCase();
+          if (!senderEmail || !senderEmail.includes('@')) continue;
+
+          // Skip automated mail server bounces and noreply daemons
+          if (
+            senderEmail.startsWith('mailer-daemon@') ||
+            senderEmail.startsWith('postmaster@') ||
+            senderEmail.startsWith('no-reply@') ||
+            senderEmail.startsWith('noreply@')
+          ) {
             continue;
           }
 
-          anyAccountSucceeded = true;
-          const incomingMsgs: any[] = Array.isArray(data.messages) ? data.messages : [];
-          totalMessagesChecked += incomingMsgs.length;
+          const msgSubject = String(msg.subject || 'No Subject').trim();
+          const normSub = normalizeSubject(msgSubject);
 
-          const mailboxUsername = String(targetSmtp.username || '').trim().toLowerCase();
-          const mailboxFromEmail = String(targetSmtp.fromEmail || '').trim().toLowerCase();
-          const mailboxKey = mailboxUsername || targetSmtp.id || 'default';
+          // Skip system OTP verification or password reset emails
+          if (
+            normSub.includes('verification code') ||
+            normSub.includes('password reset') ||
+            normSub.includes('verify your email')
+          ) {
+            continue;
+          }
 
-          for (const msg of incomingMsgs) {
-            const senderEmail = String(msg.from || '').trim().toLowerCase();
-            if (!senderEmail || !senderEmail.includes('@')) continue;
-
-            // Skip automated mail server bounces and noreply daemons
-            if (
-              senderEmail.startsWith('mailer-daemon@') ||
-              senderEmail.startsWith('postmaster@') ||
-              senderEmail.startsWith('no-reply@') ||
-              senderEmail.startsWith('noreply@')
-            ) {
-              continue;
-            }
-
-            const msgSubject = String(msg.subject || 'No Subject').trim();
-            const normSub = normalizeSubject(msgSubject);
-
-            // Skip system OTP verification or password reset emails
-            if (
-              normSub.includes('verification code') ||
-              normSub.includes('password reset') ||
-              normSub.includes('verify your email')
-            ) {
-              continue;
-            }
-
-            const replyText =
-              String(msg.text || msg.fullText || msg.html || '').trim() || 'Incoming message';
-
-            // If sender is the exact same mailbox being synced, only skip if it's an outbound copy of a mail we sent from the app
-            if (senderEmail === mailboxUsername || (mailboxFromEmail && senderEmail === mailboxFromEmail)) {
-              const isOutboundCopy = workingSent.some(
-                s =>
-                  normalizeSubject(s.subject) === normSub &&
-                  s.recipientEmail?.toLowerCase() !== senderEmail
-              );
-              if (isOutboundCopy) continue;
-            }
-
-            // Deduplicate strictly by unique IMAP UID / Message-ID (so even repeated short messages like "hi" or "ok" are never dropped!)
-            const cleanUidPart = String(msg.uid || msg.messageId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
-            const msgUniqueId = `imap-msg-${mailboxKey}-${cleanUidPart}`;
-
-            const alreadyExistsInAnyThread = workingThreads.some(t =>
-              t.messages.some(m => m.id === msgUniqueId)
+          // If sender is the exact same mailbox being synced, only skip if it's an outbound copy of a mail we sent from the app
+          if (senderEmail === mailboxUsername || (mailboxFromEmail && senderEmail === mailboxFromEmail)) {
+            const isOutboundCopy = workingSent.some(
+              s =>
+                normalizeSubject(s.subject) === normSub &&
+                s.recipientEmail?.toLowerCase() !== senderEmail
             );
-            if (alreadyExistsInAnyThread) {
-              continue;
-            }
+            if (isOutboundCopy) continue;
+          }
 
-            const isReplySubjectOrHeader =
-              Boolean(msg.inReplyTo) ||
-              (Array.isArray(msg.references) && msg.references.length > 0) ||
-              /^re\s*:/i.test(msgSubject);
+          // Deduplicate strictly by unique IMAP UID / Message-ID
+          const cleanUidPart = String(msg.uid || msg.messageId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+          const msgUniqueId = `imap-msg-${mailboxKey}-${cleanUidPart}`;
 
-            // Match by sender email OR by subject line
-            const matchingLead = workingLeads.find(l => l.email?.toLowerCase() === senderEmail);
-            const matchingSentLog =
-              workingSent.find(s => s.recipientEmail?.toLowerCase() === senderEmail) ||
-              (isReplySubjectOrHeader && normSub
-                ? workingSent.find(s => normalizeSubject(s.subject) === normSub)
-                : undefined);
-            const matchingThread =
-              workingThreads.find(t => t.leadEmail?.toLowerCase() === senderEmail) ||
-              (isReplySubjectOrHeader && normSub
-                ? workingThreads.find(t => normalizeSubject(t.subject) === normSub)
-                : undefined);
+          const alreadyExistsInAnyThread = workingThreads.some(t =>
+            t.messages.some(m => m.id === msgUniqueId)
+          );
+          if (alreadyExistsInAnyThread) {
+            continue;
+          }
 
-            const msgDateIso = msg.date ? new Date(msg.date).toISOString() : new Date().toISOString();
-            const msgTimeFormatted = msg.date
-              ? new Date(msg.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : 'Just now';
+          const isReplySubjectOrHeader =
+            Boolean(msg.inReplyTo) ||
+            (Array.isArray(msg.references) && msg.references.length > 0) ||
+            /^re\s*:/i.test(msgSubject);
 
-            const threadLeadEmail =
-              matchingThread?.leadEmail ||
-              matchingLead?.email ||
-              matchingSentLog?.recipientEmail ||
-              senderEmail;
-            const leadName =
-              msg.fromName ||
-              matchingThread?.leadName ||
-              matchingLead?.name ||
-              matchingSentLog?.recipientName ||
-              senderEmail.split('@')[0].replace(/[._-]/g, ' ');
-            const leadCompany =
-              matchingThread?.leadCompany ||
-              matchingLead?.company ||
-              matchingSentLog?.recipientCompany ||
-              senderEmail.split('@')[1]?.split('.')[0] ||
-              'Direct Inbox';
+          // Match by sender email OR by subject line (preferring sent logs from THIS specific SMTP account if multiple exist)
+          const matchingLead = workingLeads.find(l => l.email?.toLowerCase() === senderEmail);
+          const matchingSentLog =
+            workingSent.find(
+              s =>
+                s.recipientEmail?.toLowerCase() === senderEmail &&
+                (s.smtpAccountId === targetSmtp.id ||
+                  s.senderEmail?.toLowerCase() === mailboxFromEmail ||
+                  s.senderEmail?.toLowerCase() === mailboxUsername ||
+                  s.smtpAccountName === targetSmtp.name)
+            ) ||
+            workingSent.find(s => s.recipientEmail?.toLowerCase() === senderEmail) ||
+            (isReplySubjectOrHeader && normSub
+              ? workingSent.find(s => normalizeSubject(s.subject) === normSub)
+              : undefined);
 
-            totalNewReplies++;
+          const matchingThread =
+            workingThreads.find(t => t.leadEmail?.toLowerCase() === senderEmail) ||
+            (isReplySubjectOrHeader && normSub
+              ? workingThreads.find(t => normalizeSubject(t.subject) === normSub)
+              : undefined);
 
-            // 1. Update matching sent email status to 'replied'
-            if (matchingSentLog || matchingLead) {
-              workingSent = workingSent.map(s => {
-                if (
-                  s.recipientEmail?.toLowerCase() === senderEmail ||
-                  s.recipientEmail?.toLowerCase() === threadLeadEmail.toLowerCase() ||
-                  (matchingSentLog && s.id === matchingSentLog.id)
-                ) {
-                  sentChanged = true;
-                  return {
-                    ...s,
-                    status: 'replied' as const,
-                    repliedAt: msgDateIso
-                  };
-                }
-                return s;
-              });
-            }
+          const threadLeadEmail =
+            matchingThread?.leadEmail ||
+            matchingLead?.email ||
+            matchingSentLog?.recipientEmail ||
+            senderEmail;
+          const leadName =
+            msg.fromName ||
+            matchingThread?.leadName ||
+            matchingLead?.name ||
+            matchingSentLog?.recipientName ||
+            senderEmail.split('@')[0].replace(/[._-]/g, ' ');
+          const leadCompany =
+            matchingThread?.leadCompany ||
+            matchingLead?.company ||
+            matchingSentLog?.recipientCompany ||
+            senderEmail.split('@')[1]?.split('.')[0] ||
+            'Direct Inbox';
 
-            // 2. Update matching lead status to 'replied'
-            if (matchingLead) {
-              workingLeads = workingLeads.map(l => {
-                if (l.id === matchingLead.id || l.email?.toLowerCase() === senderEmail) {
-                  leadsChanged = true;
-                  return {
-                    ...l,
-                    status: 'replied' as const,
-                    isReplied: true,
-                    lastRepliedAt: msgDateIso,
-                    replySnippet: replyText.slice(0, 120)
-                  };
-                }
-                return l;
-              });
-            }
+          // Clean body text so '>' quote markers and raw {{website}} tokens never appear in Smart Inbox
+          const rawReplyText = String(msg.text || msg.fullText || msg.html || '').trim() || 'Incoming message';
+          const replyText =
+            cleanEmailBodyText(rawReplyText, matchingLead?.website || leadCompany, leadCompany, leadName) ||
+            'Incoming message';
 
-            // 3. Update campaign reply count if applicable
-            if (matchingSentLog?.campaignId) {
-              workingCampaigns = workingCampaigns.map(c => {
-                if (c.id === matchingSentLog.campaignId) {
-                  campaignsChanged = true;
-                  return {
-                    ...c,
-                    replyCount: (c.replyCount || 0) + 1
-                  };
-                }
-                return c;
-              });
-            }
+          const msgDateIso = msg.date ? new Date(msg.date).toISOString() : new Date().toISOString();
+          const msgTimeFormatted = msg.date
+            ? new Date(msg.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : 'Just now';
 
-            // 4. Add or update conversation thread directly at the top of Smart Inbox
-            const targetThread = workingThreads.find(
-              t =>
-                t.leadEmail?.toLowerCase() === threadLeadEmail.toLowerCase() ||
-                (matchingThread && t.id === matchingThread.id)
-            );
+          // Determine the exact SMTP account ID and email address that received this message / sent the original email
+          const resolvedSmtpId = !targetSmtp.useSystemDefault
+            ? targetSmtp.id
+            : matchingSentLog?.smtpAccountId || matchingThread?.smtpAccountId;
+          const resolvedSmtpEmail =
+            targetSmtp.fromEmail ||
+            targetSmtp.username ||
+            matchingSentLog?.senderEmail ||
+            matchingThread?.smtpEmail ||
+            currentUser.email;
 
-            const targetThreadId =
-              targetThread?.id ||
-              `thread-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+          totalNewReplies++;
 
-            const newMsg: EmailMessage = {
-              id: msgUniqueId,
-              threadId: targetThreadId,
-              sender: 'lead',
-              senderName: leadName,
-              senderEmail: senderEmail,
-              recipientName: currentUser.name || 'Me',
-              recipientEmail: targetSmtp.fromEmail || targetSmtp.username || currentUser.email,
-              timestamp: msgTimeFormatted,
-              subject: msgSubject,
-              body: replyText,
-              isRead: false,
-              status: 'replied'
-            };
-
-            if (targetThread) {
-              const updatedThread: EmailThread = {
-                ...targetThread,
-                isTrash: false,
-                subject: msgSubject || targetThread.subject,
-                lastMessage: replyText.slice(0, 100),
-                lastMessageDate: msgTimeFormatted,
-                updatedAt: msgTimeFormatted,
-                unreadCount: (targetThread.unreadCount || 0) + 1,
-                labels: Array.from(
-                  new Set([
-                    ...(targetThread.labels || []),
-                    matchingSentLog || isReplySubjectOrHeader ? 'Real Reply' : 'Direct Mail',
-                    'Hot Lead'
-                  ])
-                ),
-                messages: [...targetThread.messages, newMsg]
-              };
-              workingThreads = [
-                updatedThread,
-                ...workingThreads.filter(t => t.id !== targetThread.id)
-              ];
-            } else {
-              const initialMessages: EmailMessage[] = [];
-              if (matchingSentLog) {
-                initialMessages.push({
-                  id: `msg-sent-${matchingSentLog.id}`,
-                  threadId: targetThreadId,
-                  sender: 'user',
-                  senderName: currentUser.name || targetSmtp.fromName || 'Me',
-                  senderEmail: targetSmtp.fromEmail || targetSmtp.username || currentUser.email,
-                  recipientName: leadName,
-                  recipientEmail: threadLeadEmail,
-                  timestamp: new Date(matchingSentLog.sentAt).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  }),
-                  subject: matchingSentLog.subject,
-                  body: matchingSentLog.body,
-                  isRead: true,
-                  status: 'sent'
-                });
+          // 1. Update matching sent email status to 'replied'
+          if (matchingSentLog || matchingLead) {
+            workingSent = workingSent.map(s => {
+              if (
+                s.recipientEmail?.toLowerCase() === senderEmail ||
+                s.recipientEmail?.toLowerCase() === threadLeadEmail.toLowerCase() ||
+                (matchingSentLog && s.id === matchingSentLog.id)
+              ) {
+                sentChanged = true;
+                return {
+                  ...s,
+                  status: 'replied' as const,
+                  repliedAt: msgDateIso
+                };
               }
-              initialMessages.push(newMsg);
-
-              const newThread: EmailThread = {
-                id: targetThreadId,
-                leadId: matchingLead?.id || `lead-${Date.now()}`,
-                leadName,
-                leadEmail: threadLeadEmail,
-                leadCompany,
-                subject: matchingSentLog?.subject || msgSubject,
-                lastMessage: replyText.slice(0, 100),
-                lastMessageDate: msgTimeFormatted,
-                updatedAt: msgTimeFormatted,
-                unreadCount: 1,
-                labels: [
-                  matchingSentLog || isReplySubjectOrHeader ? 'Real Reply' : 'Direct Mail',
-                  'Hot Lead'
-                ],
-                isStarred: true,
-                isTrash: false,
-                messages: initialMessages
-              };
-              workingThreads = [newThread, ...workingThreads];
-            }
-
-            threadsChanged = true;
-            newestArrivedThreadId = targetThreadId;
-
-            const isReplyToSent = Boolean(matchingSentLog || isReplySubjectOrHeader);
-            notificationsToFire.push({
-              title: isReplyToSent
-                ? `🔥 New Reply from ${leadName}`
-                : `📩 New Email from ${leadName}`,
-              message: `${senderEmail} • "${msgSubject}": "${replyText.slice(0, 70)}${replyText.length > 70 ? '...' : ''}"`,
-              type: 'reply',
-              linkTab: 'inbox',
-              leadEmail: threadLeadEmail
+              return s;
             });
           }
-        } catch (err: any) {
-          lastError = err?.message || 'Could not connect to incoming mail server.';
+
+          // 2. Update matching lead status to 'replied'
+          if (matchingLead) {
+            workingLeads = workingLeads.map(l => {
+              if (l.id === matchingLead.id || l.email?.toLowerCase() === senderEmail) {
+                leadsChanged = true;
+                return {
+                  ...l,
+                  status: 'replied' as const,
+                  isReplied: true,
+                  lastRepliedAt: msgDateIso,
+                  replySnippet: replyText.slice(0, 120)
+                };
+              }
+              return l;
+            });
+          }
+
+          // 3. Update campaign reply count if applicable
+          if (matchingSentLog?.campaignId) {
+            workingCampaigns = workingCampaigns.map(c => {
+              if (c.id === matchingSentLog.campaignId) {
+                campaignsChanged = true;
+                return {
+                  ...c,
+                  replyCount: (c.replyCount || 0) + 1
+                };
+              }
+              return c;
+            });
+          }
+
+          // 4. Add or update conversation thread directly at the top of Smart Inbox with its matched SMTP account
+          const targetThread = workingThreads.find(
+            t =>
+              t.leadEmail?.toLowerCase() === threadLeadEmail.toLowerCase() ||
+              (matchingThread && t.id === matchingThread.id)
+          );
+
+          const targetThreadId =
+            targetThread?.id ||
+            `thread-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+
+          const newMsg: EmailMessage = {
+            id: msgUniqueId,
+            threadId: targetThreadId,
+            sender: 'lead',
+            senderName: leadName,
+            senderEmail: senderEmail,
+            recipientName: currentUser.name || 'Me',
+            recipientEmail: resolvedSmtpEmail,
+            smtpAccountId: resolvedSmtpId,
+            timestamp: msgTimeFormatted,
+            subject: msgSubject,
+            body: replyText,
+            isRead: false,
+            status: 'replied'
+          };
+
+          if (targetThread) {
+            const updatedThread: EmailThread = {
+              ...targetThread,
+              isTrash: false,
+              smtpAccountId: resolvedSmtpId || targetThread.smtpAccountId,
+              smtpEmail: resolvedSmtpEmail || targetThread.smtpEmail,
+              subject: msgSubject || targetThread.subject,
+              lastMessage: replyText.slice(0, 100),
+              lastMessageDate: msgTimeFormatted,
+              updatedAt: msgTimeFormatted,
+              unreadCount: (targetThread.unreadCount || 0) + 1,
+              labels: Array.from(
+                new Set([
+                  ...(targetThread.labels || []),
+                  matchingSentLog || isReplySubjectOrHeader ? 'Real Reply' : 'Direct Mail',
+                  'Hot Lead'
+                ])
+              ),
+              messages: [...targetThread.messages, newMsg]
+            };
+            workingThreads = [
+              updatedThread,
+              ...workingThreads.filter(t => t.id !== targetThread.id)
+            ];
+          } else {
+            const initialMessages: EmailMessage[] = [];
+            if (matchingSentLog) {
+              initialMessages.push({
+                id: `msg-sent-${matchingSentLog.id}`,
+                threadId: targetThreadId,
+                sender: 'user',
+                senderName: currentUser.name || targetSmtp.fromName || 'Me',
+                senderEmail: resolvedSmtpEmail,
+                recipientName: leadName,
+                recipientEmail: threadLeadEmail,
+                smtpAccountId: resolvedSmtpId,
+                timestamp: new Date(matchingSentLog.sentAt).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit'
+                }),
+                subject: matchingSentLog.subject,
+                body: cleanEmailBodyText(
+                  matchingSentLog.body,
+                  matchingLead?.website || leadCompany,
+                  leadCompany,
+                  leadName
+                ),
+                isRead: true,
+                status: 'sent'
+              });
+            }
+            initialMessages.push(newMsg);
+
+            const newThread: EmailThread = {
+              id: targetThreadId,
+              leadId: matchingLead?.id || `lead-${Date.now()}`,
+              leadName,
+              leadEmail: threadLeadEmail,
+              leadCompany,
+              smtpAccountId: resolvedSmtpId,
+              smtpEmail: resolvedSmtpEmail,
+              subject: matchingSentLog?.subject || msgSubject,
+              lastMessage: replyText.slice(0, 100),
+              lastMessageDate: msgTimeFormatted,
+              updatedAt: msgTimeFormatted,
+              unreadCount: 1,
+              labels: [
+                matchingSentLog || isReplySubjectOrHeader ? 'Real Reply' : 'Direct Mail',
+                'Hot Lead'
+              ],
+              isStarred: true,
+              isTrash: false,
+              messages: initialMessages
+            };
+            workingThreads = [newThread, ...workingThreads];
+          }
+
+          threadsChanged = true;
+          newestArrivedThreadId = targetThreadId;
+
+          const isReplyToSent = Boolean(matchingSentLog || isReplySubjectOrHeader);
+          notificationsToFire.push({
+            title: isReplyToSent
+              ? `🔥 New Reply from ${leadName}`
+              : `📩 New Email from ${leadName}`,
+            message: `${senderEmail} • "${msgSubject}": "${replyText.slice(0, 70)}${replyText.length > 70 ? '...' : ''}"`,
+            type: 'reply',
+            linkTab: 'inbox',
+            leadEmail: threadLeadEmail
+          });
         }
       }
 
@@ -2611,9 +2814,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      // Fire real-time notifications (ALWAYS notify when new mail arrives, even during silent background auto-sync!)
+      // Fire real-time notifications immediately
       if (notificationsToFire.length > 0) {
-        // Fire up to the latest 3 notifications so the user gets immediate sound + popup alert
         const recentNotifs = notificationsToFire.slice(-3);
         for (const notif of recentNotifs) {
           addNotification(notif);
@@ -2646,17 +2848,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Continuous Real-Time Background IMAP Auto-Sync (Every 5 seconds + on tab focus — zero manual button clicks needed!)
+  // Continuous Real-Time Background IMAP Auto-Sync (Every 2.5 seconds + on tab focus — zero manual clicks needed!)
   useEffect(() => {
     if (!isAuthenticated) return;
 
     const initialSyncTimer = setTimeout(() => {
       syncInboxReplies(undefined, true).catch(() => {});
-    }, 1000);
+    }, 400);
 
     const imapInterval = setInterval(() => {
       syncInboxReplies(undefined, true).catch(() => {});
-    }, 5000);
+    }, 2500);
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
@@ -2673,7 +2875,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
-  }, [isAuthenticated, smtpAccounts.length]);
+  }, [isAuthenticated, smtpAccounts]);
 
   const simulateLeadReplyToSentEmail = (sentEmailId: string, customSnippet?: string) => {
     const emailLog = sentEmails.find(s => s.id === sentEmailId);
@@ -2818,19 +3020,84 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (isSuccess) {
-      // Add sent log with status strictly 'sent' and openCount strictly 0
+      const senderFromEmail = smtp?.fromEmail || smtp?.username || currentUser.email || 'outreach@visualsky.pro';
+      const cleanedSentBody = cleanEmailBodyText(cleanBody, matchedLead?.website || resolvedCompany, resolvedCompany, resolvedName);
+
+      // Add sent log with status strictly 'sent', openCount strictly 0, and exact smtpAccountId + senderEmail
       addSentEmailLog({
         campaignName: 'Direct Outreach Mailer',
         recipientName: resolvedName,
         recipientEmail: cleanEmail,
         recipientCompany: resolvedCompany,
         subject: cleanSubject,
-        body: cleanBody,
+        body: cleanedSentBody,
+        smtpAccountId: smtp?.id,
+        senderEmail: senderFromEmail,
         smtpAccountName: smtp?.name || 'Primary SMTP Relay',
         smtpHost: `${smtp?.host || 'smtp.relay'}:${smtp?.port || 587}`,
         status: 'sent',
         openCount: 0,
         trackingPixelId
+      });
+
+      // Also record or update conversation thread in Smart Inbox with this exact SMTP account (smtp.id & senderFromEmail)
+      setThreads(prev => {
+        const existingThread = prev.find(t => t.leadEmail?.toLowerCase() === cleanEmail.toLowerCase());
+        const threadId = existingThread?.id || `thread-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        const nowFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const sentMsg: EmailMessage = {
+          id: `msg-out-${Date.now()}`,
+          threadId,
+          sender: 'user',
+          senderName,
+          senderEmail: senderFromEmail,
+          recipientName: resolvedName,
+          recipientEmail: cleanEmail,
+          smtpAccountId: smtp?.id,
+          timestamp: nowFormatted,
+          subject: cleanSubject,
+          body: cleanedSentBody,
+          isRead: true,
+          status: 'sent'
+        };
+
+        let nextThreads: EmailThread[];
+        if (existingThread) {
+          const updated: EmailThread = {
+            ...existingThread,
+            isTrash: false,
+            smtpAccountId: smtp?.id,
+            smtpEmail: senderFromEmail,
+            subject: cleanSubject || existingThread.subject,
+            lastMessage: cleanedSentBody.slice(0, 100),
+            lastMessageDate: nowFormatted,
+            updatedAt: nowFormatted,
+            messages: [...existingThread.messages, sentMsg]
+          };
+          nextThreads = [updated, ...prev.filter(t => t.id !== existingThread.id)];
+        } else {
+          const newThread: EmailThread = {
+            id: threadId,
+            leadId: matchedLead?.id || `lead-${Date.now()}`,
+            leadName: resolvedName,
+            leadEmail: cleanEmail,
+            leadCompany: resolvedCompany,
+            smtpAccountId: smtp?.id,
+            smtpEmail: senderFromEmail,
+            subject: cleanSubject,
+            lastMessage: cleanedSentBody.slice(0, 100),
+            lastMessageDate: nowFormatted,
+            updatedAt: nowFormatted,
+            unreadCount: 0,
+            labels: ['Sent Outreach'],
+            isStarred: false,
+            isTrash: false,
+            messages: [sentMsg]
+          };
+          nextThreads = [newThread, ...prev];
+        }
+        persistResourceDirectly('threads', nextThreads);
+        return nextThreads;
       });
 
       // Update lead if in database

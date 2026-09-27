@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useApp } from '../../context/AppContext';
+import { useApp, cleanEmailBodyText } from '../../context/AppContext';
 import { safeParseResponse } from '../../lib/safeFetch';
 import { EmailThread, EmailMessage } from '../../types';
 import { 
@@ -48,9 +48,9 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
-const cleanBodyText = (text: string) => {
+const cleanBodyText = (text: string, fallbackCompany?: string, fallbackName?: string) => {
   if (!text) return '';
-  return text.replace(/^[> ]+/gm, '').trim();
+  return cleanEmailBodyText(text, fallbackCompany, fallbackCompany, fallbackName);
 };
 
 export const SmartInbox: React.FC = () => {
@@ -70,6 +70,8 @@ export const SmartInbox: React.FC = () => {
     setSearchQuery,
     emailTemplates,
     smtpAccounts,
+    sentEmails,
+    leads,
     sendDirectEmail,
     addNotification,
     syncInboxReplies,
@@ -78,12 +80,12 @@ export const SmartInbox: React.FC = () => {
 
   const [isSyncingImap, setIsSyncingImap] = useState<boolean>(false);
 
-  // Automatically sync IMAP replies in background when SmartInbox opens & every 5s while open (no manual button click required!)
+  // Automatically sync IMAP replies in background when SmartInbox opens & every 2.5s while open (no manual button click required!)
   useEffect(() => {
     syncInboxReplies(undefined, true).catch(() => {});
     const timer = setInterval(() => {
       syncInboxReplies(undefined, true).catch(() => {});
-    }, 5000);
+    }, 2500);
     return () => clearInterval(timer);
   }, []);
 
@@ -172,6 +174,76 @@ export const SmartInbox: React.FC = () => {
   const currentThread = useMemo(() => {
     return threads.find(t => t.id === activeThreadId) || null;
   }, [threads, activeThreadId]);
+
+  const activeSmtpAccounts = useMemo(() => {
+    return (smtpAccounts || []).filter(s => !s.isTrash);
+  }, [smtpAccounts]);
+
+  const [replySmtpId, setReplySmtpId] = useState<string>('');
+
+  // Auto-detect which SMTP account sent the original mail or received the reply whenever a thread is opened
+  useEffect(() => {
+    if (!currentThread) return;
+
+    const matchSmtp = (idOrNull?: string, emailOrNull?: string, nameOrNull?: string) => {
+      if (idOrNull) {
+        const byId = activeSmtpAccounts.find(s => s.id === idOrNull);
+        if (byId) return byId;
+      }
+      if (emailOrNull) {
+        const normEmail = emailOrNull.trim().toLowerCase();
+        const byEmail = activeSmtpAccounts.find(
+          s =>
+            s.fromEmail?.trim().toLowerCase() === normEmail ||
+            s.username?.trim().toLowerCase() === normEmail
+        );
+        if (byEmail) return byEmail;
+      }
+      if (nameOrNull) {
+        const byName = activeSmtpAccounts.find(s => s.name === nameOrNull);
+        if (byName) return byName;
+      }
+      return undefined;
+    };
+
+    // 1. Check thread's stored smtpAccountId / smtpEmail
+    let detected = matchSmtp(currentThread.smtpAccountId, currentThread.smtpEmail);
+
+    // 2. Check messages in reverse chronological order (user's senderEmail or lead's recipientEmail)
+    if (!detected && Array.isArray(currentThread.messages)) {
+      for (let i = currentThread.messages.length - 1; i >= 0; i--) {
+        const m = currentThread.messages[i];
+        const candidateEmail = m.sender === 'user' ? m.senderEmail : m.recipientEmail;
+        const found = matchSmtp(m.smtpAccountId, candidateEmail);
+        if (found) {
+          detected = found;
+          break;
+        }
+      }
+    }
+
+    // 3. Check SentEmails log for this lead's email address
+    if (!detected && currentThread.leadEmail) {
+      const normLead = currentThread.leadEmail.trim().toLowerCase();
+      const sentLog = (sentEmails || []).find(
+        s => !s.isTrash && s.recipientEmail?.trim().toLowerCase() === normLead
+      );
+      if (sentLog) {
+        detected = matchSmtp(sentLog.smtpAccountId, sentLog.senderEmail, sentLog.smtpAccountName);
+      }
+    }
+
+    // 4. Fallback to first connected SMTP account
+    if (!detected) {
+      detected =
+        activeSmtpAccounts.find(s => s.isConnected && (s.password || s.apiKey)) ||
+        activeSmtpAccounts[0];
+    }
+
+    if (detected) {
+      setReplySmtpId(detected.id);
+    }
+  }, [currentThread?.id, currentThread?.smtpAccountId, currentThread?.smtpEmail, currentThread?.messages?.length, activeSmtpAccounts, sentEmails]);
 
   // Filtered threads list based on folder and search query
   const filteredThreads = useMemo(() => {
@@ -264,7 +336,7 @@ export const SmartInbox: React.FC = () => {
     e.preventDefault();
     if (!replyText.trim() || !currentThread) return;
 
-    sendReply(currentThread.id, replyText.trim());
+    sendReply(currentThread.id, replyText.trim(), replySmtpId || undefined);
     setReplyText('');
     setCustomReplyPrompt('');
   };
@@ -638,7 +710,7 @@ export const SmartInbox: React.FC = () => {
                       </div>
 
                       <p className="text-[11px] text-slate-400 truncate">
-                        {t.lastMessage}
+                        {cleanBodyText(t.lastMessage, t.leadCompany, t.leadName)}
                       </p>
 
                       {/* Labels badges */}
@@ -681,12 +753,20 @@ export const SmartInbox: React.FC = () => {
 
                   <div className="min-w-0">
                     <h2 className="text-base font-black text-slate-100 truncate">{currentThread.subject}</h2>
-                    <div className="text-xs text-slate-400 flex items-center gap-2">
+                    <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap">
                       <span className="font-bold text-slate-200">{currentThread.leadName}</span>
                       <span>&bull;</span>
                       <span className="text-cyan-400 font-mono">{currentThread.leadEmail}</span>
                       <span>&bull;</span>
                       <span className="text-slate-300">{currentThread.leadCompany}</span>
+                      {(currentThread.smtpEmail || replySmtpId) && (
+                        <>
+                          <span>&bull;</span>
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 font-mono text-[10px]">
+                            Matched Mailbox: {activeSmtpAccounts.find(s => s.id === replySmtpId)?.fromEmail || activeSmtpAccounts.find(s => s.id === replySmtpId)?.username || currentThread.smtpEmail}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -732,18 +812,23 @@ export const SmartInbox: React.FC = () => {
                           </div>
                           <div>
                             <span className="font-bold text-xs text-slate-200">
-                              {isLead ? currentThread.leadName : currentUser.name}
+                              {isLead ? currentThread.leadName : (m.senderName || currentUser.name)}
                             </span>
                             <span className="text-[11px] text-slate-500 font-mono ml-2">
-                              &lt;{isLead ? currentThread.leadEmail : currentUser.email}&gt;
+                              &lt;{isLead ? currentThread.leadEmail : (m.senderEmail || currentThread.smtpEmail || currentUser.email)}&gt;
                             </span>
+                            {isLead && m.recipientEmail && (
+                              <span className="text-[10px] text-emerald-400/90 font-mono ml-2">
+                                (to: {m.recipientEmail})
+                              </span>
+                            )}
                           </div>
                         </div>
                         <span className="text-[11px] text-slate-400 font-mono">{m.timestamp || 'Just now'}</span>
                       </div>
 
                       <div className="text-xs md:text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">
-                        {m.body}
+                        {cleanBodyText(m.body, currentThread.leadCompany, currentThread.leadName)}
                       </div>
                     </div>
                   );
@@ -827,8 +912,35 @@ export const SmartInbox: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Reply Form */}
+                {/* Reply Form with Auto-Selected SMTP Sender */}
                 <form onSubmit={handleSendReply} className="space-y-2">
+                  {activeSmtpAccounts.length > 0 && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900/90 border border-emerald-500/30 rounded-xl px-3 py-1.5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-black uppercase tracking-wider shrink-0">
+                          Auto-Selected SMTP
+                        </span>
+                        <span className="text-[11px] text-slate-300 font-semibold shrink-0">
+                          Replying From:
+                        </span>
+                        <select
+                          value={replySmtpId}
+                          onChange={(e) => setReplySmtpId(e.target.value)}
+                          className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs font-bold text-cyan-300 focus:outline-none focus:border-cyan-500 cursor-pointer truncate max-w-[320px]"
+                        >
+                          {activeSmtpAccounts.map(acc => (
+                            <option key={acc.id} value={acc.id} className="bg-slate-950 text-slate-100">
+                              {acc.name} ({acc.fromEmail || acc.username})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <span className="text-[10px] text-emerald-400/90 font-medium">
+                        ✓ Matched to thread sender mailbox
+                      </span>
+                    </div>
+                  )}
+
                   <textarea
                     rows={3}
                     value={replyText}

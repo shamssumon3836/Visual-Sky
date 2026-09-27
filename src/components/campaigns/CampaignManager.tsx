@@ -916,15 +916,24 @@ export const CampaignManager: React.FC = () => {
       const rawSubject = initialStep?.subject || targetCampaign?.name || 'Cold Outreach';
       const rawBody = initialStep?.body || 'Hi {{name}},\n\nReaching out regarding {{company}}.';
 
-      const renderedSubject = rawSubject
-        .replace(/\{\{name\}\}/gi, lead.name || 'there')
-        .replace(/\{\{company\}\}/gi, lead.company || 'your company')
-        .replace(/\{\{title\}\}/gi, lead.title || 'Executive');
+      const leadFirstName = (lead.name || 'there').split(' ')[0] || 'there';
+      const leadWebsite = lead.website || lead.company || 'your website';
+      const effectiveSenderName = senderName || smtp?.fromName || 'Visual Sky Outreach';
+      const effectiveSenderEmail = smtp?.fromEmail || smtp?.username || 'outreach@visualsky.io';
 
-      const renderedBody = rawBody
-        .replace(/\{\{name\}\}/gi, lead.name || 'there')
-        .replace(/\{\{company\}\}/gi, lead.company || 'your company')
-        .replace(/\{\{title\}\}/gi, lead.title || 'Executive');
+      const replaceAllCampaignTokens = (txt: string) =>
+        String(txt || '')
+          .replace(/\{\{\s*first_name\s*\}\}/gi, leadFirstName)
+          .replace(/\{\{\s*name\s*\}\}/gi, lead.name || 'there')
+          .replace(/\{\{\s*company\s*\}\}/gi, lead.company || 'your company')
+          .replace(/\{\{\s*website\s*\}\}/gi, leadWebsite)
+          .replace(/\{\{\s*title\s*\}\}/gi, lead.title || 'Executive')
+          .replace(/\{\{\s*email\s*\}\}/gi, lead.email || '')
+          .replace(/\{\{\s*niche\s*\}\}/gi, lead.niche || 'your industry')
+          .replace(/\{\{\s*sender_name\s*\}\}/gi, effectiveSenderName);
+
+      const renderedSubject = replaceAllCampaignTokens(rawSubject);
+      const renderedBody = replaceAllCampaignTokens(rawBody);
 
       // Send via real backend SMTP relay route
       const trackingPixelId = `px-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -938,8 +947,9 @@ export const CampaignManager: React.FC = () => {
           body: JSON.stringify({
             to: lead.email,
             toName: lead.name,
-            from: smtp?.fromEmail || smtp?.username || 'outreach@visualsky.io',
-            fromName: senderName || smtp?.fromName || 'Visual Sky Outreach',
+            toCompany: lead.company,
+            from: effectiveSenderEmail,
+            fromName: effectiveSenderName,
             subject: renderedSubject,
             text: renderedBody,
             smtpConfig: smtp,
@@ -962,7 +972,7 @@ export const CampaignManager: React.FC = () => {
       if (isSentSuccess) {
         sentSoFar++;
 
-        // Record in sent log
+        // Record in sent log with exact smtpAccountId and senderEmail
         addSentEmailLog({
           campaignId: targetCampaign.id,
           campaignName: targetCampaign.name,
@@ -971,6 +981,8 @@ export const CampaignManager: React.FC = () => {
           recipientCompany: lead.company,
           subject: renderedSubject,
           body: renderedBody,
+          smtpAccountId: smtp?.id,
+          senderEmail: effectiveSenderEmail,
           smtpAccountName: smtp?.name || 'SMTP Relay',
           smtpHost: `${smtp?.host || 'smtp.relay'}:${smtp?.port || 587}`,
           status: 'sent',
