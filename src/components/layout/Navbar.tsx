@@ -78,6 +78,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
   const [showProfileModal, setShowProfileModal] = useState<boolean>(false);
   const [showFollowUpMenu, setShowFollowUpMenu] = useState<boolean>(false);
   const [showSearchPopover, setShowSearchPopover] = useState<boolean>(false);
+  const [showMobileSearch, setShowMobileSearch] = useState<boolean>(false);
   const [notifFilter, setNotifFilter] = useState<'all' | 'reply' | 'open' | 'lead' | 'system'>('all');
 
   const notifRef = useRef<HTMLDivElement>(null);
@@ -422,6 +423,21 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
 
       {/* Right Actions (Single Line Bar, Send Mail button prominently visible) */}
       <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+        {/* Mobile Search Toggle Button */}
+        <button
+          type="button"
+          onClick={() => setShowMobileSearch(prev => !prev)}
+          className={`md:hidden w-9 h-9 rounded-xl border flex items-center justify-center transition cursor-pointer ${
+            showMobileSearch || searchQuery
+              ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300'
+              : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300 hover:text-white'
+          }`}
+          title="Search leads, campaigns, relays, inbox"
+          aria-label="Toggle mobile search"
+        >
+          {showMobileSearch ? <X className="w-4 h-4" /> : <Search className="w-4 h-4" />}
+        </button>
+
         {/* Direct Agency Master Quick Access Button if Agency User */}
         {(currentUser.role === 'agency' || currentUser.role === 'owner' || currentUser.isOwner || currentUser.email === 'sojibdaridro123@gmail.com' || currentUser.email === 'rafiqulvisualsky@gmail.com') && (
           <button
@@ -484,7 +500,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
         <div className="relative" ref={followUpRef}>
           <button
             onClick={() => setShowFollowUpMenu(!showFollowUpMenu)}
-            className="hidden xl:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-cyan-300 text-xs font-semibold shadow-sm transition"
+            className="hidden lg:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-cyan-300 text-xs font-semibold shadow-sm transition cursor-pointer"
           >
             <Clock className="w-3.5 h-3.5 text-cyan-400" />
             <span className="whitespace-nowrap">1-Click Follow-Up</span>
@@ -492,7 +508,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
           </button>
 
           {showFollowUpMenu && (
-            <div className="absolute right-0 mt-2 w-72 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-2.5 z-50 animate-in fade-in slide-in-from-top-2">
+            <div className="absolute right-0 mt-2 w-72 max-w-[calc(100vw-1.5rem)] bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-2.5 z-50 animate-in fade-in slide-in-from-top-2">
               <div className="px-3 py-2 border-b border-slate-800">
                 <div className="text-xs font-bold text-slate-200">Smart Follow-up Automation</div>
                 <div className="text-[11px] text-slate-400">Target dormant leads with 1 click:</div>
@@ -730,7 +746,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
 
           {/* Profile Menu Dropdown */}
           {showProfileMenu && (
-            <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-2 z-50 animate-in fade-in slide-from-top-2">
+            <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-1.5rem)] bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-2 z-50 animate-in fade-in slide-from-top-2">
               <div className="px-3 py-2 border-b border-slate-800">
                 <div className="font-bold text-xs text-slate-100">{currentUser.name}</div>
                 <div className="text-[11px] text-slate-400 truncate">{currentUser.email}</div>
@@ -812,6 +828,118 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
           )}
         </div>
       </div>
+
+      {/* Mobile Slide-Down Global Search Bar & Results */}
+      {showMobileSearch && (
+        <div className="md:hidden fixed inset-x-0 top-16 z-50 bg-[#090d16]/98 backdrop-blur-xl border-b border-slate-800 p-3 shadow-2xl animate-in slide-in-from-top-2">
+          <div className="relative">
+            <Search className="w-4 h-4 text-cyan-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search leads, campaigns, relays, inbox..."
+              className="w-full bg-slate-900 border border-cyan-500/40 focus:border-cyan-400 rounded-xl pl-9 pr-9 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {q && (
+            <div className="mt-2 bg-[#0c121e] border border-slate-800 rounded-2xl max-h-72 overflow-y-auto divide-y divide-slate-800/60 text-xs">
+              <div className="p-2 bg-slate-950/80 flex items-center justify-between text-[11px] text-slate-400">
+                <span>Results for &quot;<strong className="text-cyan-300">{searchQuery}</strong>&quot;</span>
+                <span>{totalResultsCount} matches</span>
+              </div>
+              {matchingLeads.map((lead) => (
+                <div
+                  key={lead.id}
+                  onClick={() => {
+                    setActiveTab('leads');
+                    setShowMobileSearch(false);
+                  }}
+                  className="p-2.5 hover:bg-slate-800/80 cursor-pointer flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-200 truncate">{lead.name}</div>
+                    <div className="text-[11px] text-slate-400 font-mono truncate">{lead.email} &bull; {lead.company}</div>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-semibold shrink-0">
+                    Lead
+                  </span>
+                </div>
+              ))}
+              {matchingThreads.map((th) => (
+                <div
+                  key={th.id}
+                  onClick={() => {
+                    setActiveTab('inbox');
+                    setShowMobileSearch(false);
+                  }}
+                  className="p-2.5 hover:bg-slate-800/80 cursor-pointer flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-200 truncate">{th.leadName} &bull; {th.leadCompany}</div>
+                    <div className="text-[11px] text-slate-400 truncate">{th.subject}</div>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold shrink-0">
+                    Inbox
+                  </span>
+                </div>
+              ))}
+              {matchingCampaigns.map((camp) => (
+                <div
+                  key={camp.id}
+                  onClick={() => {
+                    setActiveTab('campaigns');
+                    setShowMobileSearch(false);
+                  }}
+                  className="p-2.5 hover:bg-slate-800/80 cursor-pointer flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-200 truncate">{camp.name}</div>
+                    <div className="text-[11px] text-slate-400 capitalize">{camp.status} &bull; {camp.sentCount} sent</div>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 font-semibold shrink-0">
+                    Campaign
+                  </span>
+                </div>
+              ))}
+              {matchingSmtp.map((s) => (
+                <div
+                  key={s.id}
+                  onClick={() => {
+                    setActiveTab('smtp');
+                    setShowMobileSearch(false);
+                  }}
+                  className="p-2.5 hover:bg-slate-800/80 cursor-pointer flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-200 truncate">{s.name}</div>
+                    <div className="text-[11px] text-slate-400 font-mono truncate">{s.username}</div>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-semibold shrink-0">
+                    SMTP
+                  </span>
+                </div>
+              ))}
+              {totalResultsCount === 0 && (
+                <div className="p-4 text-center text-slate-500 text-xs">
+                  No matches found for &quot;{searchQuery}&quot;
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Profile Modal */}
       <ProfileModal

@@ -153,7 +153,7 @@ export const FloatingNotificationCorner: React.FC = () => {
   return (
     <div 
       id="floating-notification-hub"
-      className="fixed bottom-3 inset-x-3 sm:left-auto sm:right-4 sm:bottom-4 z-40 flex flex-col gap-2.5 sm:max-w-sm md:max-w-md sm:w-full pointer-events-none"
+      className="fixed bottom-20 md:bottom-4 inset-x-3 sm:left-auto sm:right-4 z-40 flex flex-col gap-2.5 sm:max-w-sm md:max-w-md sm:w-full pointer-events-none"
     >
       {/* 1-Click Browser & Mobile Push Permissions Banner */}
       {!isBannerDismissed && (
@@ -211,76 +211,80 @@ export const FloatingNotificationCorner: React.FC = () => {
       )}
 
       {/* Floating Corner Toasts */}
-      {activeToasts.map((toast) => (
-        <div
-          key={toast.id}
-          className="pointer-events-auto bg-[#090e1a]/95 border border-slate-700/80 hover:border-slate-600 backdrop-blur-xl p-3.5 rounded-2xl shadow-2xl shadow-black/80 space-y-2.5 transition-all duration-300 animate-in slide-in-from-right-4 fade-in"
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-slate-800/90 border border-slate-700 flex items-center justify-center shrink-0">
-                {getIcon(toast.type)}
+      {activeToasts.map((toast) => {
+        const isPriorityReply = toast.type === 'reply' || toast.linkTab === 'inbox';
+        const animDuration = isPriorityReply ? '8s' : '5s';
+        return (
+          <div
+            key={toast.id}
+            className="pointer-events-auto bg-[#090e1a]/95 border border-slate-700/80 hover:border-slate-600 backdrop-blur-xl p-3.5 rounded-2xl shadow-2xl shadow-black/80 space-y-2.5 transition-all duration-300 animate-in slide-in-from-right-4 fade-in"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-slate-800/90 border border-slate-700 flex items-center justify-center shrink-0">
+                  {getIcon(toast.type)}
+                </div>
+                <div className="min-w-0">
+                  <h4 className="font-bold text-slate-100 text-xs leading-tight truncate">
+                    {toast.title}
+                  </h4>
+                  <span className="text-[10px] text-slate-400">{toast.timestamp}</span>
+                </div>
               </div>
-              <div>
-                <h4 className="font-bold text-slate-100 text-xs leading-tight">
-                  {toast.title}
-                </h4>
-                <span className="text-[10px] text-slate-400">{toast.timestamp}</span>
-              </div>
-            </div>
 
-            <button
-              type="button"
-              onClick={() => handleDismissToast(toast.id)}
-              className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
-              title="Dismiss"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed bg-slate-950/60 p-2 rounded-xl border border-slate-800/80">
-            {typeof toast.message === 'object'
-              ? ((toast.message as any)?.message || (toast.message as any)?.text || JSON.stringify(toast.message))
-              : String(toast.message || '')}
-          </p>
-
-          <div className="flex items-center justify-between gap-2 pt-0.5">
-            <div className="flex items-center gap-2 text-[10px] text-slate-400">
-              <span className="inline-flex items-center gap-1">
-                <Monitor className="w-3 h-3 text-cyan-400" />
-                <span>PC</span>
-              </span>
-              <span>&bull;</span>
-              <span className="inline-flex items-center gap-1">
-                <Smartphone className="w-3 h-3 text-purple-400" />
-                <span>Mobile</span>
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => handleOpenNotification(toast)}
-                className="px-3 py-1 bg-blue-600/90 hover:bg-blue-500 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shadow-xs transition cursor-pointer"
+                onClick={() => handleDismissToast(toast.id)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
+                title="Dismiss"
               >
-                <span>View</span>
-                <ExternalLink className="w-3 h-3" />
+                <X className="w-3.5 h-3.5" />
               </button>
             </div>
-          </div>
 
-          {/* 3-Second Auto-dismiss Progress Indicator */}
-          <div className="w-full bg-slate-800/80 rounded-full h-1 overflow-hidden mt-1">
-            <div 
-              className="bg-gradient-to-r from-cyan-400 to-blue-500 h-full rounded-full"
-              style={{
-                animation: 'toastCountdown 3s linear forwards'
-              }}
-            />
+            <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed bg-slate-950/60 p-2 rounded-xl border border-slate-800/80">
+              {typeof toast.message === 'object'
+                ? ((toast.message as any)?.message || (toast.message as any)?.text || JSON.stringify(toast.message))
+                : String(toast.message || '')}
+            </p>
+
+            <div className="flex items-center justify-between gap-2 pt-0.5">
+              <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                <span className="inline-flex items-center gap-1">
+                  <Monitor className="w-3 h-3 text-cyan-400" />
+                  <span>PC</span>
+                </span>
+                <span>&bull;</span>
+                <span className="inline-flex items-center gap-1">
+                  <Smartphone className="w-3 h-3 text-purple-400" />
+                  <span>Mobile</span>
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleOpenNotification(toast)}
+                  className="px-3 py-1 bg-blue-600/90 hover:bg-blue-500 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shadow-xs transition cursor-pointer"
+                >
+                  <span>View</span>
+                  <ExternalLink className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+
+            {/* Auto-dismiss Progress Indicator */}
+            <div className="w-full bg-slate-800/80 rounded-full h-1 overflow-hidden mt-1">
+              <div 
+                className="bg-gradient-to-r from-cyan-400 to-blue-500 h-full rounded-full"
+                style={{
+                  animation: `toastCountdown ${animDuration} linear forwards`
+                }}
+              />
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       <style>{`
         @keyframes toastCountdown {

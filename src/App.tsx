@@ -64,6 +64,21 @@ const MainContent: React.FC = () => {
   const [isSendMailOpen, setIsSendMailOpen] = useState<boolean>(false);
   const [selectedLeadForMail, setSelectedLeadForMail] = useState<Lead | undefined>(undefined);
 
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isLogoutConfirmOpen) setIsLogoutConfirmOpen(false);
+        else if (isSendMailOpen) setIsSendMailOpen(false);
+        else if (isBillingOpen) setIsBillingOpen(false);
+        else if (isProfileOpen) setIsProfileOpen(false);
+        else if (isAuthOpen) setIsAuthOpen(false);
+        else if (isMobileDrawerOpen) setIsMobileDrawerOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isLogoutConfirmOpen, isSendMailOpen, isBillingOpen, isProfileOpen, isAuthOpen, isMobileDrawerOpen, setIsLogoutConfirmOpen]);
+
   const unreadCount = threads.filter(t => !t.isTrash && t.unreadCount > 0).length;
 
   const handleOpenAuth = (

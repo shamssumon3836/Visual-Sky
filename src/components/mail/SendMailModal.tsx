@@ -31,21 +31,29 @@ interface SendMailModalProps {
   onClose: () => void;
   defaultRecipientEmail?: string;
   defaultRecipientName?: string;
+  initialLead?: {
+    email?: string;
+    name?: string;
+    company?: string;
+    website?: string;
+    niche?: string;
+  };
 }
 
 export const SendMailModal: React.FC<SendMailModalProps> = ({
   isOpen,
   onClose,
   defaultRecipientEmail = '',
-  defaultRecipientName = ''
+  defaultRecipientName = '',
+  initialLead
 }) => {
   const { leads, smtpAccounts, currentUser, addNotification, sendDirectEmail, emailTemplates, deductAiTokens } = useApp();
 
   const [recipientEmail, setRecipientEmail] = useState<string>(() => {
-    return defaultRecipientEmail || sessionStorage.getItem('visualsky_sendmail_draft_email') || '';
+    return initialLead?.email || defaultRecipientEmail || sessionStorage.getItem('visualsky_sendmail_draft_email') || '';
   });
   const [recipientName, setRecipientName] = useState<string>(() => {
-    return defaultRecipientName || sessionStorage.getItem('visualsky_sendmail_draft_name') || '';
+    return initialLead?.name || defaultRecipientName || sessionStorage.getItem('visualsky_sendmail_draft_name') || '';
   });
   const [selectedSmtpId, setSelectedSmtpId] = useState<string>(() => {
     return sessionStorage.getItem('visualsky_sendmail_draft_smtpid') || smtpAccounts[0]?.id || '';
@@ -94,9 +102,12 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
   const [isOptimizingSpam, setIsOptimizingSpam] = useState<boolean>(false);
 
   useEffect(() => {
-    if (defaultRecipientEmail) setRecipientEmail(defaultRecipientEmail);
-    if (defaultRecipientName) setRecipientName(defaultRecipientName);
-  }, [defaultRecipientEmail, defaultRecipientName]);
+    if (initialLead?.email) setRecipientEmail(initialLead.email);
+    else if (defaultRecipientEmail) setRecipientEmail(defaultRecipientEmail);
+
+    if (initialLead?.name) setRecipientName(initialLead.name);
+    else if (defaultRecipientName) setRecipientName(defaultRecipientName);
+  }, [initialLead, defaultRecipientEmail, defaultRecipientName]);
 
   // If a template is picked, populate subject and body
   const handleTemplateSelect = (templateId: string) => {
@@ -240,10 +251,15 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-[#090d16] border border-slate-800 w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="bg-[#090d16] border border-slate-800 w-full max-w-3xl rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90dvh]">
         {/* Modal Header */}
-        <div className="p-4 md:p-5 border-b border-slate-800 flex items-center justify-between bg-gradient-to-r from-blue-950/40 via-slate-900 to-indigo-950/40">
+        <div className="p-3.5 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-gradient-to-r from-blue-950/40 via-slate-900 to-indigo-950/40 shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-blue-500/20 text-white">
               <Send className="w-5 h-5" />

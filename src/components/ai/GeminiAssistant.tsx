@@ -131,7 +131,7 @@ You can also **attach CRM Leads**, **select AI Models**, or **voice dictate** pr
   const [isSpeakingId, setIsSpeakingId] = useState<string | null>(null);
 
   // Sidebar toggle on mobile
-  const [showSidebar, setShowSidebar] = useState<boolean>(true);
+  const [showSidebar, setShowSidebar] = useState<boolean>(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -144,7 +144,11 @@ You can also **attach CRM Leads**, **select AI Models**, or **voice dictate** pr
   // Speech Recognition setup
   const toggleSpeechRecognition = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      alert('Voice dictation is not supported in this browser. Please use Google Chrome or Edge.');
+      addNotification({
+        title: 'Voice Dictation Not Supported',
+        message: 'Voice dictation is not supported in this browser. Please use Google Chrome or Microsoft Edge.',
+        type: 'system'
+      });
       return;
     }
 
@@ -401,17 +405,45 @@ Format with clean Markdown, clear sections, bullet points, and ready-to-use emai
   };
 
   return (
-    <div className="p-2 md:p-6 max-w-7xl mx-auto h-[calc(100vh-5.5rem)] flex gap-4 animate-in fade-in">
+    <div className="p-2 md:p-6 max-w-7xl mx-auto h-[calc(100dvh-8.5rem)] md:h-[calc(100dvh-5.5rem)] flex gap-4 animate-in fade-in relative">
       
+      {/* MOBILE BACKDROP FOR SIDEBAR DRAWER */}
+      {showSidebar && (
+        <div
+          className="fixed inset-0 z-40 bg-black/75 backdrop-blur-xs md:hidden"
+          onClick={() => setShowSidebar(false)}
+        />
+      )}
+
       {/* LEFT SIDEBAR: Session History & Prompt Presets */}
-      <div className={`w-72 bg-slate-900/95 border border-slate-800 rounded-3xl p-4 flex flex-col justify-between shrink-0 shadow-2xl transition-all ${
-        showSidebar ? 'flex' : 'hidden md:flex'
+      <div className={`w-72 max-w-[85vw] bg-slate-900/98 border border-slate-800 rounded-3xl p-4 flex-col justify-between shrink-0 shadow-2xl transition-all ${
+        showSidebar
+          ? 'fixed left-3 top-18 bottom-20 z-50 flex animate-in slide-in-from-left-4'
+          : 'hidden md:flex'
       }`}>
         <div className="space-y-4 overflow-hidden flex flex-col h-full">
+          {/* Mobile Drawer Top Header */}
+          <div className="flex items-center justify-between md:hidden pb-2 border-b border-slate-800">
+            <span className="text-xs font-black text-slate-200 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+              Sessions &amp; Prompt Library
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowSidebar(false)}
+              className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            >
+              ✕
+            </button>
+          </div>
+
           {/* New Chat Button */}
           <button
             type="button"
-            onClick={handleNewChat}
+            onClick={() => {
+              handleNewChat();
+              setShowSidebar(false);
+            }}
             className="w-full py-2.5 px-4 rounded-2xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer"
           >
             <Plus className="w-4 h-4" />
@@ -426,7 +458,10 @@ Format with clean Markdown, clear sections, bullet points, and ready-to-use emai
             {sessions.map(s => (
               <div
                 key={s.id}
-                onClick={() => setActiveSessionId(s.id)}
+                onClick={() => {
+                  setActiveSessionId(s.id);
+                  setShowSidebar(false);
+                }}
                 className={`p-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between group cursor-pointer ${
                   activeSessionId === s.id
                     ? 'bg-slate-800 text-cyan-300 border border-cyan-500/30'
@@ -459,7 +494,10 @@ Format with clean Markdown, clear sections, bullet points, and ready-to-use emai
                 <button
                   key={idx}
                   type="button"
-                  onClick={() => handleSendMessage(p.prompt)}
+                  onClick={() => {
+                    handleSendMessage(p.prompt);
+                    setShowSidebar(false);
+                  }}
                   className="w-full text-left p-2 rounded-xl bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 text-[11px] text-slate-300 transition cursor-pointer font-medium truncate block hover:border-cyan-500/40"
                 >
                   {p.title}
@@ -471,24 +509,32 @@ Format with clean Markdown, clear sections, bullet points, and ready-to-use emai
       </div>
 
       {/* RIGHT MAIN CHAT WINDOW */}
-      <div className="flex-1 bg-slate-900/90 border border-slate-800 rounded-3xl flex flex-col justify-between overflow-hidden shadow-2xl relative">
+      <div className="flex-1 min-w-0 bg-slate-900/90 border border-slate-800 rounded-3xl flex flex-col justify-between overflow-hidden shadow-2xl relative">
         
         {/* Top Chat Header */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between gap-3 bg-slate-950/80 backdrop-blur-md relative z-10">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-purple-600 via-blue-600 to-cyan-400 p-0.5 flex items-center justify-center shadow-md shadow-blue-500/20">
+        <div className="p-3 sm:p-4 border-b border-slate-800 flex items-center justify-between gap-2 sm:gap-3 bg-slate-950/80 backdrop-blur-md relative z-10">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <button
+              type="button"
+              onClick={() => setShowSidebar(prev => !prev)}
+              className="md:hidden p-2 rounded-xl bg-slate-900 border border-slate-800 text-cyan-400 hover:text-white shrink-0 cursor-pointer"
+              title="Open Sessions & Prompt Library"
+            >
+              <Layers className="w-4 h-4" />
+            </button>
+            <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-purple-600 via-blue-600 to-cyan-400 p-0.5 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
               <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
                 <Bot className="w-5 h-5 text-cyan-400" />
               </div>
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-sm font-black text-slate-100">{activeSession.title}</h2>
-                <span className="px-2 py-0.5 text-[10px] font-black bg-cyan-500/20 text-cyan-300 rounded-full border border-cyan-500/40">
+                <h2 className="text-xs sm:text-sm font-black text-slate-100 truncate">{activeSession.title}</h2>
+                <span className="hidden sm:inline-block px-2 py-0.5 text-[10px] font-black bg-cyan-500/20 text-cyan-300 rounded-full border border-cyan-500/40 shrink-0">
                   {selectedModel}
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400">Google Gemini Outreach & Deliverability Specialist</p>
+              <p className="text-[11px] text-slate-400 truncate">Google Gemini Outreach &amp; Deliverability Specialist</p>
             </div>
           </div>
 

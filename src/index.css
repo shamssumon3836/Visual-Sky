@@ -14,6 +14,15 @@
     color: #f1f5f9;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    touch-action: manipulation;
   }
 
   /* Universal Modern SaaS Tactile Physics for Buttons & Interactive Controls */
@@ -268,19 +277,46 @@
   animation: saasFloatSlow 5.5s ease-in-out infinite;
 }
 
-/* Guaranteed Compact Centered Popup Window Sizing (Never Full-Page) */
+/* Guaranteed Compact Centered Popup Window Sizing (Never Full-Page, Mobile/Tablet/PC Responsive) */
 .vs-auth-popup-window {
   width: 100% !important;
-  max-width: 420px !important;
-  max-height: 88vh !important;
+  max-width: 440px !important;
+  max-height: min(90dvh, 760px) !important;
   overflow-y: auto !important;
   margin: auto !important;
+  -webkit-overflow-scrolling: touch;
 }
 
 .vs-legal-popup-window {
   width: 100% !important;
-  max-width: 480px !important;
-  max-height: 82vh !important;
+  max-width: 520px !important;
+  max-height: min(86dvh, 720px) !important;
   margin: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@media (max-width: 640px) {
+  .vs-auth-popup-window {
+    max-width: calc(100vw - 1.25rem) !important;
+    max-height: 92dvh !important;
+  }
+  .vs-legal-popup-window {
+    max-width: calc(100vw - 1.25rem) !important;
+    max-height: 88dvh !important;
+  }
+  /* Prevent unintended iOS Safari auto-zoom on form focus while preserving compact layout */
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 0.875rem);
+  }
 }
 
