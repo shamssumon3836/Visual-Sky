@@ -1496,6 +1496,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
   return (
     <>
+    {(!isHidden || showFollowUpModal || showWizardModal) && (
     <div className={isHidden ? 'hidden' : 'p-4 md:p-8 max-w-7xl mx-auto space-y-6'}>
       {/* Header Banner */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-gradient-to-r from-blue-950/60 via-slate-900 to-indigo-950/60 p-6 rounded-3xl border border-slate-800 shadow-xl">
@@ -3676,6 +3677,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         </div>
       )}
     </div>
+    )}
 
       {/* REAL-TIME LIVE DISPATCHER MODAL WITH COUNTDOWN (CLOSABLE WHILE CONTINUING IN BACKGROUND!) */}
       {showLiveDispatcher && (

@@ -336,7 +336,8 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
         </div>
 
         {/* Modal Form Body */}
-        <form onSubmit={handleSend} className="p-4 md:p-5 space-y-4 overflow-y-auto flex-1 text-xs">
+        <form onSubmit={handleSend} className="flex flex-col flex-1 min-h-0 overflow-hidden text-xs">
+          <div className="p-4 md:p-5 space-y-4 overflow-y-auto flex-1 min-h-0">
           
           {/* AI OUTREACH GENERATOR & COPILOT DRAWER */}
           <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-950/40 via-slate-900/90 to-cyan-950/40 border border-indigo-500/30 shadow-lg space-y-3">
@@ -711,8 +712,10 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
             )}
           </div>
 
-          {/* Footer Actions */}
-          <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+          </div>
+
+          {/* Permanently Docked Footer Actions */}
+          <div className="p-3.5 sm:p-4 border-t border-slate-800 bg-slate-950/95 flex items-center justify-between shrink-0">
             <button
               type="button"
               onClick={onClose}

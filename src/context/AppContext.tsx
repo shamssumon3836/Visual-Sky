@@ -3209,7 +3209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ? currentSmtpList.filter(s => s.id === smtpAccountId && s.host && s.username && s.password)
         : currentSmtpList.filter(s => !s.isTrash && s.host && s.username && s.password);
 
-      if (configuredAccounts.length === 0 && isHydratingRef.current) {
+      if (configuredAccounts.length === 0 && (isHydratingRef.current || silent)) {
         return { success: true, count: 0, totalChecked: 0 };
       }
 
@@ -3649,17 +3649,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Continuous Real-Time Background IMAP Auto-Sync (Every 2.5 seconds + on tab focus — zero manual clicks needed!)
+  // Continuous Real-Time Background IMAP Auto-Sync (Deferred after initial load so page startup is instant!)
   useEffect(() => {
     if (!isAuthenticated) return;
 
     const initialSyncTimer = setTimeout(() => {
       syncInboxReplies(undefined, true).catch(() => {});
-    }, 400);
+    }, 3500);
 
     const imapInterval = setInterval(() => {
-      syncInboxReplies(undefined, true).catch(() => {});
-    }, 2500);
+      if (document.visibilityState === 'visible') {
+        syncInboxReplies(undefined, true).catch(() => {});
+      }
+    }, 8000);
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
@@ -3676,7 +3678,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
-  }, [isAuthenticated, smtpAccounts]);
+  }, [isAuthenticated, smtpAccounts.length]);
 
   const simulateLeadReplyToSentEmail = (sentEmailId: string, customSnippet?: string) => {
     const emailLog = sentEmails.find(s => s.id === sentEmailId);
