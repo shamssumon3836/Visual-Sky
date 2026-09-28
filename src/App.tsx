@@ -255,14 +255,8 @@ const MainContent: React.FC = () => {
       <div className="flex-1 flex overflow-hidden min-h-0">
         <Sidebar onOpenBilling={() => setIsBillingOpen(true)} />
 
-        <main
-          className={`flex-1 overflow-x-hidden min-h-0 relative ${
-            activeTab === 'inbox'
-              ? 'overflow-hidden flex flex-col pb-14 md:pb-0'
-              : 'overflow-y-auto pb-20 md:pb-6'
-          }`}
-        >
-          <div className={activeTab === 'inbox' ? 'flex-1 h-full min-h-0 flex flex-col overflow-hidden' : 'min-h-full'}>
+        <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 pb-20 md:pb-6 relative">
+          <div className="saas-view-enter min-h-full">
             {renderActiveView()}
             <CampaignManager isHidden={activeTab !== 'campaigns' || isCampaignsRestricted} />
           </div>
