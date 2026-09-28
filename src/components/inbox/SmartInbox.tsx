@@ -113,8 +113,19 @@ export const SmartInbox: React.FC = () => {
   const [customLabelInput, setCustomLabelInput] = useState<string>('');
   const [mobileShowChat, setMobileShowChat] = useState<boolean>(false);
   const [showAiReplyDrawer, setShowAiReplyDrawer] = useState<boolean>(false);
+  const [isSyncingManual, setIsSyncingManual] = useState<boolean>(false);
   const replyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const handleManualSync = async () => {
+    if (isSyncingManual) return;
+    setIsSyncingManual(true);
+    try {
+      await syncInboxReplies(undefined, false);
+    } catch {} finally {
+      setIsSyncingManual(false);
+    }
+  };
 
   // New Compose Modal
   const [showComposeModal, setShowComposeModal] = useState<boolean>(false);
@@ -568,7 +579,8 @@ export const SmartInbox: React.FC = () => {
             {/* Unified Mailbox Folder Switcher Pills */}
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
               {[
-                { id: 'inbox', label: 'Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash && t.unreadCount > 0).length },
+                { id: 'inbox', label: 'Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash).length },
+                { id: 'sent', label: 'Sent', icon: Send, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'user')).length },
                 { id: 'starred', label: 'Starred', icon: Star, count: threads.filter(t => t.isStarred && !t.isTrash).length },
                 { id: 'high_intent', label: 'Hot Leads', icon: Flame, count: threads.filter(t => t.labels.includes('Hot Lead') && !t.isTrash).length },
                 { id: 'meetings', label: 'Meetings', icon: Calendar, count: threads.filter(t => t.labels.includes('Meeting Scheduled') && !t.isTrash).length },
@@ -606,6 +618,17 @@ export const SmartInbox: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleManualSync}
+                disabled={isSyncingManual}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-950/80 hover:bg-slate-800 text-cyan-300 border border-slate-800 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                title="Sync Incoming IMAP Replies Now"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncingManual ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">{isSyncingManual ? 'Syncing...' : 'Sync'}</span>
+              </button>
+
               {selectedFolder === 'trash' && threads.some(t => t.isTrash) && selectedThreadIds.length === 0 && (
                 <button
                   type="button"
@@ -684,7 +707,7 @@ export const SmartInbox: React.FC = () => {
         }`}>
           
           {/* Gmail Top Categories Tabs */}
-          <div className="flex items-center border-b border-slate-800 bg-slate-950/90 overflow-x-auto text-xs p-1">
+          <div className="flex items-center border-b border-slate-800 bg-slate-950/90 overflow-x-auto text-xs p-1 shrink-0">
             {[
               { id: 'primary', label: 'Primary' },
               { id: 'interested', label: 'High Intent' },
@@ -706,18 +729,39 @@ export const SmartInbox: React.FC = () => {
             ))}
           </div>
 
+          {/* Select All & Thread Count Sub-header */}
+          {filteredThreads.length > 0 && (
+            <div className="px-3.5 py-2 border-b border-slate-800/80 bg-slate-950/50 flex items-center justify-between text-[11px] text-slate-400 shrink-0">
+              <label className="flex items-center gap-2 cursor-pointer select-none hover:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={filteredThreads.length > 0 && selectedThreadIds.length === filteredThreads.length}
+                  onChange={handleToggleSelectAll}
+                  className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 cursor-pointer w-3.5 h-3.5"
+                />
+                <span className="font-bold">Select All ({filteredThreads.length})</span>
+              </label>
+              {threads.filter(t => !t.isTrash && t.unreadCount > 0).length > 0 && (
+                <span className="text-[10px] font-bold text-cyan-400">
+                  {threads.filter(t => !t.isTrash && t.unreadCount > 0).length} unread
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Threads List */}
-          <div className="flex-1 overflow-y-auto divide-y divide-slate-800/60">
+          <div className="flex-1 overflow-y-auto divide-y divide-slate-800/60 min-h-0">
             {filteredThreads.length === 0 ? (
               <div className="p-8 text-center space-y-2">
                 <Inbox className="w-8 h-8 text-slate-600 mx-auto" />
                 <div className="text-xs font-bold text-slate-400">No emails in this mailbox</div>
-                <p className="text-[11px] text-slate-500">Incoming replies will instantly appear here.</p>
+                <p className="text-[11px] text-slate-500">Incoming replies and sent conversations will appear here.</p>
               </div>
             ) : (
               filteredThreads.map(t => {
                 const isSelected = t.id === currentThread?.id;
                 const isChecked = selectedThreadIds.includes(t.id);
+                const msgCount = Array.isArray(t.messages) ? t.messages.length : 1;
 
                 return (
                   <div
@@ -751,11 +795,18 @@ export const SmartInbox: React.FC = () => {
                     {/* Sender Info & Preview */}
                     <div className="min-w-0 flex-1 space-y-1">
                       <div className="flex items-center justify-between gap-1">
-                        <span className={`text-xs truncate ${t.unreadCount > 0 ? 'font-black text-slate-100' : 'text-slate-300'}`}>
-                          {t.leadName}
-                        </span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className={`text-xs truncate ${t.unreadCount > 0 ? 'font-black text-slate-100' : 'text-slate-300'}`}>
+                            {t.leadName}
+                          </span>
+                          {msgCount > 1 && (
+                            <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-cyan-300 shrink-0">
+                              {msgCount}
+                            </span>
+                          )}
+                        </div>
                         <span className="text-[10px] text-slate-500 font-mono shrink-0">
-                          {t.updatedAt || 'Today'}
+                          {t.lastMessageDate || t.updatedAt || 'Today'}
                         </span>
                       </div>
 
@@ -819,14 +870,14 @@ export const SmartInbox: React.FC = () => {
         </div>
 
         {/* 3. GMAIL READING PANE & THREAD CONVERSATION (Right Column) */}
-        <div className={`flex-1 bg-slate-900/90 border border-slate-800 rounded-3xl flex flex-col justify-between overflow-hidden shadow-2xl ${
+        <div className={`flex-1 min-w-0 min-h-0 bg-slate-900/90 border border-slate-800 rounded-2xl flex flex-col justify-between overflow-hidden shadow-2xl ${
           mobileShowChat ? 'flex' : 'hidden md:flex'
         }`}>
           {currentThread ? (
             <>
               {/* Message Header */}
-              <div className="p-3 sm:p-4 border-b border-slate-800 bg-slate-950/80 backdrop-blur-md flex items-center justify-between gap-2 sm:gap-3 shrink-0">
-                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+              <div className="p-3 sm:p-4 border-b border-slate-800 bg-slate-950/80 backdrop-blur-md flex flex-wrap items-center justify-between gap-2 sm:gap-3 shrink-0">
+                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
                   <button
                     type="button"
                     onClick={() => setMobileShowChat(false)}
@@ -836,9 +887,27 @@ export const SmartInbox: React.FC = () => {
                     <span>Inbox</span>
                   </button>
 
-                  <div className="min-w-0">
-                    <h2 className="text-sm sm:text-base font-black text-slate-100 truncate">{currentThread.subject}</h2>
-                    <div className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-sm sm:text-base font-black text-slate-100 truncate">{currentThread.subject}</h2>
+                      {currentThread.labels && currentThread.labels.map((lbl, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 flex items-center gap-1"
+                        >
+                          <span>{lbl}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeThreadLabel(currentThread.id, lbl)}
+                            className="hover:text-rose-400 cursor-pointer"
+                            title="Remove label"
+                          >
+                            <X className="w-2.5 h-2.5" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1.5 sm:gap-2 flex-wrap mt-0.5">
                       <span className="font-bold text-slate-200">{currentThread.leadName}</span>
                       <span>&bull;</span>
                       <span className="text-cyan-400 font-mono truncate max-w-[180px] sm:max-w-none">{currentThread.leadEmail}</span>
@@ -854,7 +923,7 @@ export const SmartInbox: React.FC = () => {
                 </div>
 
                 {/* Quick Actions */}
-                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 relative">
                   {currentThread.isTrash ? (
                     <>
                       <button
@@ -878,6 +947,66 @@ export const SmartInbox: React.FC = () => {
                     </>
                   ) : (
                     <>
+                      {/* Label Manager Dropdown */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setShowLabelMenu(prev => !prev)}
+                          className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-bold flex items-center gap-1 cursor-pointer transition"
+                          title="Add or Manage Labels"
+                        >
+                          <Tag className="w-3.5 h-3.5 text-cyan-400" />
+                          <span className="hidden sm:inline">Label</span>
+                        </button>
+                        {showLabelMenu && (
+                          <div className="absolute right-0 mt-2 w-52 bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl p-2.5 z-30 space-y-2">
+                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">Assign Label</div>
+                            <div className="space-y-1">
+                              {labelPresets.map(preset => {
+                                const hasLabel = currentThread.labels.includes(preset.name);
+                                return (
+                                  <button
+                                    key={preset.name}
+                                    type="button"
+                                    onClick={() => {
+                                      if (hasLabel) removeThreadLabel(currentThread.id, preset.name);
+                                      else addThreadLabel(currentThread.id, preset.name);
+                                      setShowLabelMenu(false);
+                                    }}
+                                    className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl hover:bg-slate-900 text-xs text-slate-200 cursor-pointer"
+                                  >
+                                    <span>{preset.name}</span>
+                                    {hasLabel && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <div className="flex items-center gap-1 pt-1 border-t border-slate-800">
+                              <input
+                                type="text"
+                                value={customLabelInput}
+                                onChange={(e) => setCustomLabelInput(e.target.value)}
+                                placeholder="Custom label..."
+                                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:border-cyan-500 min-w-0"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (customLabelInput.trim()) {
+                                    addThreadLabel(currentThread.id, customLabelInput.trim());
+                                    setCustomLabelInput('');
+                                    setShowLabelMenu(false);
+                                  }
+                                }}
+                                className="px-2 py-1 rounded-lg bg-cyan-600 text-white text-[10px] font-bold cursor-pointer"
+                              >
+                                Add
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
                       <button
                         type="button"
                         onClick={() => {
@@ -914,7 +1043,20 @@ export const SmartInbox: React.FC = () => {
                 ref={messagesScrollRef}
                 className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0"
               >
-                {(Array.isArray(currentThread.messages) ? currentThread.messages : []).map((m, idx, arr) => {
+                {(Array.isArray(currentThread.messages) && currentThread.messages.length > 0
+                  ? currentThread.messages
+                  : [
+                      {
+                        id: `${currentThread.id}-fallback`,
+                        sender: 'lead' as const,
+                        senderName: currentThread.leadName,
+                        senderEmail: currentThread.leadEmail,
+                        body: currentThread.lastMessage || 'No message body.',
+                        timestamp: currentThread.lastMessageDate || currentThread.updatedAt || 'Today',
+                        isRead: true
+                      }
+                    ]
+                ).map((m, idx, arr) => {
                   const isLead = m.sender === 'lead';
                   const isLatest = idx === arr.length - 1;
                   return (
@@ -962,6 +1104,15 @@ export const SmartInbox: React.FC = () => {
                           <span className="text-[10px] sm:text-xs text-slate-400 font-mono">
                             {m.timestamp || 'Just now'}
                           </span>
+                          <button
+                            type="button"
+                            onClick={() => replyTextareaRef.current?.focus()}
+                            className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-cyan-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer transition"
+                            title="Reply to this message"
+                          >
+                            <Reply className="w-3 h-3" />
+                            <span className="hidden sm:inline">Reply</span>
+                          </button>
                         </div>
                       </div>
 
@@ -974,12 +1125,17 @@ export const SmartInbox: React.FC = () => {
               </div>
 
               {/* Permanently Docked Bottom Reply Composer (Always in place at the bottom of the conversation) */}
-              <div className="shrink-0 p-2.5 sm:p-3 bg-slate-950 border-t border-slate-800/90 space-y-2 shadow-2xl">
+              <div className="shrink-0 p-2.5 sm:p-3.5 bg-slate-950 border-t border-slate-800/90 space-y-2 shadow-2xl">
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
                     if (!replyText.trim()) {
                       replyTextareaRef.current?.focus();
+                      addNotification({
+                        title: 'Reply Message Empty ✍️',
+                        message: 'অনুগ্রহ করে নিচে আপনার রিপ্লাই লিখুন অথবা 1-Click AI Draft বাটনে ক্লিক করুন।',
+                        type: 'system'
+                      });
                       return;
                     }
                     handleSendReply(e);
@@ -989,7 +1145,12 @@ export const SmartInbox: React.FC = () => {
                   {/* Compact Single-Row Reply Toolbar */}
                   <div className="flex flex-wrap items-center justify-between gap-1.5">
                     <div className="flex items-center gap-1.5 flex-wrap min-w-0 flex-1">
-                      {activeSmtpAccounts.length > 0 ? (
+                      <div className="flex items-center gap-1 bg-slate-900 border border-cyan-500/30 rounded-xl px-2 py-1 text-[11px] text-slate-200 shrink-0">
+                        <span className="text-cyan-400 font-black uppercase text-[9px]">To:</span>
+                        <span className="font-bold text-slate-100 truncate max-w-[140px] sm:max-w-[200px]">{currentThread.leadEmail}</span>
+                      </div>
+
+                      {activeSmtpAccounts.length > 0 && (
                         <div className="flex items-center gap-1.5 min-w-0 bg-slate-900 border border-emerald-500/30 rounded-xl px-2 py-1">
                           <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-black uppercase tracking-wider shrink-0">
                             From
@@ -997,7 +1158,7 @@ export const SmartInbox: React.FC = () => {
                           <select
                             value={replySmtpId}
                             onChange={(e) => setReplySmtpId(e.target.value)}
-                            className="bg-transparent text-[11px] font-bold text-cyan-300 focus:outline-none cursor-pointer truncate max-w-[170px] sm:max-w-[240px]"
+                            className="bg-transparent text-[11px] font-bold text-cyan-300 focus:outline-none cursor-pointer truncate max-w-[160px] sm:max-w-[220px]"
                           >
                             {activeSmtpAccounts.map(acc => (
                               <option key={acc.id} value={acc.id} className="bg-slate-950 text-slate-100">
@@ -1005,11 +1166,6 @@ export const SmartInbox: React.FC = () => {
                               </option>
                             ))}
                           </select>
-                        </div>
-                      ) : (
-                        <div className="text-[11px] font-bold text-cyan-300 flex items-center gap-1.5 px-1">
-                          <Reply className="w-3.5 h-3.5" />
-                          <span className="truncate">Replying to {currentThread.leadName} ({currentThread.leadEmail})</span>
                         </div>
                       )}
 
@@ -1024,7 +1180,7 @@ export const SmartInbox: React.FC = () => {
                             }
                           }}
                           defaultValue=""
-                          className="bg-transparent text-slate-200 text-[11px] font-bold cursor-pointer focus:outline-none max-w-[135px] sm:max-w-[180px] truncate"
+                          className="bg-transparent text-slate-200 text-[11px] font-bold cursor-pointer focus:outline-none max-w-[130px] sm:max-w-[170px] truncate"
                         >
                           <option value="" disabled className="bg-slate-900 text-slate-400">⚡ Template ({activeEmailTemplates.length})</option>
                           {activeEmailTemplates.map(t => (
@@ -1036,16 +1192,33 @@ export const SmartInbox: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Toggle AI Reply Copilot Button */}
-                    <button
-                      type="button"
-                      onClick={() => setShowAiReplyDrawer(prev => !prev)}
-                      className="px-2.5 py-1 rounded-xl bg-purple-950/60 hover:bg-purple-900/70 border border-purple-500/40 text-purple-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0"
-                    >
-                      <Sparkles className="w-3 h-3 text-purple-400" />
-                      <span>AI Copilot</span>
-                      <ChevronDown className={`w-3 h-3 transition-transform ${showAiReplyDrawer ? 'rotate-180' : ''}`} />
-                    </button>
+                    {/* Quick AI Draft Pills & Copilot Drawer Toggle */}
+                    <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+                      {[
+                        { id: 'demo', label: '📅 15m Demo' },
+                        { id: 'pricing', label: '💰 Pricing' },
+                        { id: 'friendly', label: '🤝 Follow-Up' },
+                      ].map(btn => (
+                        <button
+                          key={btn.id}
+                          type="button"
+                          disabled={isGeneratingAiReply}
+                          onClick={() => handleAiDraft(btn.id as any)}
+                          className="px-2 py-1 rounded-xl bg-purple-950/60 hover:bg-purple-900 text-purple-200 border border-purple-700/50 text-[10px] font-bold whitespace-nowrap transition cursor-pointer disabled:opacity-50"
+                        >
+                          {btn.label}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setShowAiReplyDrawer(prev => !prev)}
+                        className="px-2.5 py-1 rounded-xl bg-purple-600/25 hover:bg-purple-600/40 border border-purple-500/40 text-purple-200 text-[10px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0"
+                      >
+                        <Sparkles className="w-3 h-3 text-purple-300" />
+                        <span>AI Copilot</span>
+                        <ChevronDown className={`w-3 h-3 transition-transform ${showAiReplyDrawer ? 'rotate-180' : ''}`} />
+                      </button>
+                    </div>
                   </div>
 
                   {/* Optional Collapsible AI Copilot Drawer */}
@@ -1115,10 +1288,10 @@ export const SmartInbox: React.FC = () => {
                   )}
 
                   {/* Message Input & Always-Visible Send Reply Button Side-by-Side */}
-                  <div className="flex items-stretch gap-2">
+                  <div className="flex items-stretch gap-2.5">
                     <textarea
                       ref={replyTextareaRef}
-                      rows={2}
+                      rows={3}
                       value={replyText}
                       onChange={(e) => setReplyText(e.target.value)}
                       onKeyDown={(e) => {
@@ -1127,16 +1300,16 @@ export const SmartInbox: React.FC = () => {
                         }
                       }}
                       placeholder={`Write your reply to ${currentThread.leadName} (${currentThread.leadEmail})...`}
-                      className="flex-1 bg-slate-900 border border-slate-700/90 rounded-xl px-3 py-2 text-xs md:text-sm text-slate-100 placeholder-slate-400 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-500/30 shadow-inner resize-none"
+                      className="flex-1 bg-slate-900 border border-slate-700/90 rounded-xl px-3.5 py-2.5 text-xs md:text-sm text-slate-100 placeholder-slate-400 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-500/30 shadow-inner resize-none"
                     />
 
                     <button
                       type="submit"
-                      className="px-4 sm:px-5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-extrabold text-xs sm:text-sm flex flex-col sm:flex-row items-center justify-center gap-1.5 shadow-lg shadow-blue-500/25 transition cursor-pointer shrink-0"
-                      title="Send Reply (Ctrl+Enter)"
+                      className="px-5 sm:px-6 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-xs sm:text-sm flex flex-col sm:flex-row items-center justify-center gap-2 shadow-lg shadow-cyan-500/25 transition cursor-pointer shrink-0"
+                      title="Send Reply Now (Ctrl+Enter)"
                     >
                       <Send className="w-4 h-4" />
-                      <span>Reply</span>
+                      <span>Send Reply</span>
                     </button>
                   </div>
                 </form>

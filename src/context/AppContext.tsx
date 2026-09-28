@@ -526,20 +526,42 @@ const normalizeThreadSubjectKey = (sub: string) =>
     .trim()
     .toLowerCase();
 
+const getPermanentlyDeletedSet = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem('visualsky_deleted_imap_msgs');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return new Set<string>(parsed);
+    }
+  } catch {}
+  return new Set<string>();
+};
+
 const sanitizeThreadsArray = (list: EmailThread[]): EmailThread[] => {
   if (!Array.isArray(list)) return [];
-  const splitThreads: EmailThread[] = [];
+  const deletedSet = getPermanentlyDeletedSet();
+  const byLeadEmail = new Map<string, EmailThread>();
 
   for (const t of list) {
     if (!t || DEMO_THREAD_IDS.has(t.id)) continue;
+    const baseThreadId = String(t.id || '').replace(/-split-\d+$/, '');
+    if (deletedSet.has(`thread:${t.id}`) || deletedSet.has(`thread:${baseThreadId}`) || deletedSet.has(String(t.id))) {
+      continue;
+    }
 
     const rawMessages = Array.isArray(t.messages) ? t.messages : [];
-    // Deduplicate identical messages inside the thread
     const seenMsgKeys = new Set<string>();
     const dedupedMessages: EmailMessage[] = [];
+
     for (const m of rawMessages) {
       if (!m) continue;
-      const cleanedBody = cleanEmailBodyText(m.body, t.leadCompany, t.leadCompany, m.sender === 'lead' ? (m.senderName || t.leadName) : t.leadName);
+      if (m.id && deletedSet.has(m.id)) continue;
+      const cleanedBody = cleanEmailBodyText(
+        m.body,
+        t.leadCompany,
+        t.leadCompany,
+        m.sender === 'lead' ? (m.senderName || t.leadName) : t.leadName
+      );
       const msgKey = m.id || `${m.sender}-${m.senderEmail || ''}-${m.timestamp || ''}-${cleanedBody.slice(0, 80)}`;
       if (seenMsgKeys.has(msgKey)) continue;
       seenMsgKeys.add(msgKey);
@@ -549,77 +571,54 @@ const sanitizeThreadsArray = (list: EmailThread[]): EmailThread[] => {
       });
     }
 
-    if (dedupedMessages.length <= 1) {
-      const latestMsgBody =
-        dedupedMessages.length > 0
-          ? dedupedMessages[dedupedMessages.length - 1].body
-          : cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName);
-      splitThreads.push({
-        ...t,
-        lastMessage: (latestMsgBody || cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName)).slice(0, 100),
-        messages: dedupedMessages
-      });
+    // If thread had messages originally and all of them were permanently deleted, skip thread
+    if (rawMessages.length > 0 && dedupedMessages.length === 0) {
       continue;
     }
 
-    // Check if this thread accidentally merged messages from different lead emails or unrelated subjects
-    const groups = new Map<string, EmailMessage[]>();
-    const baseLeadEmail = (t.leadEmail || '').trim().toLowerCase();
-    const baseSubKey = normalizeThreadSubjectKey(t.subject);
+    const leadEmailKey = String(t.leadEmail || t.id).trim().toLowerCase();
+    const latestMsgBody =
+      dedupedMessages.length > 0
+        ? dedupedMessages[dedupedMessages.length - 1].body
+        : cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName);
 
-    for (const m of dedupedMessages) {
-      const msgLeadEmail =
-        m.sender === 'lead'
-          ? (m.senderEmail || baseLeadEmail).trim().toLowerCase()
-          : (m.recipientEmail || baseLeadEmail).trim().toLowerCase();
-      const msgSubKey = normalizeThreadSubjectKey(m.subject || t.subject) || baseSubKey;
-      const groupKey = `${msgLeadEmail || baseLeadEmail}::${msgSubKey || baseSubKey}`;
-      const existing = groups.get(groupKey) || [];
-      existing.push(m);
-      groups.set(groupKey, existing);
-    }
+    const normalizedThread: EmailThread = {
+      ...t,
+      id: baseThreadId || t.id,
+      lastMessage: (latestMsgBody || cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName)).slice(0, 100),
+      messages: dedupedMessages
+    };
 
-    if (groups.size <= 1) {
-      const latestMsgBody = dedupedMessages[dedupedMessages.length - 1].body;
-      splitThreads.push({
-        ...t,
-        lastMessage: (latestMsgBody || cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName)).slice(0, 100),
-        messages: dedupedMessages
-      });
+    const existingForLead = byLeadEmail.get(leadEmailKey);
+    if (!existingForLead) {
+      byLeadEmail.set(leadEmailKey, normalizedThread);
     } else {
-      let groupIdx = 0;
-      for (const [groupKey, groupMsgs] of groups.entries()) {
-        const [grpEmail] = groupKey.split('::');
-        const firstLeadMsg = groupMsgs.find(m => m.sender === 'lead');
-        const latestMsg = groupMsgs[groupMsgs.length - 1];
-        const subThreadId = groupIdx === 0 ? t.id : `${t.id}-split-${groupIdx}`;
-        const resolvedEmail = grpEmail || t.leadEmail;
-        const resolvedName =
-          firstLeadMsg?.senderName ||
-          (resolvedEmail === baseLeadEmail ? t.leadName : resolvedEmail.split('@')[0].replace(/[._-]/g, ' '));
-        const resolvedCompany =
-          resolvedEmail === baseLeadEmail
-            ? t.leadCompany
-            : resolvedEmail.split('@')[1]?.split('.')[0] || t.leadCompany;
-
-        splitThreads.push({
-          ...t,
-          id: subThreadId,
-          leadName: resolvedName,
-          leadEmail: resolvedEmail,
-          leadCompany: resolvedCompany,
-          subject: latestMsg.subject || t.subject,
-          lastMessage: (latestMsg.body || '').slice(0, 100),
-          lastMessageDate: latestMsg.timestamp || t.lastMessageDate,
-          updatedAt: latestMsg.timestamp || t.updatedAt,
-          messages: groupMsgs.map(gm => ({ ...gm, threadId: subThreadId }))
-        });
-        groupIdx++;
+      // Merge messages chronologically for the same lead email so conversations never split into multiple fragments
+      const combinedMsgs = [...existingForLead.messages];
+      const existingKeys = new Set(
+        combinedMsgs.map(m => m.id || `${m.sender}-${m.timestamp || ''}-${(m.body || '').slice(0, 80)}`)
+      );
+      for (const m of normalizedThread.messages) {
+        const k = m.id || `${m.sender}-${m.timestamp || ''}-${(m.body || '').slice(0, 80)}`;
+        if (!existingKeys.has(k)) {
+          existingKeys.add(k);
+          combinedMsgs.push({ ...m, threadId: existingForLead.id });
+        }
       }
+      const lastComb = combinedMsgs[combinedMsgs.length - 1];
+      byLeadEmail.set(leadEmailKey, {
+        ...existingForLead,
+        isTrash: existingForLead.isTrash && normalizedThread.isTrash,
+        unreadCount: Math.max(existingForLead.unreadCount || 0, normalizedThread.unreadCount || 0),
+        lastMessage: lastComb ? lastComb.body.slice(0, 100) : existingForLead.lastMessage,
+        lastMessageDate: lastComb?.timestamp || existingForLead.lastMessageDate,
+        updatedAt: lastComb?.timestamp || existingForLead.updatedAt,
+        messages: combinedMsgs
+      });
     }
   }
 
-  return splitThreads;
+  return Array.from(byLeadEmail.values());
 };
 
 export const MAX_AGENCY_GMAIL_ACCOUNTS = 3;
@@ -1162,28 +1161,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cleanUserId = (currentUser.id || currentUser.supabaseId || '').trim();
 
     try {
-      // Collect latest collections, backing up with state or localStorage if ref is empty
-      const readFallback = (current: any[], key: string) => {
-        if (Array.isArray(current) && current.length > 0) return current;
-        try {
-          const cached = localStorage.getItem(key);
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-          }
-        } catch {}
-        return current || [];
-      };
+      const finalLeads = Array.isArray(latestWorkspaceRef.current.leads) ? latestWorkspaceRef.current.leads : leads;
+      const finalCampaigns = Array.isArray(latestWorkspaceRef.current.campaigns) ? latestWorkspaceRef.current.campaigns : campaigns;
+      const finalSmtp = Array.isArray(latestWorkspaceRef.current.smtpAccounts) ? latestWorkspaceRef.current.smtpAccounts : smtpAccounts;
+      const finalTemplates = Array.isArray(latestWorkspaceRef.current.emailTemplates) ? latestWorkspaceRef.current.emailTemplates : emailTemplates;
+      const finalTags = Array.isArray(latestWorkspaceRef.current.leadTags) ? latestWorkspaceRef.current.leadTags : leadTags;
+      const finalThreads = sanitizeThreadsArray(Array.isArray(latestWorkspaceRef.current.threads) ? latestWorkspaceRef.current.threads : threads);
+      const finalSent = Array.isArray(latestWorkspaceRef.current.sentEmails) ? latestWorkspaceRef.current.sentEmails : sentEmails;
+      const deletedThreadIds = Array.from(getPermanentlyDeletedSet());
 
-      const finalLeads = readFallback(latestWorkspaceRef.current.leads || leads, 'visualsky_leads');
-      const finalCampaigns = readFallback(latestWorkspaceRef.current.campaigns || campaigns, 'visualsky_campaigns');
-      const finalSmtp = readFallback(latestWorkspaceRef.current.smtpAccounts || smtpAccounts, 'visualsky_smtp');
-      const finalTemplates = readFallback(latestWorkspaceRef.current.emailTemplates || emailTemplates, 'visualsky_templates');
-      const finalTags = readFallback(latestWorkspaceRef.current.leadTags || leadTags, 'visualsky_tags');
-      const finalThreads = readFallback(latestWorkspaceRef.current.threads || threads, 'visualsky_threads');
-      const finalSent = readFallback(latestWorkspaceRef.current.sentEmails || sentEmails, 'visualsky_sent_emails');
-
-      const payload: WorkspaceData = {
+      const payload: any = {
         ...latestWorkspaceRef.current,
         leads: finalLeads,
         campaigns: finalCampaigns,
@@ -1191,6 +1178,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         emailTemplates: finalTemplates,
         leadTags: finalTags,
         threads: finalThreads,
+        deletedThreadIds,
         sentEmails: finalSent,
         userProfile: {
           quotaUsed: currentUser.quotaUsed,
@@ -1230,6 +1218,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Immediately update in ref so any subsequent read has the latest created items
     (latestWorkspaceRef.current as any)[resource] = items;
+    if (resource === 'threads') {
+      try {
+        localStorage.setItem('visualsky_threads', JSON.stringify(items));
+      } catch {}
+    }
 
     try {
       await fetch(`/api/user-data/${encodeURIComponent(cleanEmail)}/resource/${encodeURIComponent(resource)}`, {
@@ -1247,6 +1240,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         email: cleanEmail,
         data: {
           ...latestWorkspaceRef.current,
+          deletedThreadIds: Array.from(getPermanentlyDeletedSet()),
           [resource]: items
         }
       });
@@ -1336,6 +1330,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         
         // 7. Threads Hydration (strip legacy demo IDs and clean '>' quotes / tokens)
+        if (Array.isArray(data.deletedThreadIds) && data.deletedThreadIds.length > 0) {
+          try {
+            const existingDel = getPermanentlyDeletedSet();
+            for (const delId of data.deletedThreadIds) {
+              if (delId) existingDel.add(String(delId));
+            }
+            localStorage.setItem('visualsky_deleted_imap_msgs', JSON.stringify(Array.from(existingDel).slice(-3000)));
+          } catch {}
+        }
         if (Array.isArray(data.threads)) {
           const mergedThreads = mergeById(data.threads, latestWorkspaceRef.current.threads || [], DEMO_THREAD_IDS);
           const liveThreads = sanitizeThreadsArray(mergedThreads);
@@ -2021,38 +2024,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const markThreadRead = (threadId: string) => {
-    setThreads(prev => prev.map(t => {
-      if (t.id === threadId) {
-        return {
-          ...t,
-          unreadCount: 0,
-          messages: t.messages.map(m => ({ ...m, isRead: true }))
-        };
-      }
-      return t;
-    }));
+    setThreads(prev => {
+      const next = prev.map(t => {
+        if (t.id === threadId) {
+          return {
+            ...t,
+            unreadCount: 0,
+            messages: t.messages.map(m => ({ ...m, isRead: true }))
+          };
+        }
+        return t;
+      });
+      (latestWorkspaceRef.current as any).threads = next;
+      persistResourceDirectly('threads', next);
+      return next;
+    });
   };
 
   const toggleThreadStar = (threadId: string) => {
-    setThreads(prev => prev.map(t => t.id === threadId ? { ...t, isStarred: !t.isStarred } : t));
+    setThreads(prev => {
+      const next = prev.map(t => t.id === threadId ? { ...t, isStarred: !t.isStarred } : t);
+      (latestWorkspaceRef.current as any).threads = next;
+      persistResourceDirectly('threads', next);
+      return next;
+    });
   };
 
   const addThreadLabel = (threadId: string, label: string) => {
-    setThreads(prev => prev.map(t => {
-      if (t.id === threadId && !t.labels.includes(label)) {
-        return { ...t, labels: [...t.labels, label] };
-      }
-      return t;
-    }));
+    setThreads(prev => {
+      const next = prev.map(t => {
+        if (t.id === threadId && !t.labels.includes(label)) {
+          return { ...t, labels: [...t.labels, label] };
+        }
+        return t;
+      });
+      (latestWorkspaceRef.current as any).threads = next;
+      persistResourceDirectly('threads', next);
+      return next;
+    });
   };
 
   const removeThreadLabel = (threadId: string, label: string) => {
-    setThreads(prev => prev.map(t => {
-      if (t.id === threadId) {
-        return { ...t, labels: t.labels.filter(l => l !== label) };
-      }
-      return t;
-    }));
+    setThreads(prev => {
+      const next = prev.map(t => {
+        if (t.id === threadId) {
+          return { ...t, labels: t.labels.filter(l => l !== label) };
+        }
+        return t;
+      });
+      (latestWorkspaceRef.current as any).threads = next;
+      persistResourceDirectly('threads', next);
+      return next;
+    });
   };
 
   // Persistent registry of permanently deleted IMAP message IDs and thread keys so deleted Trash items never resurrect
@@ -2064,7 +2087,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const set = new Set<string>(existing);
       for (const t of deletedThreads) {
         if (!t) continue;
-        if (t.id) set.add(`thread:${t.id}`);
+        if (t.id) {
+          set.add(`thread:${t.id}`);
+          set.add(`thread:${String(t.id).replace(/-split-\d+$/, '')}`);
+          set.add(String(t.id));
+        }
         if (Array.isArray(t.messages)) {
           for (const m of t.messages) {
             if (m?.id) set.add(m.id);
@@ -2078,9 +2105,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteThreadToTrash = (threadId: string) => {
     setThreads(prev => {
-      const refList = latestWorkspaceRef.current.threads || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const next = base.map(t =>
+      const next = prev.map(t =>
         t.id === threadId ? { ...t, isTrash: true, deletedAt: new Date().toISOString() } : t
       );
       (latestWorkspaceRef.current as any).threads = next;
@@ -2097,9 +2122,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const restoreThread = (threadId: string) => {
     setThreads(prev => {
-      const refList = latestWorkspaceRef.current.threads || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const next = base.map(t =>
+      const next = prev.map(t =>
         t.id === threadId ? { ...t, isTrash: false, deletedAt: undefined } : t
       );
       (latestWorkspaceRef.current as any).threads = next;
@@ -2116,11 +2139,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const permanentDeleteThread = (threadId: string) => {
     setThreads(prev => {
-      const refList = latestWorkspaceRef.current.threads || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const toDelete = base.filter(t => t.id === threadId);
+      const toDelete = prev.filter(t => t.id === threadId);
       recordPermanentlyDeletedThreads(toDelete);
-      const next = base.filter(t => t.id !== threadId);
+      const next = prev.filter(t => t.id !== threadId);
       (latestWorkspaceRef.current as any).threads = next;
       persistResourceDirectly('threads', next);
       return next;
@@ -2134,9 +2155,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const bulkRestoreThreads = (threadIds: string[]) => {
     setThreads(prev => {
-      const refList = latestWorkspaceRef.current.threads || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const next = base.map(t =>
+      const next = prev.map(t =>
         threadIds.includes(t.id) ? { ...t, isTrash: false, deletedAt: undefined } : t
       );
       (latestWorkspaceRef.current as any).threads = next;
@@ -2153,11 +2172,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const bulkPermanentDeleteThreads = (threadIds: string[]) => {
     setThreads(prev => {
-      const refList = latestWorkspaceRef.current.threads || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const toDelete = base.filter(t => threadIds.includes(t.id));
+      const toDelete = prev.filter(t => threadIds.includes(t.id));
       recordPermanentlyDeletedThreads(toDelete);
-      const next = base.filter(t => !threadIds.includes(t.id));
+      const next = prev.filter(t => !threadIds.includes(t.id));
       (latestWorkspaceRef.current as any).threads = next;
       persistResourceDirectly('threads', next);
       return next;
@@ -2619,6 +2636,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (initialStatus !== 'failed' && initialStatus !== 'bounced') {
+      // Ensure campaign/outbound sent emails also create or update a thread in Smart Inbox so users can view & follow up on all sent conversations
+      if (logData.campaignName !== 'Smart Inbox Reply' && logData.campaignName !== 'Direct Outreach Mailer' && logData.recipientEmail) {
+        const cleanRecip = logData.recipientEmail.trim().toLowerCase();
+        const nowFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const cleanedBody = cleanEmailBodyText(
+          logData.body || '',
+          logData.recipientCompany,
+          logData.recipientCompany,
+          logData.recipientName
+        );
+        setThreads(prev => {
+          const base = prev.length >= (latestWorkspaceRef.current.threads?.length || 0) ? prev : (latestWorkspaceRef.current.threads || prev);
+          const existing = base.find(t => t.leadEmail?.trim().toLowerCase() === cleanRecip);
+          const threadId = existing?.id || `thread-out-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+          const outMsg: EmailMessage = {
+            id: `msg-camp-${newLog.id}`,
+            threadId,
+            sender: 'user',
+            senderName: currentUser.name || logData.smtpAccountName || 'Me',
+            senderEmail: logData.senderEmail || currentUser.email,
+            recipientName: logData.recipientName || cleanRecip.split('@')[0],
+            recipientEmail: logData.recipientEmail,
+            smtpAccountId: logData.smtpAccountId,
+            timestamp: nowFormatted,
+            subject: logData.subject,
+            body: cleanedBody,
+            isRead: true,
+            status: 'sent'
+          };
+          let nextThreads: EmailThread[];
+          if (existing) {
+            const updated: EmailThread = {
+              ...existing,
+              isTrash: false,
+              smtpAccountId: logData.smtpAccountId || existing.smtpAccountId,
+              smtpEmail: logData.senderEmail || existing.smtpEmail,
+              subject: logData.subject || existing.subject,
+              lastMessage: cleanedBody.slice(0, 100),
+              lastMessageDate: nowFormatted,
+              updatedAt: nowFormatted,
+              messages: [...existing.messages, outMsg]
+            };
+            nextThreads = [updated, ...base.filter(t => t.id !== existing.id)];
+          } else {
+            const newThread: EmailThread = {
+              id: threadId,
+              leadId: `lead-${Date.now()}`,
+              leadName: logData.recipientName || cleanRecip.split('@')[0],
+              leadEmail: logData.recipientEmail,
+              leadCompany: logData.recipientCompany || cleanRecip.split('@')[1]?.split('.')[0] || 'Company',
+              smtpAccountId: logData.smtpAccountId,
+              smtpEmail: logData.senderEmail,
+              subject: logData.subject,
+              lastMessage: cleanedBody.slice(0, 100),
+              lastMessageDate: nowFormatted,
+              updatedAt: nowFormatted,
+              unreadCount: 0,
+              labels: ['Campaign Sent'],
+              isStarred: false,
+              isTrash: false,
+              messages: [outMsg]
+            };
+            nextThreads = [newThread, ...base];
+          }
+          (latestWorkspaceRef.current as any).threads = nextThreads;
+          persistResourceDirectly('threads', nextThreads);
+          return nextThreads;
+        });
+      }
+
       // Increment connected SMTP relay account sentToday count immediately
       setSmtpAccounts(prev => {
         const refList = latestWorkspaceRef.current.smtpAccounts || [];

@@ -57,11 +57,12 @@ if (fs.existsSync(distAssets)) {
     );
   }
 
-  // Copy all hashed assets to root /assets/
+  // Copy all hashed assets to root /assets/ and /prebuilt/
   for (const file of files) {
     fs.copyFileSync(path.join(distAssets, file), path.join(rootAssetsDir, file));
+    fs.copyFileSync(path.join(distAssets, file), path.join(prebuiltDir, file));
   }
-  console.log('[sync-prebuilt] Synced dist/assets/* -> assets/*');
+  console.log('[sync-prebuilt] Synced dist/assets/* -> assets/* and prebuilt/*');
 }
 
 const distIndex = path.join(distDir, 'index.html');

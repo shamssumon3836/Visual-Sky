@@ -1,4 +1,4 @@
-import React, { useState, Suspense, lazy } from 'react';
+import React, { useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { LandingPage } from './components/landing/LandingPage';
 import { Navbar } from './components/layout/Navbar';
@@ -14,17 +14,16 @@ import { SendMailModal } from './components/mail/SendMailModal';
 import { BkashSubscriptionModal } from './components/billing/BkashSubscriptionModal';
 import { FloatingNotificationCorner } from './components/notifications/FloatingNotificationCorner';
 import { GlobalSaaSAnimations } from './components/ui/GlobalSaaSAnimations';
+import { LeadDirectory } from './components/leads/LeadDirectory';
+import { AILeadGenerator } from './components/leads/AILeadGenerator';
+import { TemplateManager } from './components/templates/TemplateManager';
+import { AnalyticsView } from './components/analytics/AnalyticsView';
+import { SMTPManager } from './components/smtp/SMTPManager';
+import { SentMailsTracker } from './components/sent/SentMailsTracker';
+import { GeminiAssistant } from './components/ai/GeminiAssistant';
+import { OwnerPanel } from './components/owner/OwnerPanel';
+import { TrashManager } from './components/trash/TrashManager';
 import { Lead } from './types';
-
-const LeadDirectory = lazy(() => import('./components/leads/LeadDirectory').then(m => ({ default: m.LeadDirectory })));
-const AILeadGenerator = lazy(() => import('./components/leads/AILeadGenerator').then(m => ({ default: m.AILeadGenerator })));
-const TemplateManager = lazy(() => import('./components/templates/TemplateManager').then(m => ({ default: m.TemplateManager })));
-const AnalyticsView = lazy(() => import('./components/analytics/AnalyticsView').then(m => ({ default: m.AnalyticsView })));
-const SMTPManager = lazy(() => import('./components/smtp/SMTPManager').then(m => ({ default: m.SMTPManager })));
-const SentMailsTracker = lazy(() => import('./components/sent/SentMailsTracker').then(m => ({ default: m.SentMailsTracker })));
-const GeminiAssistant = lazy(() => import('./components/ai/GeminiAssistant').then(m => ({ default: m.GeminiAssistant })));
-const OwnerPanel = lazy(() => import('./components/owner/OwnerPanel').then(m => ({ default: m.OwnerPanel })));
-const TrashManager = lazy(() => import('./components/trash/TrashManager').then(m => ({ default: m.TrashManager })));
 import { 
   LayoutDashboard,
   Users, 
@@ -264,15 +263,7 @@ const MainContent: React.FC = () => {
           }`}
         >
           <div className={activeTab === 'inbox' ? 'flex-1 h-full min-h-0 flex flex-col overflow-hidden' : 'min-h-full'}>
-            <Suspense
-              fallback={
-                <div className="p-8 flex items-center justify-center text-xs font-bold text-cyan-400">
-                  Loading workspace module...
-                </div>
-              }
-            >
-              {renderActiveView()}
-            </Suspense>
+            {renderActiveView()}
             <CampaignManager isHidden={activeTab !== 'campaigns' || isCampaignsRestricted} />
           </div>
         </main>

@@ -2575,48 +2575,47 @@ app.all('/api/auth/reset-password', (req, res) => {
 
 // Central Database Storage Helpers
 function mergeCollectionById(existingItems: any[], incomingItems: any[], key = 'id', fallbackKey?: string): any[] {
-  const existingArr = Array.isArray(existingItems) ? existingItems : [];
-  const incomingArr = Array.isArray(incomingItems) ? incomingItems : [];
-  
-  if (existingArr.length === 0) return incomingArr;
-  if (incomingArr.length === 0) return existingArr;
-
-  const result = [...incomingArr];
-  const incomingKeySet = new Set(incomingArr.map(item => item && item[key] ? String(item[key]) : '').filter(Boolean));
-  const incomingFallbackSet = fallbackKey ? new Set(incomingArr.map(item => item && item[fallbackKey] ? String(item[fallbackKey]).toLowerCase() : '').filter(Boolean)) : null;
-
-  for (const item of existingArr) {
-    if (!item) continue;
-    const primaryVal = item[key] ? String(item[key]) : '';
-    const fallbackVal = fallbackKey && item[fallbackKey] ? String(item[fallbackKey]).toLowerCase() : '';
-
-    const hasPrimary = primaryVal && incomingKeySet.has(primaryVal);
-    const hasFallback = fallbackVal && incomingFallbackSet && incomingFallbackSet.has(fallbackVal);
-
-    if (!hasPrimary && !hasFallback) {
-      result.push(item);
-    }
+  // If incomingItems is explicitly provided as an array by the client, treat it as authoritative
+  // so deletions (including emptying Trash or deleting the last item) are persisted accurately.
+  if (Array.isArray(incomingItems)) {
+    return incomingItems.filter(Boolean);
   }
-
-  return result;
+  return Array.isArray(existingItems) ? existingItems.filter(Boolean) : [];
 }
 
 function smartMergeWorkspaces(existing: any, incoming: any): any {
   const e = existing && typeof existing === 'object' ? existing : {};
   const inc = incoming && typeof incoming === 'object' ? incoming : {};
+  const deletedThreadIds = new Set<string>(
+    Array.isArray(inc.deletedThreadIds)
+      ? inc.deletedThreadIds
+      : Array.isArray(e.deletedThreadIds)
+      ? e.deletedThreadIds
+      : []
+  );
+
+  const rawThreads = Array.isArray(inc.threads)
+    ? inc.threads
+    : Array.isArray(e.threads)
+    ? e.threads
+    : [];
+  const cleanThreads = rawThreads.filter(
+    (t: any) => t && t.id && !deletedThreadIds.has(String(t.id)) && !deletedThreadIds.has(`thread:${t.id}`)
+  );
 
   return {
     ...e,
     ...inc,
-    leads: mergeCollectionById(e.leads, inc.leads, 'id', 'email'),
-    leadTags: mergeCollectionById(e.leadTags, inc.leadTags, 'id', 'name'),
-    campaigns: mergeCollectionById(e.campaigns, inc.campaigns, 'id'),
-    smtpAccounts: mergeCollectionById(e.smtpAccounts, inc.smtpAccounts, 'id', 'user'),
-    emailTemplates: mergeCollectionById(e.emailTemplates, inc.emailTemplates, 'id', 'title'),
-    templateCategories: mergeCollectionById(e.templateCategories, inc.templateCategories, 'id', 'name'),
-    threads: mergeCollectionById(e.threads, inc.threads, 'id'),
-    sentEmails: mergeCollectionById(e.sentEmails, inc.sentEmails, 'id'),
-    minedLeads: mergeCollectionById(e.minedLeads, inc.minedLeads, 'id', 'email'),
+    leads: Array.isArray(inc.leads) ? inc.leads : (Array.isArray(e.leads) ? e.leads : []),
+    leadTags: Array.isArray(inc.leadTags) ? inc.leadTags : (Array.isArray(e.leadTags) ? e.leadTags : []),
+    campaigns: Array.isArray(inc.campaigns) ? inc.campaigns : (Array.isArray(e.campaigns) ? e.campaigns : []),
+    smtpAccounts: Array.isArray(inc.smtpAccounts) ? inc.smtpAccounts : (Array.isArray(e.smtpAccounts) ? e.smtpAccounts : []),
+    emailTemplates: Array.isArray(inc.emailTemplates) ? inc.emailTemplates : (Array.isArray(e.emailTemplates) ? e.emailTemplates : []),
+    templateCategories: Array.isArray(inc.templateCategories) ? inc.templateCategories : (Array.isArray(e.templateCategories) ? e.templateCategories : []),
+    threads: cleanThreads,
+    deletedThreadIds: Array.from(deletedThreadIds).slice(-2000),
+    sentEmails: Array.isArray(inc.sentEmails) ? inc.sentEmails : (Array.isArray(e.sentEmails) ? e.sentEmails : []),
+    minedLeads: Array.isArray(inc.minedLeads) ? inc.minedLeads : (Array.isArray(e.minedLeads) ? e.minedLeads : []),
     columnSettings: Array.isArray(inc.columnSettings) && inc.columnSettings.length > 0 ? inc.columnSettings : (Array.isArray(e.columnSettings) && e.columnSettings.length > 0 ? e.columnSettings : []),
     notificationSettings: {
       ...(e.notificationSettings || {}),
@@ -2999,7 +2998,7 @@ function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null
 
     // Check all workspace_{id}.json and user_{email}.json files and consolidate
     let mergedWorkspace: any = null;
-    const foundPaths: string[] = [];
+    let newestTime = 0;
 
     for (const cand of uniqueCandidates) {
       const pathsToCheck = [
@@ -3009,11 +3008,17 @@ function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null
       for (const p of pathsToCheck) {
         if (fs.existsSync(p)) {
           try {
+            const stat = fs.statSync(p);
             const content = fs.readFileSync(p, 'utf-8');
             const parsed = JSON.parse(content);
             if (parsed && typeof parsed === 'object') {
-              foundPaths.push(p);
-              mergedWorkspace = mergedWorkspace ? smartMergeWorkspaces(mergedWorkspace, parsed) : parsed;
+              const parsedTime = parsed.updatedAt ? new Date(parsed.updatedAt).getTime() : stat.mtimeMs;
+              if (!mergedWorkspace || parsedTime >= newestTime) {
+                mergedWorkspace = mergedWorkspace ? smartMergeWorkspaces(mergedWorkspace, parsed) : parsed;
+                newestTime = Math.max(newestTime, parsedTime || 0);
+              } else {
+                mergedWorkspace = smartMergeWorkspaces(parsed, mergedWorkspace);
+              }
             }
           } catch {}
         }
@@ -5418,11 +5423,11 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distCandidate = path.join(process.cwd(), 'dist');
-    const distPath = fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
-      ? prebuiltCandidate
-      : fs.existsSync(path.join(distCandidate, 'index.html'))
+    const distPath = fs.existsSync(path.join(distCandidate, 'index.html'))
       ? distCandidate
-      : prebuiltCandidate;
+      : fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
+      ? prebuiltCandidate
+      : distCandidate;
     app.use(
       express.static(distPath, {
         setHeaders: (res, filePath) => {

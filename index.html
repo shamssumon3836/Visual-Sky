@@ -10,7 +10,7 @@
     <meta property="og:description" content="Enterprise-grade AI lead intelligence, outbound SMTP relays, cold email sequences, multi-platform lead miner, unified inbox, and client CRM." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
-    <link rel="stylesheet" href="/prebuilt/app.css?v=20260928-v6" />
+    <link rel="stylesheet" href="/prebuilt/app.css?v=20260928-v8" />
     <style>
       .vs-auth-popup-window {
         width: 100% !important;
@@ -40,18 +40,18 @@
     <script type="module" src="/src/main.tsx"></script>
     <script>
       (function () {
-        // Production loader for cPanel / static document-root serving
+        // Production loader fallback ONLY for static document-root serving where Vite dev/dist bundle didn't mount
         function injectPrebuiltScript() {
           if (document.getElementById('vs-prebuilt-bundle')) return;
+          if (!document.getElementById('vs-boot-loader')) return;
           var script = document.createElement('script');
           script.id = 'vs-prebuilt-bundle';
           script.type = 'module';
-          script.src = '/prebuilt/app.js?v=20260928-v6&t=' + Date.now();
+          script.src = '/prebuilt/app.js?v=20260928-v8&t=' + Date.now();
           document.body.appendChild(script);
         }
 
         function bootProductionBundle() {
-          // If Vite dev server is active or Vite's built /assets/index-*.js is already present, do not double-inject
           if (
             window.__vite_plugin_react_preamble_installed__ ||
             document.querySelector('script[src*="@vite/client"]') ||
@@ -59,32 +59,15 @@
           ) {
             return;
           }
-          if (document.getElementById('vs-prebuilt-bundle')) return;
-
-          // Wake up Passenger backend first so app.cjs compiles latest src/main.tsx & server.ts before serving app.js
-          var loaded = false;
-          var fallbackTimer = setTimeout(function () {
-            if (!loaded) {
-              loaded = true;
+          setTimeout(function () {
+            if (
+              !window.__vite_plugin_react_preamble_installed__ &&
+              !document.querySelector('script[src*="@vite/client"]') &&
+              document.getElementById('vs-boot-loader')
+            ) {
               injectPrebuiltScript();
             }
-          }, 3500);
-
-          fetch('/api/health?t=' + Date.now(), { cache: 'no-store' })
-            .then(function () {
-              if (!loaded) {
-                loaded = true;
-                clearTimeout(fallbackTimer);
-                injectPrebuiltScript();
-              }
-            })
-            .catch(function () {
-              if (!loaded) {
-                loaded = true;
-                clearTimeout(fallbackTimer);
-                injectPrebuiltScript();
-              }
-            });
+          }, 800);
         }
 
         if (document.readyState === 'loading') {

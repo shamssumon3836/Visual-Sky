@@ -103,17 +103,34 @@ export async function queryUserWorkspace(identifiers: {
     const primary = isNewer ? candidate : bestData;
     const secondary = isNewer ? bestData : candidate;
 
+    const deletedSet = new Set<string>([
+      ...(Array.isArray(primary.deletedThreadIds) ? primary.deletedThreadIds : []),
+      ...(Array.isArray(secondary.deletedThreadIds) ? secondary.deletedThreadIds : [])
+    ]);
+    try {
+      const localDel = localStorage.getItem('visualsky_deleted_imap_msgs');
+      if (localDel) {
+        for (const id of JSON.parse(localDel)) deletedSet.add(String(id));
+      }
+    } catch {}
+
+    const rawThreads = Array.isArray(primary.threads) ? primary.threads : (Array.isArray(secondary.threads) ? secondary.threads : []);
+    const cleanThreads = rawThreads.filter(
+      (t: any) => t && t.id && !deletedSet.has(String(t.id)) && !deletedSet.has(`thread:${t.id}`) && !DEMO_IDS.has(String(t.id))
+    );
+
     bestData = {
       ...secondary,
       ...primary,
-      leads: mergeArraysById(primary.leads, secondary.leads, 'email'),
+      leads: Array.isArray(primary.leads) ? primary.leads.filter((x: any) => x && !DEMO_IDS.has(x.id)) : mergeArraysById(primary.leads, secondary.leads, 'email'),
       leadTags: mergeArraysById(primary.leadTags, secondary.leadTags, 'name'),
-      campaigns: mergeArraysById(primary.campaigns, secondary.campaigns, 'name'),
+      campaigns: Array.isArray(primary.campaigns) ? primary.campaigns.filter((x: any) => x && !DEMO_IDS.has(x.id)) : mergeArraysById(primary.campaigns, secondary.campaigns, 'name'),
       smtpAccounts: mergeArraysById(primary.smtpAccounts, secondary.smtpAccounts, 'username'),
       emailTemplates: mergeArraysById(primary.emailTemplates, secondary.emailTemplates, 'title'),
       templateCategories: mergeArraysById(primary.templateCategories, secondary.templateCategories, 'name'),
-      threads: mergeArraysById(primary.threads, secondary.threads),
-      sentEmails: mergeArraysById(primary.sentEmails, secondary.sentEmails),
+      threads: cleanThreads,
+      deletedThreadIds: Array.from(deletedSet),
+      sentEmails: Array.isArray(primary.sentEmails) ? primary.sentEmails.filter((x: any) => x && !DEMO_IDS.has(x.id)) : mergeArraysById(primary.sentEmails, secondary.sentEmails),
       minedLeads: mergeArraysById(primary.minedLeads, secondary.minedLeads, 'email'),
       userProfile: {
         ...(secondary.userProfile || {}),
