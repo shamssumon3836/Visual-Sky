@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Lead, LeadTag } from '../../types';
+import { verifyEmailSync, verifyEmailsWithDns, parseAndVerifyRawEmails, EmailVerificationResult } from '../../utils/emailVerifier';
 import { 
   Users, 
   Search, 
@@ -24,7 +25,11 @@ import {
   Eye, 
   MessageSquare,
   SlidersHorizontal,
-  ChevronDown
+  ChevronDown,
+  ShieldAlert,
+  ShieldCheck,
+  AlertTriangle,
+  ClipboardPaste
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -52,12 +57,22 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
   } = useApp();
 
   // Active Filter
-  const [activeFilter, setActiveFilter] = useState<'all' | 'replied' | 'opened' | 'inactive_7d' | 'inactive_14d' | 'inactive_30d' | 'new'>('all');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'replied' | 'opened' | 'inactive_7d' | 'inactive_14d' | 'inactive_30d' | 'new' | 'invalid_email'>('all');
   const [selectedTagFilter, setSelectedTagFilter] = useState<string>('all');
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
   const [showColumnModal, setShowColumnModal] = useState<boolean>(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
+
+  // Email Verification & Broken Mail Scanner State
+  const [dnsVerificationMap, setDnsVerificationMap] = useState<Record<string, EmailVerificationResult>>({});
+  const [isScanningDns, setIsScanningDns] = useState<boolean>(false);
+  const [showPasteVerifyModal, setShowPasteVerifyModal] = useState<boolean>(false);
+  const [rawPasteText, setRawPasteText] = useState<string>('');
+  const [pastedItems, setPastedItems] = useState<Array<{ email: string; name: string; company: string; verification: EmailVerificationResult }>>([]);
+  const [isVerifyingPasteDns, setIsVerifyingPasteDns] = useState<boolean>(false);
+  const [uploadVerifications, setUploadVerifications] = useState<Record<string, EmailVerificationResult>>({});
+  const [isVerifyingUploadDns, setIsVerifyingUploadDns] = useState<boolean>(false);
   
   // Tag Management Modal State
   const [showTagModal, setShowTagModal] = useState<boolean>(false);
@@ -114,6 +129,151 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
     return leads.filter(l => !l.isTrash);
   }, [leads]);
 
+  // Helper to get verification result for any lead email (combines instant syntax/typo check + DNS MX check)
+  const getLeadEmailVerification = (email: string): EmailVerificationResult => {
+    const key = (email || '').trim().toLowerCase();
+    if (dnsVerificationMap[key]) return dnsVerificationMap[key];
+    return verifyEmailSync(email || '');
+  };
+
+  // Broken / Invalid & Typo Leads summary across activeLeads
+  const emailHealthSummary = useMemo(() => {
+    const invalidLeads: Array<{ lead: Lead; check: EmailVerificationResult }> = [];
+    const riskyLeads: Array<{ lead: Lead; check: EmailVerificationResult }> = [];
+    const fixableLeads: Array<{ lead: Lead; check: EmailVerificationResult }> = [];
+
+    activeLeads.forEach(lead => {
+      const check = getLeadEmailVerification(lead.email);
+      if (!check.isValid) {
+        invalidLeads.push({ lead, check });
+      } else if (check.status === 'risky') {
+        riskyLeads.push({ lead, check });
+      }
+      if (check.suggestion) {
+        fixableLeads.push({ lead, check });
+      }
+    });
+
+    return { invalidLeads, riskyLeads, fixableLeads };
+  }, [activeLeads, dnsVerificationMap]);
+
+  // Run Deep DNS MX Verification on all active leads
+  const handleScanAllEmailsDns = async () => {
+    if (activeLeads.length === 0 || isScanningDns) return;
+    setIsScanningDns(true);
+    try {
+      const allEmails = activeLeads.map(l => l.email).filter(Boolean);
+      const results = await verifyEmailsWithDns(allEmails);
+      const nextMap: Record<string, EmailVerificationResult> = { ...dnsVerificationMap };
+      results.forEach(r => {
+        nextMap[r.email.toLowerCase()] = r;
+      });
+      setDnsVerificationMap(nextMap);
+      const badCount = results.filter(r => !r.isValid).length;
+      addNotification({
+        title: badCount > 0 ? `⚠️ ${badCount} নষ্ট মেইল পাওয়া গেছে (Invalid Emails)` : '✅ All Emails Verified Valid',
+        message: badCount > 0
+          ? `${badCount} broken/invalid email(s) detected via syntax & DNS MX check. You can remove them in 1 click.`
+          : `All ${results.length} lead emails passed syntax and DNS MX verification.`,
+        type: 'system'
+      });
+    } finally {
+      setIsScanningDns(false);
+    }
+  };
+
+  // Remove all broken/invalid leads in 1 click
+  const handleRemoveAllInvalidLeads = () => {
+    const ids = emailHealthSummary.invalidLeads.map(item => item.lead.id);
+    if (ids.length === 0) return;
+    bulkDeleteLeads(ids);
+    setSelectedLeadIds(prev => prev.filter(id => !ids.includes(id)));
+    addNotification({
+      title: '🗑️ নষ্ট মেইল রিমুভ করা হয়েছে',
+      message: `Removed ${ids.length} broken/invalid email lead(s) so your campaigns won't bounce.`,
+      type: 'system'
+    });
+  };
+
+  // Auto-fix all domain typos in 1 click
+  const handleAutoFixAllLeadTypos = () => {
+    if (emailHealthSummary.fixableLeads.length === 0) return;
+    emailHealthSummary.fixableLeads.forEach(({ lead, check }) => {
+      if (check.suggestion) {
+        updateLead(lead.id, { email: check.suggestion });
+      }
+    });
+    addNotification({
+      title: '✨ Domain Typos Fixed',
+      message: `Auto-corrected ${emailHealthSummary.fixableLeads.length} misspelled email address(es).`,
+      type: 'system'
+    });
+    confetti({ particleCount: 35, spread: 55 });
+  };
+
+  // Handle live paste in Paste & Verify Modal
+  useEffect(() => {
+    if (!rawPasteText.trim()) {
+      setPastedItems([]);
+      return;
+    }
+    const parsed = parseAndVerifyRawEmails(rawPasteText);
+    setPastedItems(parsed);
+
+    const validForDns = parsed.filter(p => p.verification.isValid).map(p => p.email);
+    if (validForDns.length === 0) return;
+
+    const timer = setTimeout(async () => {
+      setIsVerifyingPasteDns(true);
+      try {
+        const dnsRes = await verifyEmailsWithDns(validForDns);
+        const map = new Map(dnsRes.map(r => [r.email.toLowerCase(), r]));
+        setPastedItems(prev =>
+          prev.map(item => {
+            const found = map.get(item.email.toLowerCase());
+            return found ? { ...item, verification: found } : item;
+          })
+        );
+      } finally {
+        setIsVerifyingPasteDns(false);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [rawPasteText]);
+
+  // Verify CSV uploaded leads automatically when parsedLeadsPreview changes
+  useEffect(() => {
+    if (parsedLeadsPreview.length === 0) {
+      setUploadVerifications({});
+      return;
+    }
+    const syncMap: Record<string, EmailVerificationResult> = {};
+    const emailsToDns: string[] = [];
+    parsedLeadsPreview.forEach(l => {
+      if (l.email) {
+        const res = verifyEmailSync(l.email);
+        syncMap[l.email.toLowerCase()] = res;
+        if (res.isValid) emailsToDns.push(l.email);
+      }
+    });
+    setUploadVerifications(syncMap);
+
+    if (emailsToDns.length > 0) {
+      setIsVerifyingUploadDns(true);
+      verifyEmailsWithDns(emailsToDns)
+        .then(dnsRes => {
+          setUploadVerifications(prev => {
+            const next = { ...prev };
+            dnsRes.forEach(r => {
+              next[r.email.toLowerCase()] = r;
+            });
+            return next;
+          });
+        })
+        .finally(() => setIsVerifyingUploadDns(false));
+    }
+  }, [parsedLeadsPreview]);
+
   // Filtered Leads
   const filteredLeads = useMemo(() => {
     return activeLeads.filter(lead => {
@@ -138,6 +298,10 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
       }
 
       // Status/Cohort Filter
+      if (activeFilter === 'invalid_email') {
+        const check = getLeadEmailVerification(lead.email);
+        return !check.isValid || check.status === 'risky';
+      }
       if (activeFilter === 'replied') return lead.status === 'replied' || lead.isReplied;
       if (activeFilter === 'opened') return lead.status === 'opened' || (lead.openCount && lead.openCount > 0);
       if (activeFilter === 'new') return lead.status === 'new';
@@ -147,7 +311,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
 
       return true;
     });
-  }, [activeLeads, searchQuery, selectedTagFilter, activeFilter]);
+  }, [activeLeads, searchQuery, selectedTagFilter, activeFilter, dnsVerificationMap]);
 
   // Tag color mapping helper
   const getTagColorClass = (tagName: string) => {
@@ -503,6 +667,24 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
 
           <div className="flex items-center flex-wrap gap-2">
             <button
+              onClick={handleScanAllEmailsDns}
+              disabled={isScanningDns}
+              className="px-3.5 py-2 rounded-xl bg-emerald-950/50 hover:bg-emerald-900/60 border border-emerald-500/40 text-xs font-bold text-emerald-300 flex items-center gap-1.5 transition cursor-pointer shadow-sm"
+              title="Verify all lead emails for syntax, domain typos, and real DNS MX mail servers"
+            >
+              <ShieldCheck className={`w-3.5 h-3.5 text-emerald-400 ${isScanningDns ? 'animate-spin' : ''}`} />
+              <span>{isScanningDns ? 'Verifying DNS MX...' : 'Verify All Mails'}</span>
+            </button>
+
+            <button
+              onClick={() => setShowPasteVerifyModal(true)}
+              className="px-3.5 py-2 rounded-xl bg-cyan-950/60 hover:bg-cyan-900/70 border border-cyan-500/40 text-xs font-bold text-cyan-300 flex items-center gap-1.5 transition cursor-pointer shadow-sm"
+            >
+              <ClipboardPaste className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Paste & Verify Mails</span>
+            </button>
+
+            <button
               onClick={() => setShowTagModal(true)}
               className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition cursor-pointer shadow-sm"
             >
@@ -535,6 +717,89 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
             </button>
           </div>
         </div>
+
+        {/* BROKEN / INVALID EMAIL DETECTOR & CLEANER BANNER */}
+        {(emailHealthSummary.invalidLeads.length > 0 || emailHealthSummary.fixableLeads.length > 0) && (
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-rose-950/60 via-slate-900 to-amber-950/40 border border-rose-500/50 space-y-3 shadow-xl animate-in fade-in">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 shrink-0 mt-0.5">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-xs sm:text-sm font-extrabold text-rose-200 flex items-center gap-2 flex-wrap">
+                    <span>🚫 নষ্ট মেইল সতর্কবার্তা (Broken / Invalid Emails Detected)</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white">
+                      {emailHealthSummary.invalidLeads.length} নষ্ট মেইল
+                    </span>
+                    {emailHealthSummary.fixableLeads.length > 0 && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-slate-950">
+                        {emailHealthSummary.fixableLeads.length} Typo Fixable
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-rose-200/80 mt-0.5">
+                    এই মেইলগুলোতে মেইল পাঠানো যাবে না বা পাঠালে বাউন্স/স্প্যাম সমস্যা হবে। নিচের বাটনে ক্লিক করে নষ্ট মেইলগুলো রিমুভ বা ঠিক করে নিন।
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center flex-wrap gap-2 shrink-0">
+                {emailHealthSummary.fixableLeads.length > 0 && (
+                  <button
+                    onClick={handleAutoFixAllLeadTypos}
+                    className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 shadow-lg shadow-amber-500/20 transition cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>✨ Auto-Fix {emailHealthSummary.fixableLeads.length} Typos</span>
+                  </button>
+                )}
+                {emailHealthSummary.invalidLeads.length > 0 && (
+                  <button
+                    onClick={handleRemoveAllInvalidLeads}
+                    className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-lg shadow-rose-600/25 transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>🗑️ সব নষ্ট মেইল রিমুভ করুন ({emailHealthSummary.invalidLeads.length})</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* List of broken emails so user can inspect or remove individually */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1 pt-1">
+              {emailHealthSummary.invalidLeads.map(({ lead, check }) => (
+                <div
+                  key={lead.id}
+                  className="p-2.5 rounded-xl bg-slate-950/85 border border-rose-500/30 flex items-center justify-between gap-2 text-xs"
+                >
+                  <div className="min-w-0">
+                    <div className="font-mono font-bold text-rose-300 truncate">{lead.email || '(Empty Email)'}</div>
+                    <div className="text-[10px] text-slate-400 truncate">{check.reasonBn || check.reason}</div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {check.suggestion && (
+                      <button
+                        onClick={() => updateLead(lead.id, { email: check.suggestion! })}
+                        className="px-2 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold cursor-pointer"
+                        title={`Fix to ${check.suggestion}`}
+                      >
+                        Fix
+                      </button>
+                    )}
+                    <button
+                      onClick={() => deleteLeadToTrash(lead.id)}
+                      className="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 border border-rose-500/40 text-[10px] font-bold cursor-pointer"
+                      title="Remove this broken email"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 1-Click Automated Dormant Re-engagement Bar */}
         <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950/30 to-slate-900 border border-slate-800 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shadow-lg">
@@ -630,6 +895,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
           <div className="flex items-center gap-2 overflow-x-auto">
             {[
               { id: 'all', label: 'All Statuses' },
+              { id: 'invalid_email', label: `🚫 নষ্ট মেইল (${emailHealthSummary.invalidLeads.length})` },
               { id: 'opened', label: '👁️ Opened' },
               { id: 'replied', label: '💬 Replied' },
               { id: 'new', label: '✨ New' },
@@ -808,15 +1074,60 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                           </td>
                         )}
 
-                        {/* Email - Strictly Single Line */}
-                        {isColVisible('email') && (
-                          <td className="p-3.5">
-                            <div className="font-mono text-slate-200 text-[11px] flex items-center gap-1.5 max-w-[200px] truncate">
-                              <Mail className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                              <span className="truncate" title={lead.email}>{lead.email}</span>
-                            </div>
-                          </td>
-                        )}
+                        {/* Email - Strictly Single Line with Live Broken/Valid Signal */}
+                        {isColVisible('email') && (() => {
+                          const emailCheck = getLeadEmailVerification(lead.email);
+                          return (
+                            <td className="p-3.5">
+                              <div className="font-mono text-[11px] flex items-center gap-1.5 max-w-[260px]">
+                                {!emailCheck.isValid ? (
+                                  <span
+                                    className="px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-300 text-[9px] font-extrabold shrink-0 flex items-center gap-1"
+                                    title={emailCheck.reasonBn || emailCheck.reason}
+                                  >
+                                    🚫 নষ্ট
+                                  </span>
+                                ) : emailCheck.status === 'risky' ? (
+                                  <span
+                                    className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[9px] font-extrabold shrink-0"
+                                    title={emailCheck.reasonBn || emailCheck.reason}
+                                  >
+                                    ⚠️ Risky
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"
+                                    title={emailCheck.reasonBn || 'Verified Valid Email'}
+                                  />
+                                )}
+                                <span
+                                  className={`truncate ${!emailCheck.isValid ? 'text-rose-300 line-through' : 'text-slate-200'}`}
+                                  title={`${lead.email} — ${emailCheck.reasonBn || emailCheck.reason}`}
+                                >
+                                  {lead.email}
+                                </span>
+                                {emailCheck.suggestion && (
+                                  <button
+                                    onClick={() => updateLead(lead.id, { email: emailCheck.suggestion! })}
+                                    className="px-1.5 py-0.5 rounded bg-emerald-500 text-slate-950 font-extrabold text-[9px] shrink-0 cursor-pointer"
+                                    title={`Auto-fix typo to ${emailCheck.suggestion}`}
+                                  >
+                                    Fix
+                                  </button>
+                                )}
+                                {!emailCheck.isValid && (
+                                  <button
+                                    onClick={() => deleteLeadToTrash(lead.id)}
+                                    className="px-1.5 py-0.5 rounded bg-rose-600 text-white font-extrabold text-[9px] shrink-0 cursor-pointer"
+                                    title="Remove broken email lead"
+                                  >
+                                    Remove
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          );
+                        })()}
 
                         {/* Phone - Strictly Single Line (No 2nd line wrapping) */}
                         {isColVisible('phone') && (
@@ -1311,12 +1622,58 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                 </div>
               )}
 
-              {parsedLeadsPreview.length > 0 && (
-                <div className="p-3 bg-emerald-950/30 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 font-bold flex items-center justify-between">
-                  <span>✓ {parsedLeadsPreview.length} valid leads parsed</span>
-                  <span className="font-mono text-[11px]">Ready to import</span>
-                </div>
-              )}
+              {parsedLeadsPreview.length > 0 && (() => {
+                const brokenList = parsedLeadsPreview.filter(l => {
+                  const c = uploadVerifications[(l.email || '').toLowerCase()] || verifyEmailSync(l.email || '');
+                  return !c.isValid;
+                });
+                const validCount = parsedLeadsPreview.length - brokenList.length;
+                return (
+                  <div className="space-y-2.5">
+                    <div className="p-3 bg-emerald-950/30 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 font-bold flex items-center justify-between flex-wrap gap-2">
+                      <span>✓ {validCount} valid leads ready ({parsedLeadsPreview.length} total)</span>
+                      <span className="font-mono text-[11px]">
+                        {isVerifyingUploadDns ? 'Checking DNS MX...' : brokenList.length > 0 ? `🚫 ${brokenList.length} নষ্ট মেইল পাওয়া গেছে` : '100% Verified Clean'}
+                      </span>
+                    </div>
+
+                    {brokenList.length > 0 && (
+                      <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-500/40 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-extrabold text-rose-300">
+                            🚫 {brokenList.length}টি নষ্ট মেইল শনাক্ত হয়েছে ( পাঠালে সমস্যা হবে ):
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setParsedLeadsPreview(prev =>
+                                prev.filter(l => {
+                                  const c = uploadVerifications[(l.email || '').toLowerCase()] || verifyEmailSync(l.email || '');
+                                  return c.isValid;
+                                })
+                              );
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-[11px] cursor-pointer shrink-0"
+                          >
+                            🗑️ সব নষ্ট মেইল বাদ দিন ({brokenList.length})
+                          </button>
+                        </div>
+                        <div className="max-h-28 overflow-y-auto space-y-1 pr-1">
+                          {brokenList.map((b, i) => {
+                            const c = uploadVerifications[(b.email || '').toLowerCase()] || verifyEmailSync(b.email || '');
+                            return (
+                              <div key={i} className="flex items-center justify-between text-[11px] bg-slate-950/80 px-2.5 py-1 rounded-lg border border-rose-500/20">
+                                <span className="font-mono text-rose-300 truncate">{b.email}</span>
+                                <span className="text-[10px] text-slate-400 ml-2 truncate">{c.reasonBn || c.reason}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               <div className="pt-2 flex justify-end gap-2">
                 <button
@@ -1449,6 +1806,198 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
           </div>
         </div>
       )}
+
+      {/* PASTE & VERIFY EMAILS MODAL */}
+      {showPasteVerifyModal && (() => {
+        const invalidItems = pastedItems.filter(i => !i.verification.isValid);
+        const validItems = pastedItems.filter(i => i.verification.isValid);
+        const fixableItems = pastedItems.filter(i => Boolean(i.verification.suggestion));
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+            <div className="bg-[#090d16] border border-cyan-500/40 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <ClipboardPaste className="w-5 h-5 text-cyan-400" />
+                  <div>
+                    <h3 className="font-bold text-slate-100 text-base">Paste & Verify Emails (নষ্ট মেইল চেকার)</h3>
+                    <p className="text-[11px] text-slate-400">
+                      যেখানেই মেইল ঢালবেন সাথে সাথে চেক হবে কোন কোন মেইল নষ্ট বা ভুল ডোমেইন, এবং ১ ক্লিকে সেগুলো রিমুভ করতে পারবেন।
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowPasteVerifyModal(false)}
+                  className="text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-3 overflow-y-auto flex-1 pr-1">
+                <div>
+                  <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                    Paste Emails Below (One per line, or comma-separated, or Name &lt;email@domain.com&gt;)
+                  </label>
+                  <textarea
+                    rows={5}
+                    value={rawPasteText}
+                    onChange={(e) => setRawPasteText(e.target.value)}
+                    placeholder={`sarah@linear.app\njohn@gmal.com\nbroken-email-address\nalex@nonexistentdomain99999.xyz`}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-2xl p-3 text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+
+                {pastedItems.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between flex-wrap gap-2 p-3 rounded-2xl bg-slate-900/90 border border-slate-800">
+                      <div className="flex items-center gap-3 text-xs font-bold">
+                        <span className="text-emerald-400">✅ সচল মেইল: {validItems.length}</span>
+                        <span className="text-rose-400">🚫 নষ্ট মেইল: {invalidItems.length}</span>
+                        {isVerifyingPasteDns && (
+                          <span className="text-cyan-400 font-mono text-[11px] animate-pulse">Checking DNS MX...</span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {fixableItems.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              let updatedText = rawPasteText;
+                              fixableItems.forEach(item => {
+                                if (item.verification.suggestion) {
+                                  updatedText = updatedText.split(item.email).join(item.verification.suggestion);
+                                }
+                              });
+                              setRawPasteText(updatedText);
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-[11px] cursor-pointer"
+                          >
+                            ✨ Auto-Fix {fixableItems.length} Typos
+                          </button>
+                        )}
+                        {invalidItems.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const cleanLines = pastedItems
+                                .filter(i => i.verification.isValid)
+                                .map(i => i.email)
+                                .join('\n');
+                              setRawPasteText(cleanLines);
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-[11px] cursor-pointer flex items-center gap-1"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>সব নষ্ট মেইল রিমুভ করুন ({invalidItems.length})</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                      {pastedItems.map((item, idx) => {
+                        const v = item.verification;
+                        return (
+                          <div
+                            key={idx}
+                            className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 text-xs ${
+                              !v.isValid
+                                ? 'bg-rose-950/40 border-rose-500/40 text-rose-200'
+                                : v.status === 'risky'
+                                ? 'bg-amber-950/30 border-amber-500/30 text-amber-200'
+                                : 'bg-slate-900/70 border-slate-800 text-slate-200'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-bold truncate">{item.email}</span>
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase ${
+                                  !v.isValid
+                                    ? 'bg-rose-500 text-white'
+                                    : v.status === 'risky'
+                                    ? 'bg-amber-500 text-slate-950'
+                                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                }`}>
+                                  {!v.isValid ? '🚫 নষ্ট মেইল (Invalid)' : v.status === 'risky' ? '⚠️ Risky' : '✓ Valid'}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-400 mt-0.5">
+                                {v.reasonBn || v.reason}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {v.suggestion && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRawPasteText(prev => prev.split(item.email).join(v.suggestion!));
+                                  }}
+                                  className="px-2 py-1 rounded-lg bg-emerald-500 text-slate-950 font-extrabold text-[10px] cursor-pointer"
+                                >
+                                  Fix → {v.suggestion}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const remaining = pastedItems.filter((_, i) => i !== idx).map(i => i.email).join('\n');
+                                  setRawPasteText(remaining);
+                                }}
+                                className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-white font-bold text-[10px] cursor-pointer"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPasteVerifyModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={validItems.length === 0}
+                  onClick={() => {
+                    const tagToAssign = uploadSelectedTag || leadTags[0]?.name || 'Verified Leads';
+                    const cleanLeads = validItems.map(item => ({
+                      name: item.name,
+                      email: item.email,
+                      company: item.company,
+                      title: 'Decision Maker',
+                      phone: '+1 (555) 019-2834',
+                      website: `https://${item.email.split('@')[1] || 'example.com'}`,
+                      niche: 'Verified Outreach Target',
+                      location: 'United States',
+                      tags: [tagToAssign],
+                    }));
+                    addLeads(cleanLeads, tagToAssign);
+                    setShowPasteVerifyModal(false);
+                    setRawPasteText('');
+                    setPastedItems([]);
+                    confetti({ particleCount: 55, spread: 65 });
+                  }}
+                  className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+                >
+                  Import {validItems.length} Verified Valid Leads (নষ্ট মেইল বাদে)
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* LEAD DELETION CONFIRMATION MODAL */}
       {leadToDelete && (

@@ -235,19 +235,87 @@ export const SMTPManager: React.FC = () => {
           </div>
 
           <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-1">
-            <div className="text-xs text-slate-400 font-medium">Warmup & Health Status</div>
+            <div className="text-xs text-slate-400 font-medium">Auto Warm-up Schedule</div>
             <div className="text-xl sm:text-2xl font-black text-purple-400 flex items-center gap-1.5">
               <Zap className="w-5 h-5 text-purple-400 shrink-0" />
               <span className="truncate">
                 {activeSmtps.length === 0
-                  ? 'No Relay'
+                  ? '4-Week Auto'
                   : aggregateStats.rampingCount > 0
-                  ? `${aggregateStats.rampingCount} Ramping (+15/d)`
+                  ? `${aggregateStats.rampingCount} Auto-Warming`
                   : 'Full Capacity'}
               </span>
             </div>
             <div className="text-[11px] text-emerald-400 font-mono">
-              {activeSmtps.length > 0 ? `${aggregateStats.avgHealth}% SPF/DKIM Health` : 'Connect relay to start'}
+              {activeSmtps.length > 0 ? `W1: 10-15 • W2: 20-25 • W3: 30-35 • W4: 40-50` : 'Auto 10-15 → 40-50/day'}
+            </div>
+          </div>
+        </div>
+
+        {/* AUTO 4-WEEK SMTP WARM-UP SCHEDULE BANNER */}
+        <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-purple-950/35 via-slate-900/95 to-cyan-950/35 border border-purple-500/30 space-y-3.5 shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-purple-500/15 border border-purple-500/40 flex items-center justify-center text-purple-300 shrink-0">
+                <Flame className="w-5 h-5 text-purple-400" />
+              </div>
+              <div>
+                <div className="text-xs sm:text-sm font-black text-slate-100 flex items-center gap-2 flex-wrap">
+                  <span>Automated 4-Week SMTP Warm-Up Schedule (Daily Limits)</span>
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-extrabold uppercase">
+                    ✓ 100% Auto-Pilot Active
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  শুরুতেই বেশি মেইল পাঠালে Google/Microsoft আপনার IP-কে স্প্যামার ভাববে। তাই সিস্টেম অটোমেটিক সাপ্তাহিক লিমিট ও ১ম সপ্তাহে টেক্সট-অনলি মোড নিয়ন্ত্রণ করে।
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="p-3 rounded-xl bg-slate-950/85 border border-amber-500/35 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-extrabold text-amber-300">Week 1 (প্রথম সপ্তাহ)</span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold">Days 1–7</span>
+              </div>
+              <div className="text-base font-black text-slate-100 font-mono">Daily 10 – 15টি মেইল</div>
+              <p className="text-[10px] text-amber-200/90 leading-relaxed">
+                🛡️ অটো টেক্সট-অনলি মোড: কোনো লিঙ্ক বা ইমেজ ছাড়া শুধু টেক্সট মেইল যাবে (IP স্প্যাম সুরক্ষা)।
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/85 border border-cyan-500/30 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-extrabold text-cyan-300">Week 2 (দ্বিতীয় সপ্তাহ)</span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-bold">Days 8–14</span>
+              </div>
+              <div className="text-base font-black text-slate-100 font-mono">Daily 20 – 25টি মেইল</div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                ⚡ গ্র্যাজুয়াল ভলিউম বৃদ্ধি: ডোমেইন রেপুটেশন তৈরি হওয়ার সাথে অটোমেটিক ২০-২৫টি মেইল/দিন।
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/85 border border-purple-500/30 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-extrabold text-purple-300">Week 3 (তৃতীয় সপ্তাহ)</span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-bold">Days 15–21</span>
+              </div>
+              <div className="text-base font-black text-slate-100 font-mono">Daily 30 – 35টি মেইল</div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                🚀 স্ট্যান্ডার্ড আউটবাউন্ড ভলিউম: ৯৯.৮% প্রাইমারি ইনবক্স প্লেসমেন্ট সহ প্রতিদিন ৩০-৩৫টি মেইল।
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/85 border border-emerald-500/35 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-extrabold text-emerald-300">Week 4 & Onward (৪র্থ সপ্তাহ+)</span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">Day 22+</span>
+              </div>
+              <div className="text-base font-black text-emerald-400 font-mono">Daily 40 – 50টি মেইল</div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                🔥 পূর্ণ ওয়ার্ম-আপ সক্ষমতা: চতুর্থ সপ্তাহ ও পরবর্তীতে প্রতিদিন অটোমেটিক ৪০-৫০টি মেইল।
+              </p>
             </div>
           </div>
         </div>
@@ -391,15 +459,60 @@ export const SMTPManager: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Warm-up Status Sub-bar */}
-                      <div className="pt-1.5 border-t border-slate-800/60 flex items-center justify-between text-[10px]">
-                        <span className="text-purple-300 font-semibold flex items-center gap-1">
-                          <Flame className="w-3 h-3 text-purple-400" />
-                          {warmup.mode === 'ramp_15' ? `Warm-Up Ramp (Day ${warmup.day})` : warmup.mode === 'paused' ? 'Warmup Paused' : '⚡ Full Capacity Unlocked'}
-                        </span>
-                        <span className="font-mono text-slate-400">
-                          {warmup.isRamping ? `${warmup.percentComplete}% ramped` : '100% max'}
-                        </span>
+                      {/* Warm-up Status Sub-bar & Quick Week Selector */}
+                      <div className="pt-1.5 border-t border-slate-800/60 space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] gap-1 flex-wrap">
+                          <span className="text-purple-300 font-bold flex items-center gap-1">
+                            <Flame className="w-3 h-3 text-purple-400" />
+                            {warmup.mode === 'ramp_15'
+                              ? `${warmup.weekLabelBn} (Day ${warmup.day})`
+                              : warmup.mode === 'paused'
+                              ? 'Warmup Paused'
+                              : `⚡ Full Cap (${effectiveDailyLimit}/day)`}
+                          </span>
+                          {warmup.textOnlyEnforced && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-extrabold text-[9px]">
+                              🛡️ Text-Only (No Links/Images)
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between gap-1 pt-0.5">
+                          <span className="text-[9px] text-slate-400">Warm-Up Stage:</span>
+                          <div className="flex items-center gap-1">
+                            {[
+                              { w: 1, day: 1, label: 'W1 (10-15)' },
+                              { w: 2, day: 8, label: 'W2 (20-25)' },
+                              { w: 3, day: 15, label: 'W3 (30-35)' },
+                              { w: 4, day: 22, label: 'W4 (40-50)' },
+                            ].map((st) => {
+                              const isCurrentWeek = warmup.mode === 'ramp_15' && warmup.week === st.w;
+                              return (
+                                <button
+                                  key={st.w}
+                                  type="button"
+                                  onClick={() => {
+                                    const newStart = new Date(Date.now() - (st.day - 1) * 86400000).toISOString();
+                                    updateSMTPAccount(smtp.id, {
+                                      warmupMode: 'ramp_15',
+                                      warmupStatus: 'warming',
+                                      warmupStartDate: newStart,
+                                      warmupCurrentDay: st.day,
+                                      dailyLimit: 50
+                                    });
+                                  }}
+                                  className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold transition cursor-pointer ${
+                                    isCurrentWeek
+                                      ? 'bg-purple-500 text-white shadow-xs'
+                                      : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                                  }`}
+                                  title={`Switch relay to Week ${st.w} Auto Schedule`}
+                                >
+                                  {st.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
                       </div>
                     </div>
 

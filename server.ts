@@ -7,6 +7,7 @@ import nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import crypto from 'crypto';
+import dns from 'dns';
 
 dotenv.config();
 
@@ -4018,6 +4019,216 @@ app.post('/api/verify/url', async (req, res) => {
   }
 });
 
+// In-memory DNS MX cache for fast email domain verification
+const domainMxCache = new Map<string, { validMx: boolean; mxHost?: string; checkedAt: number }>();
+
+const SERVER_TYPO_DOMAINS: Record<string, string> = {
+  'gmial.com': 'gmail.com',
+  'gamil.com': 'gmail.com',
+  'gmal.com': 'gmail.com',
+  'gmai.com': 'gmail.com',
+  'gmail.con': 'gmail.com',
+  'gmail.cmo': 'gmail.com',
+  'gmail.co': 'gmail.com',
+  'yaho.com': 'yahoo.com',
+  'yahooo.com': 'yahoo.com',
+  'yahoo.con': 'yahoo.com',
+  'hotmial.com': 'hotmail.com',
+  'hotmal.com': 'hotmail.com',
+  'hotmail.con': 'hotmail.com',
+  'outlok.com': 'outlook.com',
+  'outllok.com': 'outlook.com',
+  'outlook.con': 'outlook.com',
+  'icloud.con': 'icloud.com'
+};
+
+const SERVER_DISPOSABLE_DOMAINS = new Set<string>([
+  'mailinator.com',
+  'tempmail.com',
+  'temp-mail.org',
+  '10minutemail.com',
+  'guerrillamail.com',
+  'yopmail.com',
+  'trashmail.com',
+  'getnada.com',
+  'sharklasers.com',
+  'maildrop.cc',
+  'throwawaymail.com',
+  'fakeinbox.com',
+  'dispostable.com',
+  'mohmal.com',
+  'tempmailo.com'
+]);
+
+const SERVER_FAKE_DOMAINS = new Set<string>([
+  'example.com',
+  'example.org',
+  'example.net',
+  'test.com',
+  'testing.com',
+  'yourdomain.com',
+  'domain.com',
+  'sample.com',
+  'fake.com',
+  'invalid.com',
+  'invalid',
+  'localhost',
+  'none.com',
+  'null.com',
+  'noemail.com',
+  'nomail.com'
+]);
+
+async function checkDomainMxRecord(domain: string): Promise<{ validMx: boolean; mxHost?: string }> {
+  const cleanDomain = domain.trim().toLowerCase();
+  const cached = domainMxCache.get(cleanDomain);
+  if (cached && Date.now() - cached.checkedAt < 15 * 60 * 1000) {
+    return { validMx: cached.validMx, mxHost: cached.mxHost };
+  }
+
+  try {
+    const mxRecords = await Promise.race([
+      dns.promises.resolveMx(cleanDomain),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('DNS_TIMEOUT')), 2500))
+    ]);
+    if (Array.isArray(mxRecords) && mxRecords.length > 0) {
+      const sorted = [...mxRecords].sort((a, b) => (a.priority || 0) - (b.priority || 0));
+      const mxHost = sorted[0]?.exchange || '';
+      if (mxHost && mxHost !== '.' && mxHost !== '0.0.0.0') {
+        domainMxCache.set(cleanDomain, { validMx: true, mxHost, checkedAt: Date.now() });
+        return { validMx: true, mxHost };
+      }
+    }
+    domainMxCache.set(cleanDomain, { validMx: false, checkedAt: Date.now() });
+    return { validMx: false };
+  } catch (err: any) {
+    const code = err?.code || err?.message || '';
+    if (code === 'ENOTFOUND' || code === 'ENODATA' || code === 'ESERVFAIL') {
+      domainMxCache.set(cleanDomain, { validMx: false, checkedAt: Date.now() });
+      return { validMx: false };
+    }
+    // On transient DNS timeout, check A record fallback
+    try {
+      const aRecords = await Promise.race([
+        dns.promises.resolve4(cleanDomain),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('DNS_TIMEOUT')), 1500))
+      ]);
+      const ok = Array.isArray(aRecords) && aRecords.length > 0;
+      domainMxCache.set(cleanDomain, { validMx: ok, checkedAt: Date.now() });
+      return { validMx: ok };
+    } catch {
+      // If network blocks outbound UDP DNS, assume valid syntax domains are reachable unless ENOTFOUND
+      return { validMx: true };
+    }
+  }
+}
+
+// Endpoint: Deep Batch Email Verification (Syntax + Typo + Disposable + Real DNS MX Lookup)
+app.post('/api/verify/emails', async (req, res) => {
+  try {
+    const rawEmails: string[] = Array.isArray(req.body?.emails) ? req.body.emails.slice(0, 500) : [];
+    const results: Record<string, any> = {};
+
+    await Promise.all(
+      rawEmails.map(async (rawEmail) => {
+        const trimmed = String(rawEmail || '').trim();
+        const lower = trimmed.toLowerCase();
+        if (!lower) return;
+
+        if (/\s/.test(trimmed) || !lower.includes('@') || lower.split('@').length !== 2) {
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: 'invalid',
+            reason: 'Malformed email format',
+            reasonBn: 'নষ্ট মেইল: ইমেইল ফরম্যাট সঠিক নয় (পাঠানো যাবে না)',
+            mxVerified: false
+          };
+          return;
+        }
+
+        const [localPart, domainPart] = lower.split('@');
+        if (!localPart || !domainPart || !domainPart.includes('.')) {
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: 'invalid',
+            reason: 'Incomplete email or domain',
+            reasonBn: 'নষ্ট মেইল: ডোমেইন বা ইউজারনেম অসম্পূর্ণ',
+            mxVerified: false
+          };
+          return;
+        }
+
+        if (SERVER_TYPO_DOMAINS[domainPart]) {
+          const suggestion = `${localPart}@${SERVER_TYPO_DOMAINS[domainPart]}`;
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: 'invalid',
+            reason: `Domain typo (${domainPart}) — will hard-bounce`,
+            reasonBn: `নষ্ট মেইল: ডোমেইন বানান ভুল (${domainPart})! পাঠালে বাউন্স করবে (সঠিক: ${suggestion})`,
+            suggestion,
+            mxVerified: false
+          };
+          return;
+        }
+
+        if (SERVER_FAKE_DOMAINS.has(domainPart)) {
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: 'invalid',
+            reason: `Placeholder/Test domain (${domainPart}) — undeliverable`,
+            reasonBn: `নষ্ট/টেস্ট মেইল (${domainPart}): এই ডোমেইনে মেইল পাঠানো যাবে না`,
+            mxVerified: false
+          };
+          return;
+        }
+
+        if (SERVER_DISPOSABLE_DOMAINS.has(domainPart)) {
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: 'invalid',
+            reason: `Disposable temporary email (${domainPart})`,
+            reasonBn: `নষ্ট/টেম্পোরারি মেইল (${domainPart}): এটি ভুয়া ওয়ান-টাইম মেইল`,
+            mxVerified: false
+          };
+          return;
+        }
+
+        const mxCheck = await checkDomainMxRecord(domainPart);
+        if (!mxCheck.validMx) {
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: 'invalid',
+            reason: `Dead domain / No MX mail server found for "${domainPart}"`,
+            reasonBn: `নষ্ট মেইল: "${domainPart}" ডোমেইনে কোনো মেইল সার্ভার (MX Record) নেই — পাঠালে বাউন্স হবে!`,
+            mxVerified: false
+          };
+          return;
+        }
+
+        results[lower] = {
+          email: trimmed,
+          isValid: true,
+          status: 'valid',
+          reason: `Verified active mail server (${mxCheck.mxHost || domainPart})`,
+          reasonBn: 'সঠিক ও ভেরিফাইড মেইল (পাঠানোর জন্য সম্পূর্ণ প্রস্তুত)',
+          mxVerified: true,
+          mxHost: mxCheck.mxHost
+        };
+      })
+    );
+
+    return res.json({ success: true, results });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Email verification failed' });
+  }
+});
+
 // Track recently dispatched pixel timestamps in memory to filter out immediate mail-server spam-scanner pre-fetches
 const dispatchedPixelsMap = new Map<string, number>();
 
@@ -4495,7 +4706,29 @@ app.post('/api/smtp/send', async (req, res) => {
       .replace(/\${2,}/g, '$')
       .trim();
 
-    const cleanTextBody = resolveMailTokens(text || (html ? String(html).replace(/<[^>]+>/g, '') : '')).trim();
+    // Check if SMTP account is in Week 1 of Auto Warm-Up (Days 1-7):
+    // In Week 1, enforce pure text-only body without external links or images to protect IP reputation on Google/Microsoft!
+    const isWeek1Warmup = (() => {
+      if (req.body.week1TextOnly === true) return true;
+      if (!activeSmtp) return false;
+      const mode = activeSmtp.warmupMode || (activeSmtp.warmupStatus === 'warming' ? 'ramp_15' : 'full');
+      if (mode !== 'ramp_15') return false;
+      if (activeSmtp.warmupCurrentDay && Number(activeSmtp.warmupCurrentDay) <= 7) return true;
+      const startStr = activeSmtp.warmupStartDate;
+      if (!startStr) return true; // Newly connected warming account defaults to Week 1
+      const diffDays = Math.max(1, Math.floor((Date.now() - new Date(startStr).getTime()) / (1000 * 60 * 60 * 24)) + 1);
+      return diffDays <= 7;
+    })();
+
+    let rawCleanTextBody = resolveMailTokens(text || (html ? String(html).replace(/<[^>]+>/g, '') : '')).trim();
+    if (isWeek1Warmup) {
+      // Strip raw http/https links and HTML image tags in Week 1 Warm-Up mode so Google/Microsoft treats it as 100% pure text
+      rawCleanTextBody = rawCleanTextBody
+        .replace(/<img[^>]*>/gi, '')
+        .replace(/https?:\/\/[^\s)>]+/gi, (match) => match.replace(/^https?:\/\/(www\.)?/i, '').split('/')[0])
+        .trim();
+    }
+    const cleanTextBody = rawCleanTextBody;
 
     // Register pixelId timestamp so immediate delivery-time spam-scanner pre-fetches (<15s) are never counted as human opens
     const rawPixelId = trackingPixelId || `px-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;

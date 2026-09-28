@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { INITIAL_TEMPLATES } from '../templates/TemplateManager';
 import { auditEmailDeliverability } from '../../utils/spamChecker';
+import { verifyEmailSync, verifyEmailsWithDns, EmailVerificationResult } from '../../utils/emailVerifier';
 import confetti from 'canvas-confetti';
 
 interface SendMailModalProps {
@@ -90,6 +91,32 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
   const [includeSignature, setIncludeSignature] = useState<boolean>(true);
   const [isSending, setIsSending] = useState<boolean>(false);
   const [isSuccess, setIsSuccess] = useState<boolean>(false);
+  const [emailCheck, setEmailCheck] = useState<EmailVerificationResult | null>(null);
+  const [isVerifyingMx, setIsVerifyingMx] = useState<boolean>(false);
+
+  useEffect(() => {
+    const clean = recipientEmail.trim();
+    if (!clean) {
+      setEmailCheck(null);
+      return;
+    }
+    const syncRes = verifyEmailSync(clean);
+    setEmailCheck(syncRes);
+    if (!syncRes.isValid) return;
+
+    const timer = setTimeout(async () => {
+      setIsVerifyingMx(true);
+      try {
+        const dnsResults = await verifyEmailsWithDns([clean]);
+        if (dnsResults && dnsResults[0]) {
+          setEmailCheck(dnsResults[0]);
+        }
+      } finally {
+        setIsVerifyingMx(false);
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [recipientEmail]);
 
   // Sync draft fields to sessionStorage
   useEffect(() => {
@@ -237,6 +264,14 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!recipientEmail || !subject || !body) return;
+    if (emailCheck && !emailCheck.isValid) {
+      addNotification({
+        title: 'Invalid / Broken Email Blocked 🚫',
+        message: `${recipientEmail} — ${emailCheck.reasonBn || emailCheck.reason}`,
+        type: 'system',
+      });
+      return;
+    }
 
     setIsSending(true);
 
@@ -407,7 +442,26 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
           {/* Row 1: Recipient Selection & Quick Lead Picker */}
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
             <div className="md:col-span-7 space-y-1">
-              <label className="block font-semibold text-slate-300">Recipient Email Address *</label>
+              <div className="flex items-center justify-between">
+                <label className="block font-semibold text-slate-300">Recipient Email Address *</label>
+                {recipientEmail.trim() && emailCheck && (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 ${
+                    !emailCheck.isValid
+                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                      : emailCheck.status === 'risky'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                  }`}>
+                    {isVerifyingMx
+                      ? 'Checking DNS MX...'
+                      : !emailCheck.isValid
+                      ? '🚫 নষ্ট মেইল (Invalid)'
+                      : emailCheck.status === 'risky'
+                      ? '⚠️ Risky'
+                      : '✓ Verified Valid'}
+                  </span>
+                )}
+              </div>
               <div className="relative">
                 <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
@@ -416,9 +470,40 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
                   value={recipientEmail}
                   onChange={(e) => setRecipientEmail(e.target.value)}
                   placeholder="e.g. sarah.jenkins@linear.app"
-                  className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className={`w-full bg-slate-900 border rounded-xl pl-9 pr-20 py-2 text-slate-200 focus:outline-none ${
+                    emailCheck && !emailCheck.isValid
+                      ? 'border-rose-500/70 focus:border-rose-400'
+                      : 'border-slate-800 focus:border-cyan-500'
+                  }`}
                 />
+                {recipientEmail.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => setRecipientEmail('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 hover:text-rose-400 px-1.5 py-0.5 rounded bg-slate-800 cursor-pointer"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
+              {emailCheck && (!emailCheck.isValid || emailCheck.status === 'risky') && (
+                <div className={`p-2 rounded-xl border text-[11px] flex items-center justify-between gap-2 ${
+                  !emailCheck.isValid
+                    ? 'bg-rose-950/50 border-rose-500/40 text-rose-200'
+                    : 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                }`}>
+                  <span>{emailCheck.reasonBn || emailCheck.reason}</span>
+                  {emailCheck.suggestion && (
+                    <button
+                      type="button"
+                      onClick={() => setRecipientEmail(emailCheck.suggestion!)}
+                      className="px-2 py-0.5 rounded bg-emerald-500 text-slate-950 font-extrabold text-[10px] shrink-0 cursor-pointer"
+                    >
+                      Fix → {emailCheck.suggestion}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="md:col-span-5 space-y-1">

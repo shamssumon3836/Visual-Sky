@@ -22,47 +22,124 @@ import { supabase, isSupabaseConfigured, signOutSupabase } from '../lib/supabase
 import { queryUserWorkspace, persistUserWorkspace, WorkspaceData } from '../lib/workspaceSync';
 import { safeParseResponse } from '../lib/safeFetch';
 
-// Helper to calculate warm-up limits based on gradual +15/day ramp
+// Helper to calculate automatic 4-Week SMTP Warm-up Schedule limits:
+// Week 1 (Days 1-7): Daily 10 to 15 mails (Text-only enforced: no links or images)
+// Week 2 (Days 8-14): Daily 20 to 25 mails
+// Week 3 (Days 15-21): Daily 30 to 35 mails
+// Week 4 & Onward (Day 22+): Daily 40 to 50 mails
 export const getSMTPWarmupDetails = (account: SMTPAccount) => {
-  const mode = account.warmupMode || (account.warmupStatus === 'warming' ? 'ramp_15' : 'full');
-  const dailyCap = account.dailyLimit || 500;
+  const mode = account.warmupMode || (account.warmupStatus === 'paused' ? 'paused' : account.warmupMode === 'full' ? 'full' : 'ramp_15');
+  const dailyCap = account.dailyLimit || 50;
   
   if (mode === 'paused') {
     return {
-      mode: 'paused',
+      mode: 'paused' as const,
       day: 1,
+      week: 1,
+      minDailyLimit: 0,
       currentDailyLimit: 0,
       dailyCap,
       percentComplete: 0,
-      isRamping: false
+      isRamping: false,
+      textOnlyEnforced: false,
+      weekLabel: 'Warm-Up Paused',
+      weekLabelBn: 'ওয়ার্ম-আপ বিরতিতে আছে',
+      rangeText: '0 mails/day',
+      ruleNote: 'এই রিলে থেকে মেইল পাঠানো সাময়িকভাবে বন্ধ আছে।'
     };
   }
   
   if (mode === 'full') {
     return {
-      mode: 'full',
-      day: 30,
+      mode: 'full' as const,
+      day: 28,
+      week: 4,
+      minDailyLimit: 40,
       currentDailyLimit: dailyCap,
       dailyCap,
       percentComplete: 100,
-      isRamping: false
+      isRamping: false,
+      textOnlyEnforced: false,
+      weekLabel: 'Week 4+ (Full Capacity)',
+      weekLabelBn: 'চতুর্থ সপ্তাহ+ (পূর্ণ সক্ষমতা)',
+      rangeText: `${dailyCap} mails/day`,
+      ruleNote: 'পূর্ণ সক্ষমতায় মেইল পাঠানোর জন্য প্রস্তুত।'
     };
   }
   
-  // ramp_15 calculation
+  // Automatic 4-Week Warm-Up Schedule calculation based on warmupStartDate (or warmupCurrentDay override)
   const startDateStr = account.warmupStartDate || new Date().toISOString();
   const startMs = new Date(startDateStr).getTime();
-  const diffDays = Math.max(1, Math.floor((Date.now() - startMs) / (1000 * 60 * 60 * 24)) + 1);
-  const rampLimit = Math.min(dailyCap, 15 * diffDays);
-  const percentComplete = Math.min(100, Math.round((rampLimit / dailyCap) * 100));
+  const elapsedDays = Number.isFinite(startMs)
+    ? Math.max(1, Math.floor((Date.now() - startMs) / (1000 * 60 * 60 * 24)) + 1)
+    : 1;
+  const diffDays = account.warmupCurrentDay && account.warmupCurrentDay > 0
+    ? Math.max(account.warmupCurrentDay, elapsedDays)
+    : elapsedDays;
+
+  let week = 1;
+  let minDailyLimit = 10;
+  let maxDailyLimit = 15;
+  let textOnlyEnforced = true;
+  let weekLabel = 'Week 1 (প্রথম সপ্তাহ)';
+  let weekLabelBn = '১ম সপ্তাহ (Daily 10–15টি মেইল)';
+  let rangeText = '10–15 mails/day';
+  let ruleNote = 'শুরুতেই বেশি পাঠালে Google/Microsoft স্প্যামার ভাববে। এই সপ্তাহে শুধু টেক্সট মেইল যাবে (কোনো লিঙ্ক বা ইমেজ ছাড়া)।';
+
+  if (diffDays <= 7) {
+    week = 1;
+    minDailyLimit = 10;
+    maxDailyLimit = 15;
+    textOnlyEnforced = true;
+    weekLabel = 'Week 1 (প্রথম সপ্তাহ)';
+    weekLabelBn = '১ম সপ্তাহ: Daily 10–15টি মেইল';
+    rangeText = '10–15 mails/day';
+    ruleNote = 'শুরুতেই বেশি পাঠালে Google/Microsoft স্প্যামার ভাববে। এই সপ্তাহে অটোমেটিক শুধু টেক্সট মেইল যাবে (লিঙ্ক বা ইমেজ ছাড়া)।';
+  } else if (diffDays <= 14) {
+    week = 2;
+    minDailyLimit = 20;
+    maxDailyLimit = 25;
+    textOnlyEnforced = false;
+    weekLabel = 'Week 2 (দ্বিতীয় সপ্তাহ)';
+    weekLabelBn = '২য় সপ্তাহ: Daily 20–25টি মেইল';
+    rangeText = '20–25 mails/day';
+    ruleNote = 'দ্বিতীয় সপ্তাহে অটোমেটিক ডেইলি লিমিট ২০ থেকে ২৫টি মেইল।';
+  } else if (diffDays <= 21) {
+    week = 3;
+    minDailyLimit = 30;
+    maxDailyLimit = 35;
+    textOnlyEnforced = false;
+    weekLabel = 'Week 3 (তৃতীয় সপ্তাহ)';
+    weekLabelBn = '৩য় সপ্তাহ: Daily 30–35টি মেইল';
+    rangeText = '30–35 mails/day';
+    ruleNote = 'তৃতীয় সপ্তাহে অটোমেটিক ডেইলি লিমিট ৩০ থেকে ৩৫টি মেইল।';
+  } else {
+    week = 4;
+    minDailyLimit = 40;
+    maxDailyLimit = 50;
+    textOnlyEnforced = false;
+    weekLabel = 'Week 4 & Onward (৪র্থ সপ্তাহ+)';
+    weekLabelBn = '৪র্থ সপ্তাহ ও পরবর্তী: Daily 40–50টি মেইল';
+    rangeText = '40–50 mails/day';
+    ruleNote = 'চতুর্থ সপ্তাহ ও পরবর্তী সময়ে অটোমেটিক ডেইলি লিমিট ৪০ থেকে ৫০টি মেইল।';
+  }
+
+  const percentComplete = Math.min(100, Math.round((Math.min(diffDays, 22) / 22) * 100));
   
   return {
-    mode: 'ramp_15',
+    mode: 'ramp_15' as const,
     day: diffDays,
-    currentDailyLimit: rampLimit,
-    dailyCap,
+    week,
+    minDailyLimit,
+    currentDailyLimit: maxDailyLimit,
+    dailyCap: Math.max(dailyCap, 50),
     percentComplete,
-    isRamping: rampLimit < dailyCap
+    isRamping: true,
+    textOnlyEnforced,
+    weekLabel,
+    weekLabelBn,
+    rangeText,
+    ruleNote
   };
 };
 
@@ -157,8 +234,8 @@ export const getSMTPAccountMetrics = (
   );
 
   const warmup = getSMTPWarmupDetails({ ...smtp, sentToday });
-  const dailyCap = smtp.dailyLimit || 500;
-  const effectiveDailyLimit = warmup.isRamping ? warmup.currentDailyLimit : dailyCap;
+  const dailyCap = smtp.dailyLimit || 50;
+  const effectiveDailyLimit = warmup.mode === 'ramp_15' ? warmup.currentDailyLimit : warmup.mode === 'paused' ? 0 : dailyCap;
   const remainingToday = Math.max(0, effectiveDailyLimit - sentToday);
   const usagePct = effectiveDailyLimit > 0 ? Math.min(100, Math.round((sentToday / effectiveDailyLimit) * 100)) : 0;
   const openRatePct = totalDispatched > 0 ? Math.min(100, Math.round((openedCount / totalDispatched) * 100)) : 0;
@@ -1978,33 +2055,116 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   };
 
+  // Persistent registry of permanently deleted IMAP message IDs and thread keys so deleted Trash items never resurrect
+  const recordPermanentlyDeletedThreads = (deletedThreads: EmailThread[]) => {
+    if (!Array.isArray(deletedThreads) || deletedThreads.length === 0) return;
+    try {
+      const raw = localStorage.getItem('visualsky_deleted_imap_msgs');
+      const existing: string[] = raw ? JSON.parse(raw) : [];
+      const set = new Set<string>(existing);
+      for (const t of deletedThreads) {
+        if (!t) continue;
+        if (t.id) set.add(`thread:${t.id}`);
+        if (Array.isArray(t.messages)) {
+          for (const m of t.messages) {
+            if (m?.id) set.add(m.id);
+          }
+        }
+      }
+      const nextArr = Array.from(set).slice(-3000);
+      localStorage.setItem('visualsky_deleted_imap_msgs', JSON.stringify(nextArr));
+    } catch {}
+  };
+
   const deleteThreadToTrash = (threadId: string) => {
-    setThreads(prev => prev.map(t => t.id === threadId ? { ...t, isTrash: true, deletedAt: new Date().toISOString() } : t));
+    setThreads(prev => {
+      const refList = latestWorkspaceRef.current.threads || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const next = base.map(t =>
+        t.id === threadId ? { ...t, isTrash: true, deletedAt: new Date().toISOString() } : t
+      );
+      (latestWorkspaceRef.current as any).threads = next;
+      persistResourceDirectly('threads', next);
+      return next;
+    });
+    addNotification({
+      title: 'Moved to Trash 🗑️',
+      message: 'Conversation moved to Trash Bin.',
+      type: 'system',
+      linkTab: 'inbox'
+    });
   };
 
   const restoreThread = (threadId: string) => {
-    setThreads(prev => prev.map(t => t.id === threadId ? { ...t, isTrash: false, deletedAt: undefined } : t));
+    setThreads(prev => {
+      const refList = latestWorkspaceRef.current.threads || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const next = base.map(t =>
+        t.id === threadId ? { ...t, isTrash: false, deletedAt: undefined } : t
+      );
+      (latestWorkspaceRef.current as any).threads = next;
+      persistResourceDirectly('threads', next);
+      return next;
+    });
+    addNotification({
+      title: 'Conversation Restored 📬',
+      message: 'Email thread returned to Primary Inbox.',
+      type: 'system',
+      linkTab: 'inbox'
+    });
   };
 
   const permanentDeleteThread = (threadId: string) => {
-    setThreads(prev => prev.filter(t => t.id !== threadId));
+    setThreads(prev => {
+      const refList = latestWorkspaceRef.current.threads || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const toDelete = base.filter(t => t.id === threadId);
+      recordPermanentlyDeletedThreads(toDelete);
+      const next = base.filter(t => t.id !== threadId);
+      (latestWorkspaceRef.current as any).threads = next;
+      persistResourceDirectly('threads', next);
+      return next;
+    });
+    addNotification({
+      title: 'Email Permanently Deleted 🗑️',
+      message: 'Conversation permanently removed from Trash.',
+      type: 'system'
+    });
   };
 
   const bulkRestoreThreads = (threadIds: string[]) => {
-    setThreads(prev => prev.map(t => threadIds.includes(t.id) ? { ...t, isTrash: false, deletedAt: undefined } : t));
+    setThreads(prev => {
+      const refList = latestWorkspaceRef.current.threads || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const next = base.map(t =>
+        threadIds.includes(t.id) ? { ...t, isTrash: false, deletedAt: undefined } : t
+      );
+      (latestWorkspaceRef.current as any).threads = next;
+      persistResourceDirectly('threads', next);
+      return next;
+    });
     addNotification({
       title: 'Email Threads Restored 📬',
-      message: `${threadIds.length} conversations returned to active smart inbox.`,
+      message: `${threadIds.length} conversation(s) returned to Primary Inbox.`,
       type: 'system',
       linkTab: 'inbox'
     });
   };
 
   const bulkPermanentDeleteThreads = (threadIds: string[]) => {
-    setThreads(prev => prev.filter(t => !threadIds.includes(t.id)));
+    setThreads(prev => {
+      const refList = latestWorkspaceRef.current.threads || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const toDelete = base.filter(t => threadIds.includes(t.id));
+      recordPermanentlyDeletedThreads(toDelete);
+      const next = base.filter(t => !threadIds.includes(t.id));
+      (latestWorkspaceRef.current as any).threads = next;
+      persistResourceDirectly('threads', next);
+      return next;
+    });
     addNotification({
-      title: 'Conversations Purged 🗑️',
-      message: `${threadIds.length} threads permanently erased.`,
+      title: 'Conversations Permanently Deleted 🗑️',
+      message: `${threadIds.length} thread(s) permanently erased from Trash.`,
       type: 'system'
     });
   };
@@ -2326,6 +2486,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newAcc: SMTPAccount = {
       ...accountData,
       id: `smtp-${Date.now()}`,
+      dailyLimit: accountData.dailyLimit || 50,
+      warmupStatus: accountData.warmupStatus || 'warming',
+      warmupMode: accountData.warmupMode || 'ramp_15',
+      warmupStartDate: accountData.warmupStartDate || new Date().toISOString(),
       sentToday: 0,
       healthScore: 99,
       isConnected: true,
@@ -3173,9 +3337,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (isOutboundCopy) continue;
           }
 
-          // Deduplicate strictly by unique IMAP UID / Message-ID
+          // Deduplicate strictly by unique IMAP UID / Message-ID and ignore permanently deleted messages
           const cleanUidPart = String(msg.uid || msg.messageId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
           const msgUniqueId = `imap-msg-${mailboxKey}-${cleanUidPart}`;
+
+          let permanentlyDeletedSet = new Set<string>();
+          try {
+            const rawDel = localStorage.getItem('visualsky_deleted_imap_msgs');
+            if (rawDel) permanentlyDeletedSet = new Set<string>(JSON.parse(rawDel));
+          } catch {}
+
+          if (permanentlyDeletedSet.has(msgUniqueId)) {
+            continue;
+          }
 
           const alreadyExistsInAnyThread = workingThreads.some(t =>
             t.messages.some(m => m.id === msgUniqueId)
@@ -3914,12 +4088,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     sentEmails.filter(s => s.isTrash).length;
 
   const emptyAllTrash = () => {
+    const trashedThreads = threads.filter(t => t.isTrash);
+    recordPermanentlyDeletedThreads(trashedThreads);
     const cleanLeads = leads.filter(l => !l.isTrash);
     const cleanThreads = threads.filter(t => !t.isTrash);
     const cleanSmtp = smtpAccounts.filter(s => !s.isTrash);
     const cleanCampaigns = campaigns.filter(c => !c.isTrash);
     const cleanTemplates = emailTemplates.filter(t => !t.isTrash);
     const cleanSent = sentEmails.filter(s => !s.isTrash);
+
+    (latestWorkspaceRef.current as any).leads = cleanLeads;
+    (latestWorkspaceRef.current as any).threads = cleanThreads;
+    (latestWorkspaceRef.current as any).smtpAccounts = cleanSmtp;
+    (latestWorkspaceRef.current as any).campaigns = cleanCampaigns;
+    (latestWorkspaceRef.current as any).emailTemplates = cleanTemplates;
+    (latestWorkspaceRef.current as any).sentEmails = cleanSent;
 
     setLeads(cleanLeads);
     setThreads(cleanThreads);
@@ -4118,6 +4301,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteThreadToTrash,
         restoreThread,
         permanentDeleteThread,
+        bulkRestoreThreads,
+        bulkPermanentDeleteThreads,
         campaigns,
         setCampaigns,
         createCampaign,
@@ -4156,8 +4341,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteSentEmail,
         restoreSentEmail,
         permanentDeleteSentEmail,
-        bulkRestoreThreads,
-        bulkPermanentDeleteThreads,
         markEmailOpened,
         simulateLeadReplyToSentEmail,
         sendDirectEmail,

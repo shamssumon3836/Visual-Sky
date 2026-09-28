@@ -3,6 +3,7 @@ import { useApp, getSMTPAccountMetrics } from '../../context/AppContext';
 import { Campaign, CampaignStep, Lead, SMTPAccount, EmailTemplate } from '../../types';
 import { SMTPConnectModal } from '../smtp/SMTPConnectModal';
 import { safeParseResponse } from '../../lib/safeFetch';
+import { verifyEmailSync, verifyEmailsWithDns, parseAndVerifyRawEmails, EmailVerificationResult } from '../../utils/emailVerifier';
 import { 
   Send, 
   Activity,
@@ -29,6 +30,8 @@ import {
   CheckSquare,
   Square,
   ShieldCheck,
+  ShieldAlert,
+  ClipboardPaste,
   Search,
   Globe,
   Sliders,
@@ -57,7 +60,10 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     getDormantLeads,
     leads,
     leadTags,
+    addLeads,
     updateLead,
+    deleteLeadToTrash,
+    bulkDeleteLeads,
     smtpAccounts,
     currentUser,
     emailTemplates,
@@ -365,6 +371,84 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   const [selectedLeadTags, setSelectedLeadTags] = useState<string[]>([]);
   const [wizardLeadSearch, setWizardLeadSearch] = useState<string>('');
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>(activeLeads.map(l => l.id));
+
+  // Step 3 Email Verification & Paste State
+  const [wizardDnsMap, setWizardDnsMap] = useState<Record<string, EmailVerificationResult>>({});
+  const [isWizardScanningDns, setIsWizardScanningDns] = useState<boolean>(false);
+  const [showWizardPasteBox, setShowWizardPasteBox] = useState<boolean>(false);
+  const [wizardPasteText, setWizardPasteText] = useState<string>('');
+  const [wizardPastedItems, setWizardPastedItems] = useState<Array<{ email: string; name: string; company: string; verification: EmailVerificationResult }>>([]);
+  const [isWizardPasteVerifyingDns, setIsWizardPasteVerifyingDns] = useState<boolean>(false);
+
+  const getWizardEmailCheck = (email: string): EmailVerificationResult => {
+    const key = (email || '').trim().toLowerCase();
+    if (wizardDnsMap[key]) return wizardDnsMap[key];
+    return verifyEmailSync(email || '');
+  };
+
+  // Check selected leads in Step 3 for broken/invalid emails
+  const wizardAudienceHealth = useMemo(() => {
+    const selectedSet = new Set(selectedLeadIds);
+    const enrolledLeads = activeLeads.filter(l => selectedSet.has(l.id));
+    const brokenEnrolled: Array<{ lead: Lead; check: EmailVerificationResult }> = [];
+    const fixableEnrolled: Array<{ lead: Lead; check: EmailVerificationResult }> = [];
+
+    enrolledLeads.forEach(lead => {
+      const check = getWizardEmailCheck(lead.email);
+      if (!check.isValid) {
+        brokenEnrolled.push({ lead, check });
+      }
+      if (check.suggestion) {
+        fixableEnrolled.push({ lead, check });
+      }
+    });
+
+    return { enrolledLeads, brokenEnrolled, fixableEnrolled };
+  }, [activeLeads, selectedLeadIds, wizardDnsMap]);
+
+  const handleWizardDeepDnsScan = async () => {
+    if (wizardAudienceHealth.enrolledLeads.length === 0 || isWizardScanningDns) return;
+    setIsWizardScanningDns(true);
+    try {
+      const emails = wizardAudienceHealth.enrolledLeads.map(l => l.email).filter(Boolean);
+      const res = await verifyEmailsWithDns(emails);
+      const next: Record<string, EmailVerificationResult> = { ...wizardDnsMap };
+      res.forEach(r => {
+        next[r.email.toLowerCase()] = r;
+      });
+      setWizardDnsMap(next);
+    } finally {
+      setIsWizardScanningDns(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!wizardPasteText.trim()) {
+      setWizardPastedItems([]);
+      return;
+    }
+    const parsed = parseAndVerifyRawEmails(wizardPasteText);
+    setWizardPastedItems(parsed);
+    const validEmails = parsed.filter(p => p.verification.isValid).map(p => p.email);
+    if (validEmails.length === 0) return;
+
+    const timer = setTimeout(async () => {
+      setIsWizardPasteVerifyingDns(true);
+      try {
+        const dnsRes = await verifyEmailsWithDns(validEmails);
+        const map = new Map(dnsRes.map(r => [r.email.toLowerCase(), r]));
+        setWizardPastedItems(prev =>
+          prev.map(item => {
+            const found = map.get(item.email.toLowerCase());
+            return found ? { ...item, verification: found } : item;
+          })
+        );
+      } finally {
+        setIsWizardPasteVerifyingDns(false);
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [wizardPasteText]);
 
   // Tag color mapping helper
   const getLeadTagColorClass = (tagName: string) => {
@@ -2591,11 +2675,28 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                 <div className="space-y-4 animate-in fade-in">
                   {/* Top Cohort & Search Row */}
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
-                    <div className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                    <div className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2 flex-wrap">
                       <span>Audience Selection</span>
                       <span className="px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800 text-[11px] font-mono lowercase">
                         {selectedLeadIds.length} / {activeLeads.length} selected
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowWizardPasteBox(prev => !prev)}
+                        className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 text-[11px] font-extrabold flex items-center gap-1 cursor-pointer normal-case"
+                      >
+                        <ClipboardPaste className="w-3 h-3" />
+                        <span>{showWizardPasteBox ? 'Hide Paste Box' : '+ Paste & Verify Emails'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleWizardDeepDnsScan}
+                        disabled={isWizardScanningDns}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-[11px] font-extrabold flex items-center gap-1 cursor-pointer normal-case"
+                      >
+                        <ShieldCheck className={`w-3 h-3 ${isWizardScanningDns ? 'animate-spin' : ''}`} />
+                        <span>{isWizardScanningDns ? 'Checking DNS MX...' : 'Verify Selected Mails'}</span>
+                      </button>
                     </div>
 
                     {/* Status / Cohort Tabs */}
@@ -2622,6 +2723,165 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                       ))}
                     </div>
                   </div>
+
+                  {/* PASTE & VERIFY EMAILS DIRECTLY IN CAMPAIGN WIZARD */}
+                  {showWizardPasteBox && (() => {
+                    const invalidPasted = wizardPastedItems.filter(i => !i.verification.isValid);
+                    const validPasted = wizardPastedItems.filter(i => i.verification.isValid);
+                    const fixablePasted = wizardPastedItems.filter(i => Boolean(i.verification.suggestion));
+
+                    return (
+                      <div className="p-4 rounded-2xl bg-slate-950/90 border border-cyan-500/40 space-y-3 animate-in fade-in">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div className="text-xs font-extrabold text-cyan-300 flex items-center gap-1.5">
+                            <ClipboardPaste className="w-4 h-4 text-cyan-400" />
+                            <span>Paste Emails to Verify & Add to Campaign (নষ্ট মেইল অটো চেকার)</span>
+                          </div>
+                          {isWizardPasteVerifyingDns && (
+                            <span className="text-[11px] font-mono text-cyan-400 animate-pulse">Checking DNS MX...</span>
+                          )}
+                        </div>
+
+                        <textarea
+                          rows={3}
+                          value={wizardPasteText}
+                          onChange={(e) => setWizardPasteText(e.target.value)}
+                          placeholder="Paste emails here (one per line or comma separated)... e.g. founder@company.com, broken@gmal.com"
+                          className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500"
+                        />
+
+                        {wizardPastedItems.length > 0 && (
+                          <div className="space-y-2.5">
+                            <div className="flex items-center justify-between flex-wrap gap-2 p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs">
+                              <div className="flex items-center gap-3 font-bold">
+                                <span className="text-emerald-400">✅ সচল মেইল: {validPasted.length}</span>
+                                <span className="text-rose-400">🚫 নষ্ট মেইল: {invalidPasted.length}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {fixablePasted.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      let txt = wizardPasteText;
+                                      fixablePasted.forEach(item => {
+                                        if (item.verification.suggestion) {
+                                          txt = txt.split(item.email).join(item.verification.suggestion);
+                                        }
+                                      });
+                                      setWizardPasteText(txt);
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-extrabold text-[10px] cursor-pointer"
+                                  >
+                                    ✨ Auto-Fix {fixablePasted.length} Typos
+                                  </button>
+                                )}
+                                {invalidPasted.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setWizardPasteText(validPasted.map(i => i.email).join('\n'));
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-extrabold text-[10px] cursor-pointer"
+                                  >
+                                    🗑️ সব নষ্ট মেইল বাদ দিন ({invalidPasted.length})
+                                  </button>
+                                )}
+                                {validPasted.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const tag = selectedLeadTags[0] || leadTags[0]?.name || 'Campaign Leads';
+                                      addLeads(
+                                        validPasted.map(item => ({
+                                          name: item.name,
+                                          email: item.email,
+                                          company: item.company,
+                                          title: 'Decision Maker',
+                                          tags: [tag],
+                                        })),
+                                        tag
+                                      );
+                                      setWizardPasteText('');
+                                      setWizardPastedItems([]);
+                                      setShowWizardPasteBox(false);
+                                    }}
+                                    className="px-3 py-1 rounded-lg bg-emerald-500 text-slate-950 font-extrabold text-[10px] cursor-pointer"
+                                  >
+                                    + Add {validPasted.length} Verified Leads
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {invalidPasted.length > 0 && (
+                              <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
+                                {invalidPasted.map((item, idx) => (
+                                  <div key={idx} className="p-2 rounded-lg bg-rose-950/50 border border-rose-500/40 flex items-center justify-between gap-2 text-[11px]">
+                                    <div className="min-w-0">
+                                      <span className="font-mono font-bold text-rose-300">{item.email}</span>
+                                      <span className="text-rose-200/80 ml-2">— {item.verification.reasonBn || item.verification.reason}</span>
+                                    </div>
+                                    {item.verification.suggestion && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setWizardPasteText(prev => prev.split(item.email).join(item.verification.suggestion!))}
+                                        className="px-2 py-0.5 rounded bg-emerald-500 text-slate-950 font-extrabold text-[10px] shrink-0 cursor-pointer"
+                                      >
+                                        Fix → {item.verification.suggestion}
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* BROKEN / INVALID EMAIL WARNING FOR SELECTED CAMPAIGN RECIPIENTS */}
+                  {(wizardAudienceHealth.brokenEnrolled.length > 0 || wizardAudienceHealth.fixableEnrolled.length > 0) && (
+                    <div className="p-3.5 rounded-2xl bg-rose-950/60 border border-rose-500/50 space-y-2.5 animate-in fade-in">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 text-xs font-extrabold text-rose-200">
+                          <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                          <span>
+                            🚫 সিলেক্ট করা লিস্টে {wizardAudienceHealth.brokenEnrolled.length}টি নষ্ট মেইল পাওয়া গেছে! (পাঠালে বাউন্স হবে)
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {wizardAudienceHealth.fixableEnrolled.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                wizardAudienceHealth.fixableEnrolled.forEach(({ lead, check }) => {
+                                  if (check.suggestion) updateLead(lead.id, { email: check.suggestion });
+                                });
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-[11px] cursor-pointer"
+                            >
+                              ✨ Fix {wizardAudienceHealth.fixableEnrolled.length} Typos
+                            </button>
+                          )}
+                          {wizardAudienceHealth.brokenEnrolled.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const badIds = wizardAudienceHealth.brokenEnrolled.map(b => b.lead.id);
+                                setSelectedLeadIds(prev => prev.filter(id => !badIds.includes(id)));
+                                bulkDeleteLeads(badIds);
+                              }}
+                              className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-[11px] cursor-pointer flex items-center gap-1"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>সব নষ্ট মেইল রিমুভ করুন ({wizardAudienceHealth.brokenEnrolled.length})</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* MANAGE TAGS SELECTOR BAR */}
                   <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-2">
@@ -2783,8 +3043,28 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                                     </span>
                                   ))}
                                 </div>
-                                <div className="text-[11px] text-slate-400 font-mono truncate">
-                                  {lead.email} &bull; <strong className="text-slate-300">{lead.company}</strong>
+                                <div className="text-[11px] text-slate-400 font-mono truncate flex items-center gap-1.5 flex-wrap">
+                                  {(() => {
+                                    const chk = getWizardEmailCheck(lead.email);
+                                    if (!chk.isValid) {
+                                      return (
+                                        <span className="px-1.5 py-0.2 rounded bg-rose-500/20 border border-rose-500/40 text-rose-300 text-[9px] font-extrabold">
+                                          🚫 নষ্ট মেইল ({chk.reasonBn || chk.reason})
+                                        </span>
+                                      );
+                                    }
+                                    if (chk.status === 'risky') {
+                                      return (
+                                        <span className="px-1.5 py-0.2 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[9px] font-extrabold">
+                                          ⚠️ Risky
+                                        </span>
+                                      );
+                                    }
+                                    return (
+                                      <span className="text-[9px] text-emerald-400 font-bold">✓ Valid</span>
+                                    );
+                                  })()}
+                                  <span>{lead.email}</span> &bull; <strong className="text-slate-300">{lead.company}</strong>
                                 </div>
                               </div>
                             </div>

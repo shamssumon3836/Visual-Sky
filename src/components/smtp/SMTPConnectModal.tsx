@@ -62,8 +62,9 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
   const [replyToEmail, setReplyToEmail] = useState<string>('');
 
   // Throttle & Warmup
-  const [dailyLimit, setDailyLimit] = useState<number>(500);
+  const [dailyLimit, setDailyLimit] = useState<number>(50);
   const [warmupMode, setWarmupMode] = useState<'ramp_15' | 'full' | 'paused'>('ramp_15');
+  const [selectedWarmupWeek, setSelectedWarmupWeek] = useState<1 | 2 | 3 | 4>(1);
   const [intervalSeconds, setIntervalSeconds] = useState<number>(15);
   const [jitterRandom, setJitterRandom] = useState<boolean>(true);
 
@@ -98,8 +99,10 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
       setFromName(editingAccount.fromName || 'Outreach Manager');
       setFromEmail(editingAccount.fromEmail || editingAccount.username);
       setReplyToEmail(editingAccount.replyToEmail || '');
-      setDailyLimit(editingAccount.dailyLimit || 500);
+      setDailyLimit(editingAccount.dailyLimit || 50);
       setWarmupMode(editingAccount.warmupMode || (editingAccount.warmupStatus === 'warming' ? 'ramp_15' : 'full'));
+      const curDay = editingAccount.warmupCurrentDay || 1;
+      setSelectedWarmupWeek(curDay <= 7 ? 1 : curDay <= 14 ? 2 : curDay <= 21 ? 3 : 4);
       setIntervalSeconds(editingAccount.scheduleSettings?.intervalSeconds || 15);
       setJitterRandom(editingAccount.scheduleSettings?.jitterRandom ?? true);
       setCustomHostEdited(true);
@@ -479,6 +482,9 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
       return;
     }
 
+    const targetDay = selectedWarmupWeek === 1 ? 1 : selectedWarmupWeek === 2 ? 8 : selectedWarmupWeek === 3 ? 15 : 22;
+    const computedStartDate = new Date(Date.now() - (targetDay - 1) * 86400000).toISOString();
+
     const payload = {
       name: accountName.trim() || `${effFromEmail || provider.toUpperCase()} Relay`,
       provider,
@@ -491,10 +497,12 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
       domainWebmailUrl: effWebmail && effWebmail !== 'https://webmail.yourdomain.com' ? effWebmail : undefined,
       replyToEmail: replyToEmail.trim() || undefined,
       authMethod,
-      dailyLimit: Number(dailyLimit) || 500,
+      dailyLimit: Number(dailyLimit) || 50,
       warmupStatus: (warmupMode === 'ramp_15' ? 'warming' : warmupMode === 'paused' ? 'paused' : 'active') as 'active' | 'warming' | 'paused',
       warmupMode,
-      warmupStartDate: editingAccount?.warmupStartDate || new Date().toISOString(),
+      warmupStartDate: computedStartDate,
+      warmupCurrentDay: targetDay,
+      warmupTextOnlyEnforced: warmupMode === 'ramp_15' && selectedWarmupWeek === 1,
       password: password.trim(),
       scheduleSettings: {
         sendMode: 'instant' as const,
@@ -936,95 +944,123 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
             <div className="space-y-5 animate-in fade-in">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-300">Daily Outbound Sending Cap (Ceiling)</label>
-                  <input
-                    type="number"
-                    value={dailyLimit}
-                    onChange={(e) => setDailyLimit(Number(e.target.value))}
-                    min={15}
-                    max={10000}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
-                  />
-                  <span className="text-[10px] text-slate-500">Maximum daily ceiling. Gradual warm-up will ramp up to this value.</span>
-                </div>
-
-                <div className="space-y-1">
                   <label className="block text-xs font-bold text-slate-300">Automated Warm-up Engine</label>
                   <select
                     value={warmupMode}
                     onChange={(e) => setWarmupMode(e.target.value as any)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 cursor-pointer"
                   >
-                    <option value="ramp_15">Gradual Warm-Up (+15 emails/day ramp)</option>
-                    <option value="full">Active (Warmed & Ready for Full Volume)</option>
-                    <option value="paused">Paused / Standby</option>
+                    <option value="ramp_15">🔥 Auto 4-Week Warm-Up Schedule (Recommended)</option>
+                    <option value="full">⚡ Custom Manual Daily Limit (Full Volume)</option>
+                    <option value="paused">⏸️ Paused / Standby</option>
                   </select>
+                  <span className="text-[10px] text-slate-500">Automatically scales from 10–15 mails/day in Week 1 up to 40–50 mails/day in Week 4+.</span>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-300">
+                    {warmupMode === 'ramp_15' ? 'Week 4+ Maximum Daily Cap (Default 50)' : 'Custom Daily Outbound Sending Limit'}
+                  </label>
+                  <input
+                    type="number"
+                    value={dailyLimit}
+                    onChange={(e) => setDailyLimit(Number(e.target.value))}
+                    min={10}
+                    max={10000}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
+                  />
+                  <span className="text-[10px] text-slate-500">
+                    {warmupMode === 'ramp_15' ? 'Auto warm-up enforces 10–15 (Wk1), 20–25 (Wk2), 30–35 (Wk3), 40–50 (Wk4+).' : 'Fixed daily limit when manual full-volume mode is selected.'}
+                  </span>
                 </div>
               </div>
 
-              {/* Warmup Ramp Visualizer with dynamic calculations */}
-              {warmupMode === 'ramp_15' && (() => {
-                const totalDaysNeeded = Math.max(1, Math.ceil(dailyLimit / 15));
-                const day1 = Math.min(15, dailyLimit);
-                const day2 = Math.min(30, dailyLimit);
-                const day3 = Math.min(45, dailyLimit);
-                const day5 = Math.min(75, dailyLimit);
-
-                return (
-                  <div className="p-4 bg-gradient-to-r from-purple-950/40 via-slate-900 to-blue-950/40 rounded-2xl border border-purple-500/30 space-y-3">
-                    <div className="flex items-center justify-between flex-wrap gap-2">
-                      <span className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
-                        <Zap className="w-4 h-4 text-purple-400" />
-                        Gradual +15/Day Warm-Up Schedule Preview
-                      </span>
-                      <span className="text-[11px] font-bold text-cyan-300 px-2 py-0.5 rounded-lg bg-cyan-950/60 border border-cyan-500/30 font-mono">
-                        Target Cap: {dailyLimit.toLocaleString()} emails/day
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
-                      <div className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-800 flex flex-col justify-between">
-                        <span className="text-[10px] text-slate-400 font-medium">Day 1</span>
-                        <strong className="text-purple-300 font-mono text-sm">{day1}</strong>
-                        <span className="text-[9px] text-slate-500">emails/day</span>
-                      </div>
-                      <div className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-800 flex flex-col justify-between">
-                        <span className="text-[10px] text-slate-400 font-medium">Day 2</span>
-                        <strong className="text-purple-300 font-mono text-sm">{day2}</strong>
-                        <span className="text-[9px] text-slate-500">emails/day</span>
-                      </div>
-                      <div className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-800 flex flex-col justify-between">
-                        <span className="text-[10px] text-slate-400 font-medium">Day 3</span>
-                        <strong className="text-purple-300 font-mono text-sm">{day3}</strong>
-                        <span className="text-[9px] text-slate-500">emails/day</span>
-                      </div>
-                      <div className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-800 flex flex-col justify-between">
-                        <span className="text-[10px] text-slate-400 font-medium">Day 5</span>
-                        <strong className="text-purple-300 font-mono text-sm">{day5}</strong>
-                        <span className="text-[9px] text-slate-500">emails/day</span>
-                      </div>
-                      <div className="p-2.5 bg-gradient-to-b from-purple-900/30 to-emerald-950/40 rounded-xl border border-emerald-500/40 flex flex-col justify-between col-span-2 sm:col-span-1 ring-1 ring-emerald-500/30">
-                        <span className="text-[10px] text-emerald-300 font-bold">Day {totalDaysNeeded} (Target)</span>
-                        <strong className="text-emerald-400 font-mono text-base font-black">{dailyLimit.toLocaleString()}</strong>
-                        <span className="text-[9px] text-emerald-400/80 font-semibold">100% Cap Reached</span>
-                      </div>
-                    </div>
-
-                    <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80 flex items-center justify-between text-[11px] text-slate-300 flex-wrap gap-2">
-                      <span>
-                        ⏱️ Calculated Duration: <strong>{totalDaysNeeded} Days</strong> to reach <strong>{dailyLimit.toLocaleString()} emails/day</strong>
-                      </span>
-                      <span className="text-purple-300 font-mono text-[10px]">
-                        +15 daily increment
-                      </span>
-                    </div>
-
-                    <p className="text-[10px] text-slate-400 italic">
-                      Progress updates automatically every 24 hours. Modifying the cap adjusts the target ceiling without resetting the warm-up day progress.
-                    </p>
+              {/* Auto 4-Week Warmup Schedule Visualizer */}
+              {warmupMode === 'ramp_15' && (
+                <div className="p-4 bg-gradient-to-r from-purple-950/40 via-slate-900 to-cyan-950/40 rounded-2xl border border-purple-500/30 space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
+                      <Zap className="w-4 h-4 text-amber-400" />
+                      Auto 4-Week SMTP Warm-Up Schedule (Daily Limits)
+                    </span>
+                    <span className="text-[11px] font-bold text-emerald-300 px-2 py-0.5 rounded-lg bg-emerald-950/60 border border-emerald-500/30 font-mono">
+                      Click any week to set starting stage
+                    </span>
                   </div>
-                );
-              })()}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-left text-xs">
+                    {[
+                      {
+                        wk: 1 as const,
+                        title: 'Week 1 (প্রথম সপ্তাহ)',
+                        days: 'Days 1–7',
+                        limit: '10 – 15 টি মেইল',
+                        note: 'Text-only mail (No link / image) — protects IP from Google/Microsoft spam filters',
+                        badge: '🛡️ Text-Only Auto Guard',
+                      },
+                      {
+                        wk: 2 as const,
+                        title: 'Week 2 (দ্বিতীয় সপ্তাহ)',
+                        days: 'Days 8–14',
+                        limit: '20 – 25 টি মেইল',
+                        note: 'Safe reputation building with gradual daily progression',
+                        badge: '📈 Reputation Build',
+                      },
+                      {
+                        wk: 3 as const,
+                        title: 'Week 3 (তৃতীয় সপ্তাহ)',
+                        days: 'Days 15–21',
+                        limit: '30 – 35 টি মেইল',
+                        note: 'High inbox placement & domain authority scaling',
+                        badge: '🚀 Authority Scale',
+                      },
+                      {
+                        wk: 4 as const,
+                        title: 'Week 4+ (চতুর্থ সপ্তাহ+)',
+                        days: 'Day 22 & Onward',
+                        limit: '40 – 50 টি মেইল',
+                        note: 'Full warm-up maturity (40–50 mails/day sustained safely)',
+                        badge: '✅ Mature Capacity',
+                      },
+                    ].map((stage) => {
+                      const isPicked = selectedWarmupWeek === stage.wk;
+                      return (
+                        <button
+                          key={stage.wk}
+                          type="button"
+                          onClick={() => setSelectedWarmupWeek(stage.wk)}
+                          className={`p-3 rounded-xl border text-left transition flex flex-col justify-between cursor-pointer ${
+                            isPicked
+                              ? 'bg-purple-950/60 border-purple-400 ring-1 ring-purple-400 shadow-lg shadow-purple-500/10'
+                              : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between gap-1 mb-1">
+                              <span className="text-[11px] font-extrabold text-slate-200">{stage.title}</span>
+                              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">{stage.days}</span>
+                            </div>
+                            <div className="text-sm font-black font-mono text-cyan-300 my-1">
+                              Daily {stage.limit}
+                            </div>
+                            <p className="text-[10px] text-slate-400 leading-relaxed">{stage.note}</p>
+                          </div>
+                          <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-between">
+                            <span className="text-[9px] font-bold text-amber-300">{stage.badge}</span>
+                            {isPicked && (
+                              <span className="text-[9px] font-extrabold text-emerald-400">✓ Active</span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <p className="text-[10px] text-slate-400 italic">
+                    ⚡ System automatically advances your SMTP account day-by-day through Week 1 → Week 2 → Week 3 → Week 4+. During Week 1, links and images are automatically stripped so Google/Microsoft never flag your IP as spam.
+                  </p>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1">

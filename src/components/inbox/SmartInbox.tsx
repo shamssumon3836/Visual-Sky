@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp, cleanEmailBodyText } from '../../context/AppContext';
 import { safeParseResponse } from '../../lib/safeFetch';
 import { EmailThread, EmailMessage } from '../../types';
+import { verifyEmailSync, verifyEmailsWithDns, EmailVerificationResult } from '../../utils/emailVerifier';
 import { 
   Inbox, 
   Search, 
@@ -64,7 +65,10 @@ export const SmartInbox: React.FC = () => {
     addThreadLabel, 
     removeThreadLabel, 
     deleteThreadToTrash,
+    restoreThread,
     permanentDeleteThread,
+    bulkRestoreThreads,
+    bulkPermanentDeleteThreads,
     currentUser,
     searchQuery,
     setSearchQuery,
@@ -113,6 +117,25 @@ export const SmartInbox: React.FC = () => {
   const [composeBody, setComposeBody] = useState<string>('');
   const [composeSmtpId, setComposeSmtpId] = useState<string>(smtpAccounts[0]?.id || '');
   const [isGeneratingComposeAi, setIsGeneratingComposeAi] = useState<boolean>(false);
+  const [composeEmailCheck, setComposeEmailCheck] = useState<EmailVerificationResult | null>(null);
+
+  useEffect(() => {
+    if (!composeTo.trim()) {
+      setComposeEmailCheck(null);
+      return;
+    }
+    const syncRes = verifyEmailSync(composeTo);
+    setComposeEmailCheck(syncRes);
+    if (syncRes.isValid) {
+      const timer = setTimeout(() => {
+        verifyEmailsWithDns([composeTo]).then(resMap => {
+          const dnsRes = resMap[composeTo.trim().toLowerCase()];
+          if (dnsRes) setComposeEmailCheck(dnsRes);
+        });
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [composeTo]);
 
   // Active usable email templates (including all custom-created templates)
   const activeEmailTemplates = useMemo(() => {
@@ -247,10 +270,12 @@ export const SmartInbox: React.FC = () => {
     });
   }, [threads, selectedFolder, primaryTab, searchQuery]);
 
-  // Ensure a valid thread is selected if available
+  // Ensure a valid thread is selected if available, or clear activeThreadId when folder is empty
   useEffect(() => {
     if (filteredThreads.length > 0 && !filteredThreads.some(t => t.id === activeThreadId)) {
       setActiveThreadId(filteredThreads[0].id);
+    } else if (filteredThreads.length === 0 && activeThreadId !== null) {
+      setActiveThreadId(null);
     }
   }, [filteredThreads, activeThreadId, setActiveThreadId]);
 
@@ -296,13 +321,60 @@ export const SmartInbox: React.FC = () => {
   };
 
   const handleBulkDelete = () => {
-    selectedThreadIds.forEach(id => deleteThreadToTrash(id));
+    if (selectedThreadIds.length === 0) return;
+    if (selectedFolder === 'trash') {
+      bulkPermanentDeleteThreads(selectedThreadIds);
+      if (activeThreadId && selectedThreadIds.includes(activeThreadId)) {
+        const remaining = filteredThreads.filter(t => !selectedThreadIds.includes(t.id));
+        setActiveThreadId(remaining[0]?.id || null);
+      }
+      setSelectedThreadIds([]);
+    } else {
+      selectedThreadIds.forEach(id => deleteThreadToTrash(id));
+      if (activeThreadId && selectedThreadIds.includes(activeThreadId)) {
+        const remaining = filteredThreads.filter(t => !selectedThreadIds.includes(t.id));
+        setActiveThreadId(remaining[0]?.id || null);
+      }
+      setSelectedThreadIds([]);
+    }
+  };
+
+  const handleBulkRestore = () => {
+    if (selectedThreadIds.length === 0) return;
+    bulkRestoreThreads(selectedThreadIds);
     setSelectedThreadIds([]);
-    addNotification({
-      title: 'Threads Moved to Trash',
-      message: `Moved ${selectedThreadIds.length} conversation(s) to trash.`,
-      type: 'system'
-    });
+  };
+
+  const handleEmptyTrashFolder = () => {
+    const trashIds = threads.filter(t => t.isTrash).map(t => t.id);
+    if (trashIds.length === 0) return;
+    bulkPermanentDeleteThreads(trashIds);
+    setSelectedThreadIds([]);
+    setActiveThreadId(null);
+  };
+
+  const handleDeleteSingleThread = (thread: EmailThread, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const remaining = filteredThreads.filter(t => t.id !== thread.id);
+    if (thread.isTrash || selectedFolder === 'trash') {
+      permanentDeleteThread(thread.id);
+    } else {
+      deleteThreadToTrash(thread.id);
+    }
+    setSelectedThreadIds(prev => prev.filter(id => id !== thread.id));
+    if (activeThreadId === thread.id) {
+      setActiveThreadId(remaining[0]?.id || null);
+    }
+  };
+
+  const handleRestoreSingleThread = (thread: EmailThread, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const remaining = filteredThreads.filter(t => t.id !== thread.id);
+    restoreThread(thread.id);
+    setSelectedThreadIds(prev => prev.filter(id => id !== thread.id));
+    if (activeThreadId === thread.id) {
+      setActiveThreadId(remaining[0]?.id || null);
+    }
   };
 
   const handleBulkMarkRead = () => {
@@ -485,27 +557,60 @@ export const SmartInbox: React.FC = () => {
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
+          {selectedFolder === 'trash' && threads.some(t => t.isTrash) && selectedThreadIds.length === 0 && (
+            <button
+              type="button"
+              onClick={handleEmptyTrashFolder}
+              className="px-3 py-2 rounded-xl bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-500/40 text-xs font-extrabold flex items-center gap-1.5 transition cursor-pointer shadow-md"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+              <span>Empty Trash ({threads.filter(t => t.isTrash).length})</span>
+            </button>
+          )}
           {selectedThreadIds.length > 0 ? (
-            <div className="flex items-center gap-1.5 sm:gap-2 animate-in fade-in">
+            <div className="flex items-center gap-1.5 sm:gap-2 animate-in fade-in flex-wrap">
               <span className="text-[11px] sm:text-xs font-bold text-cyan-300 bg-cyan-950 px-2 py-1 rounded-lg border border-cyan-800">
                 {selectedThreadIds.length} selected
               </span>
-              <button
-                type="button"
-                onClick={handleBulkMarkRead}
-                className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer"
-              >
-                Mark Read
-              </button>
-              <button
-                type="button"
-                onClick={handleBulkDelete}
-                className="px-2.5 py-1.5 rounded-xl bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete</span>
-              </button>
+              {selectedFolder === 'trash' ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleBulkRestore}
+                    className="px-2.5 py-1.5 rounded-xl bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                  >
+                    <CornerUpLeft className="w-3.5 h-3.5" />
+                    <span>Restore</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleBulkDelete}
+                    className="px-2.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-extrabold flex items-center gap-1 transition cursor-pointer shadow-md"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Permanently</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleBulkMarkRead}
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer"
+                  >
+                    Mark Read
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleBulkDelete}
+                    className="px-2.5 py-1.5 rounded-xl bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete</span>
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <button
@@ -723,10 +828,10 @@ export const SmartInbox: React.FC = () => {
                         {cleanBodyText(t.lastMessage, t.leadCompany, t.leadName)}
                       </p>
 
-                      {/* Labels badges */}
-                      {t.labels && t.labels.length > 0 && (
-                        <div className="flex items-center gap-1 pt-1 flex-wrap">
-                          {t.labels.map((lbl, idx) => (
+                      {/* Labels badges & Quick Trash Actions */}
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <div className="flex items-center gap-1 flex-wrap">
+                          {t.labels && t.labels.map((lbl, idx) => (
                             <span
                               key={idx}
                               className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-800 text-cyan-300 border border-slate-700"
@@ -735,7 +840,37 @@ export const SmartInbox: React.FC = () => {
                             </span>
                           ))}
                         </div>
-                      )}
+                        {t.isTrash ? (
+                          <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={(e) => handleRestoreSingleThread(t, e)}
+                              className="px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold cursor-pointer transition"
+                              title="Restore to Inbox"
+                            >
+                              Restore
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteSingleThread(t, e)}
+                              className="px-2 py-0.5 rounded bg-rose-950/80 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40 text-[10px] font-bold flex items-center gap-1 cursor-pointer transition"
+                              title="Permanently Delete from Trash"
+                            >
+                              <Trash2 className="w-2.5 h-2.5" />
+                              <span>Delete</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeleteSingleThread(t, e)}
+                            className="p-1 rounded hover:bg-rose-950/70 text-slate-500 hover:text-rose-400 transition cursor-pointer shrink-0"
+                            title="Move to Trash"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -781,32 +916,58 @@ export const SmartInbox: React.FC = () => {
 
                 {/* Quick Actions */}
                 <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      replyTextareaRef.current?.focus();
-                      replyTextareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition"
-                    title="Jump to Reply Box"
-                  >
-                    <Reply className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Reply</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => toggleThreadStar(currentThread.id)}
-                    className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-amber-400 cursor-pointer"
-                  >
-                    <Star className={`w-4 h-4 ${currentThread.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => deleteThreadToTrash(currentThread.id)}
-                    className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 cursor-pointer"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {currentThread.isTrash ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleRestoreSingleThread(currentThread)}
+                        className="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition"
+                        title="Restore Conversation to Inbox"
+                      >
+                        <CornerUpLeft className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Restore</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSingleThread(currentThread)}
+                        className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition shadow-md"
+                        title="Permanently Delete from Trash"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete Forever</span>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          replyTextareaRef.current?.focus();
+                          replyTextareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition"
+                        title="Jump to Reply Box"
+                      >
+                        <Reply className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Reply</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleThreadStar(currentThread.id)}
+                        className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-amber-400 cursor-pointer"
+                      >
+                        <Star className={`w-4 h-4 ${currentThread.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSingleThread(currentThread)}
+                        className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 cursor-pointer"
+                        title="Move to Trash"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1127,15 +1288,49 @@ export const SmartInbox: React.FC = () => {
             <div className="space-y-3">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[11px] font-bold text-slate-400">Recipient Email *</label>
+                  <label className="text-[11px] font-bold text-slate-400 flex items-center justify-between">
+                    <span>Recipient Email *</span>
+                    {composeEmailCheck && (
+                      <span className={`text-[10px] font-extrabold ${composeEmailCheck.isValid ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {composeEmailCheck.isValid ? '✓ Verified Valid' : '⚠️ নষ্ট মেইল / Invalid'}
+                      </span>
+                    )}
+                  </label>
                   <input
                     type="email"
                     required
                     value={composeTo}
                     onChange={(e) => setComposeTo(e.target.value)}
                     placeholder="prospect@company.com"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+                    className={`w-full bg-slate-950 border rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none ${
+                      composeEmailCheck && !composeEmailCheck.isValid
+                        ? 'border-rose-500 focus:border-rose-400'
+                        : 'border-slate-800 focus:border-cyan-500'
+                    }`}
                   />
+                  {composeEmailCheck && !composeEmailCheck.isValid && (
+                    <div className="mt-1.5 p-2 rounded-xl bg-rose-950/70 border border-rose-500/40 text-[11px] text-rose-200 flex items-center justify-between gap-2">
+                      <span>⚠️ {composeEmailCheck.reasonBn}</span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {composeEmailCheck.suggestion && (
+                          <button
+                            type="button"
+                            onClick={() => setComposeTo(composeEmailCheck.suggestion!)}
+                            className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold cursor-pointer"
+                          >
+                            Fix: {composeEmailCheck.suggestion}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setComposeTo('')}
+                          className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-bold cursor-pointer"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className="text-[11px] font-bold text-slate-400">Recipient Name</label>
