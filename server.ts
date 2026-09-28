@@ -8,6 +8,7 @@ import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import crypto from 'crypto';
 import dns from 'dns';
+import zlib from 'zlib';
 
 dotenv.config();
 
@@ -24,6 +25,58 @@ const OTP_SECRET = process.env.OTP_SECRET || 'visualsky-secure-otp-signature-key
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+
+// Fast built-in HTTP Gzip compression middleware for Vite modules, JS/CSS bundles, and JSON APIs
+app.use((req, res, next) => {
+  const acceptEncoding = String(req.headers['accept-encoding'] || '');
+  if (!acceptEncoding.includes('gzip') || req.method === 'HEAD') {
+    return next();
+  }
+
+  let writeCalled = false;
+  const origWrite = res.write;
+  const origEnd = res.end;
+
+  res.write = function (chunk: any, ...args: any[]) {
+    writeCalled = true;
+    return (origWrite as any).apply(this, [chunk, ...args]);
+  } as any;
+
+  res.end = function (chunk?: any, ...args: any[]) {
+    if (!writeCalled && chunk && !res.getHeader('Content-Encoding')) {
+      const contentType = String(res.getHeader('Content-Type') || '').toLowerCase();
+      const isCompressible =
+        contentType.includes('javascript') ||
+        contentType.includes('json') ||
+        contentType.includes('text/') ||
+        contentType.includes('svg') ||
+        req.url.endsWith('.tsx') ||
+        req.url.endsWith('.ts') ||
+        req.url.endsWith('.js') ||
+        req.url.endsWith('.css');
+
+      if (isCompressible) {
+        try {
+          const buf = Buffer.isBuffer(chunk)
+            ? chunk
+            : typeof chunk === 'string'
+            ? Buffer.from(chunk, typeof args[0] === 'string' ? (args[0] as BufferEncoding) : 'utf8')
+            : null;
+          if (buf && buf.byteLength > 1024) {
+            const compressed = zlib.gzipSync(buf, { level: 1 });
+            res.setHeader('Content-Encoding', 'gzip');
+            res.setHeader('Vary', 'Accept-Encoding');
+            res.setHeader('Content-Length', String(compressed.byteLength));
+            return (origEnd as any).call(this, compressed);
+          }
+        } catch {}
+      }
+    }
+    return (origEnd as any).apply(this, [chunk, ...args]);
+  } as any;
+
+  next();
+});
 
 app.use(express.json({ limit: '15mb' }));
 
@@ -3468,9 +3521,8 @@ function getGeminiClient(): GoogleGenAI | null {
 
 // Resilient Gemini model caller with multi-model fallback & retries
 const FALLBACK_MODELS = [
-  'gemini-3.1-flash-lite',
-  'gemini-3.8-flash',
-  'gemini-3.5-flash',
+  'gemini-3.1-flash-lite-preview',
+  'gemini-3-flash-preview',
   'gemini-flash-latest'
 ];
 
@@ -3488,15 +3540,14 @@ async function callGemini(contents: string, config?: any, requestedModel?: strin
   const ai = getGeminiClient();
   if (!ai) return null;
 
-  let targetModel = requestedModel || 'gemini-3.1-flash-lite';
-  if (targetModel.toLowerCase().includes('3.8')) {
-    targetModel = 'gemini-3.8-flash';
-  } else if (targetModel.toLowerCase().includes('3.5')) {
-    targetModel = 'gemini-3.5-flash';
-  } else if (targetModel.toLowerCase().includes('lite') || targetModel.toLowerCase().includes('3.1')) {
-    targetModel = 'gemini-3.1-flash-lite';
-  } else {
-    targetModel = 'gemini-3.1-flash-lite';
+  let targetModel = 'gemini-3.1-flash-lite-preview';
+  if (requestedModel) {
+    const reqLower = requestedModel.toLowerCase();
+    if (reqLower.includes('3-flash') || reqLower.includes('3.8') || reqLower.includes('3.5')) {
+      targetModel = 'gemini-3-flash-preview';
+    } else if (reqLower.includes('latest')) {
+      targetModel = 'gemini-flash-latest';
+    }
   }
 
   const modelsToTry = [targetModel, ...FALLBACK_MODELS.filter(m => m !== targetModel)];

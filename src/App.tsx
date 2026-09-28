@@ -1,28 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { LandingPage } from './components/landing/LandingPage';
 import { Navbar } from './components/layout/Navbar';
 import { Sidebar } from './components/layout/Sidebar';
-import { MobileNavDrawer } from './components/layout/MobileNavDrawer';
 import { MainDashboard } from './components/dashboard/MainDashboard';
-import { SmartInbox } from './components/inbox/SmartInbox';
-import { CampaignManager } from './components/campaigns/CampaignManager';
-import { AuthModal } from './components/auth/AuthModal';
-import { LogoutConfirmModal } from './components/auth/LogoutConfirmModal';
-import { ProfileModal } from './components/profile/ProfileModal';
-import { SendMailModal } from './components/mail/SendMailModal';
-import { BkashSubscriptionModal } from './components/billing/BkashSubscriptionModal';
 import { FloatingNotificationCorner } from './components/notifications/FloatingNotificationCorner';
 import { GlobalSaaSAnimations } from './components/ui/GlobalSaaSAnimations';
-import { LeadDirectory } from './components/leads/LeadDirectory';
-import { AILeadGenerator } from './components/leads/AILeadGenerator';
-import { TemplateManager } from './components/templates/TemplateManager';
-import { AnalyticsView } from './components/analytics/AnalyticsView';
-import { SMTPManager } from './components/smtp/SMTPManager';
-import { SentMailsTracker } from './components/sent/SentMailsTracker';
-import { GeminiAssistant } from './components/ai/GeminiAssistant';
-import { OwnerPanel } from './components/owner/OwnerPanel';
-import { TrashManager } from './components/trash/TrashManager';
 import { Lead } from './types';
 import { 
   LayoutDashboard,
@@ -35,11 +18,36 @@ import {
   BarChart3,
   Bot, 
   ShieldCheck, 
-  Trash2,
-  MailCheck,
-  Grid,
-  Menu
+  Grid
 } from 'lucide-react';
+
+// Code-split heavy views and modals so initial page load & reload are ultra-fast
+const SmartInbox = React.lazy(() => import('./components/inbox/SmartInbox').then(m => ({ default: m.SmartInbox })));
+const CampaignManager = React.lazy(() => import('./components/campaigns/CampaignManager').then(m => ({ default: m.CampaignManager })));
+const LeadDirectory = React.lazy(() => import('./components/leads/LeadDirectory').then(m => ({ default: m.LeadDirectory })));
+const AILeadGenerator = React.lazy(() => import('./components/leads/AILeadGenerator').then(m => ({ default: m.AILeadGenerator })));
+const TemplateManager = React.lazy(() => import('./components/templates/TemplateManager').then(m => ({ default: m.TemplateManager })));
+const AnalyticsView = React.lazy(() => import('./components/analytics/AnalyticsView').then(m => ({ default: m.AnalyticsView })));
+const SMTPManager = React.lazy(() => import('./components/smtp/SMTPManager').then(m => ({ default: m.SMTPManager })));
+const SentMailsTracker = React.lazy(() => import('./components/sent/SentMailsTracker').then(m => ({ default: m.SentMailsTracker })));
+const GeminiAssistant = React.lazy(() => import('./components/ai/GeminiAssistant').then(m => ({ default: m.GeminiAssistant })));
+const OwnerPanel = React.lazy(() => import('./components/owner/OwnerPanel').then(m => ({ default: m.OwnerPanel })));
+const TrashManager = React.lazy(() => import('./components/trash/TrashManager').then(m => ({ default: m.TrashManager })));
+const MobileNavDrawer = React.lazy(() => import('./components/layout/MobileNavDrawer').then(m => ({ default: m.MobileNavDrawer })));
+const AuthModal = React.lazy(() => import('./components/auth/AuthModal').then(m => ({ default: m.AuthModal })));
+const LogoutConfirmModal = React.lazy(() => import('./components/auth/LogoutConfirmModal').then(m => ({ default: m.LogoutConfirmModal })));
+const ProfileModal = React.lazy(() => import('./components/profile/ProfileModal').then(m => ({ default: m.ProfileModal })));
+const SendMailModal = React.lazy(() => import('./components/mail/SendMailModal').then(m => ({ default: m.SendMailModal })));
+const BkashSubscriptionModal = React.lazy(() => import('./components/billing/BkashSubscriptionModal').then(m => ({ default: m.BkashSubscriptionModal })));
+
+const ViewLoader: React.FC = () => (
+  <div className="flex items-center justify-center min-h-[55vh] text-slate-400">
+    <div className="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-slate-900/80 border border-slate-800 shadow-lg">
+      <div className="w-4 h-4 rounded-full border-2 border-cyan-500/30 border-t-cyan-400 animate-spin" />
+      <span className="text-xs font-bold text-slate-300 tracking-wide">Loading module...</span>
+    </div>
+  </div>
+);
 
 const MainContent: React.FC = () => {
   const { 
@@ -50,7 +58,8 @@ const MainContent: React.FC = () => {
     currentUser, 
     isLogoutConfirmOpen, 
     setIsLogoutConfirmOpen, 
-    logout 
+    logout,
+    activeFollowUpCohort
   } = useApp();
   
   const [isAuthOpen, setIsAuthOpen] = useState<boolean>(false);
@@ -63,8 +72,15 @@ const MainContent: React.FC = () => {
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState<boolean>(false);
   const [isSendMailOpen, setIsSendMailOpen] = useState<boolean>(false);
   const [selectedLeadForMail, setSelectedLeadForMail] = useState<Lead | undefined>(undefined);
+  const [hasVisitedCampaigns, setHasVisitedCampaigns] = useState<boolean>(activeTab === 'campaigns');
 
-  React.useEffect(() => {
+  useEffect(() => {
+    if (activeTab === 'campaigns' || activeFollowUpCohort) {
+      setHasVisitedCampaigns(true);
+    }
+  }, [activeTab, activeFollowUpCohort]);
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (isLogoutConfirmOpen) setIsLogoutConfirmOpen(false);
@@ -116,13 +132,17 @@ const MainContent: React.FC = () => {
         <LandingPage onOpenAuth={handleOpenAuth} />
         
         {/* Auth Modal for Sign in / Sign up / Forgot Password */}
-        <AuthModal 
-          isOpen={isAuthOpen} 
-          onClose={() => setIsAuthOpen(false)}
-          initialPortal={authInitialPortal}
-          initialMode={authInitialMode}
-          initialPlan={authInitialPlan}
-        />
+        {isAuthOpen && (
+          <Suspense fallback={null}>
+            <AuthModal 
+              isOpen={isAuthOpen} 
+              onClose={() => setIsAuthOpen(false)}
+              initialPortal={authInitialPortal}
+              initialMode={authInitialMode}
+              initialPlan={authInitialPlan}
+            />
+          </Suspense>
+        )}
 
         {/* Global Notifications */}
         <FloatingNotificationCorner />
@@ -257,8 +277,12 @@ const MainContent: React.FC = () => {
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 pb-20 md:pb-6 relative">
           <div className="saas-view-enter min-h-full">
-            {renderActiveView()}
-            <CampaignManager isHidden={activeTab !== 'campaigns' || isCampaignsRestricted} />
+            <Suspense fallback={<ViewLoader />}>
+              {renderActiveView()}
+              {(hasVisitedCampaigns || activeTab === 'campaigns') && (
+                <CampaignManager isHidden={activeTab !== 'campaigns' || isCampaignsRestricted} />
+              )}
+            </Suspense>
           </div>
         </main>
       </div>
@@ -338,68 +362,82 @@ const MainContent: React.FC = () => {
       </nav>
 
       {/* Mobile Slide-over Full Drawer containing ALL sidebar items */}
-      <MobileNavDrawer 
-        isOpen={isMobileDrawerOpen} 
-        onClose={() => setIsMobileDrawerOpen(false)}
-        onOpenSendMail={() => handleOpenSendMail()}
-        onOpenAuth={(mode, portal) => handleOpenAuth(mode || 'signin', portal || 'client')}
-        onRequestLogout={() => setIsLogoutConfirmOpen(true)}
-        onOpenProfile={() => setIsProfileOpen(true)}
-      />
+      {isMobileDrawerOpen && (
+        <Suspense fallback={null}>
+          <MobileNavDrawer 
+            isOpen={isMobileDrawerOpen} 
+            onClose={() => setIsMobileDrawerOpen(false)}
+            onOpenSendMail={() => handleOpenSendMail()}
+            onOpenAuth={(mode, portal) => handleOpenAuth(mode || 'signin', portal || 'client')}
+            onRequestLogout={() => setIsLogoutConfirmOpen(true)}
+            onOpenProfile={() => setIsProfileOpen(true)}
+          />
+        </Suspense>
+      )}
 
       {/* Logout Confirmation Permission Modal */}
       {isLogoutConfirmOpen && (
-        <LogoutConfirmModal
-          isOpen={isLogoutConfirmOpen}
-          onClose={() => setIsLogoutConfirmOpen(false)}
-          onConfirm={() => {
-            logout();
-            setIsLogoutConfirmOpen(false);
-            handleOpenAuth('signin', 'client');
-          }}
-          currentUser={currentUser}
-        />
+        <Suspense fallback={null}>
+          <LogoutConfirmModal
+            isOpen={isLogoutConfirmOpen}
+            onClose={() => setIsLogoutConfirmOpen(false)}
+            onConfirm={() => {
+              logout();
+              setIsLogoutConfirmOpen(false);
+              handleOpenAuth('signin', 'client');
+            }}
+            currentUser={currentUser}
+          />
+        </Suspense>
       )}
 
       {/* Profile Modal */}
       {isProfileOpen && (
-        <ProfileModal
-          isOpen={isProfileOpen}
-          onClose={() => setIsProfileOpen(false)}
-          onOpenAuth={(mode, portal) => handleOpenAuth(mode || 'signin', portal || 'client')}
-        />
+        <Suspense fallback={null}>
+          <ProfileModal
+            isOpen={isProfileOpen}
+            onClose={() => setIsProfileOpen(false)}
+            onOpenAuth={(mode, portal) => handleOpenAuth(mode || 'signin', portal || 'client')}
+          />
+        </Suspense>
       )}
 
-      {/* Auth Modal (Dual Client/Owner Portal with Eye visibility toggles & password confirmation) */}
+      {/* Auth Modal */}
       {isAuthOpen && (
-        <AuthModal 
-          isOpen={isAuthOpen} 
-          onClose={() => setIsAuthOpen(false)}
-          initialPortal={authInitialPortal}
-          initialMode={authInitialMode}
-          initialPlan={authInitialPlan}
-        />
+        <Suspense fallback={null}>
+          <AuthModal 
+            isOpen={isAuthOpen} 
+            onClose={() => setIsAuthOpen(false)}
+            initialPortal={authInitialPortal}
+            initialMode={authInitialMode}
+            initialPlan={authInitialPlan}
+          />
+        </Suspense>
       )}
 
-      {/* Send Mail Cold Outreach Modal (Anti-spam score + signature auto-embed + scheduling) */}
+      {/* Send Mail Cold Outreach Modal */}
       {isSendMailOpen && (
-        <SendMailModal 
-          isOpen={isSendMailOpen} 
-          onClose={() => {
-            setIsSendMailOpen(false);
-            setSelectedLeadForMail(undefined);
-          }} 
-          initialLead={selectedLeadForMail}
-        />
+        <Suspense fallback={null}>
+          <SendMailModal 
+            isOpen={isSendMailOpen} 
+            onClose={() => {
+              setIsSendMailOpen(false);
+              setSelectedLeadForMail(undefined);
+            }} 
+            initialLead={selectedLeadForMail}
+          />
+        </Suspense>
       )}
 
       {/* bKash Personal Subscription Checkout Modal */}
       {isBillingOpen && (
-        <BkashSubscriptionModal
-          isOpen={isBillingOpen}
-          onClose={() => setIsBillingOpen(false)}
-          initialPlanId={authInitialPlan}
-        />
+        <Suspense fallback={null}>
+          <BkashSubscriptionModal
+            isOpen={isBillingOpen}
+            onClose={() => setIsBillingOpen(false)}
+            initialPlanId={authInitialPlan}
+          />
+        </Suspense>
       )}
     </div>
   );

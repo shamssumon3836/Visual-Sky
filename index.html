@@ -10,7 +10,6 @@
     <meta property="og:description" content="Enterprise-grade AI lead intelligence, outbound SMTP relays, cold email sequences, multi-platform lead miner, unified inbox, and client CRM." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
-    <link rel="stylesheet" href="/prebuilt/app.css?v=20260928-v8" />
     <style>
       .vs-auth-popup-window {
         width: 100% !important;
@@ -28,6 +27,20 @@
         border-radius: 16px !important;
       }
     </style>
+    <script>
+      window.__vsLoadPrebuiltFallback = function () {
+        if (document.getElementById('vs-prebuilt-bundle')) return;
+        var link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = '/prebuilt/app.css?v=20260928-v9';
+        document.head.appendChild(link);
+        var script = document.createElement('script');
+        script.id = 'vs-prebuilt-bundle';
+        script.type = 'module';
+        script.src = '/prebuilt/app.js?v=20260928-v9';
+        document.body.appendChild(script);
+      };
+    </script>
   </head>
   <body style="background-color: #080c14; color: #f1f5f9; margin: 0; min-height: 100vh;">
     <div id="root">
@@ -37,45 +50,6 @@
       </div>
       <style>@keyframes vsSpin { to { transform: rotate(360deg); } }</style>
     </div>
-    <script type="module" src="/src/main.tsx"></script>
-    <script>
-      (function () {
-        // Production loader fallback ONLY for static document-root serving where Vite dev/dist bundle didn't mount
-        function injectPrebuiltScript() {
-          if (document.getElementById('vs-prebuilt-bundle')) return;
-          if (!document.getElementById('vs-boot-loader')) return;
-          var script = document.createElement('script');
-          script.id = 'vs-prebuilt-bundle';
-          script.type = 'module';
-          script.src = '/prebuilt/app.js?v=20260928-v8&t=' + Date.now();
-          document.body.appendChild(script);
-        }
-
-        function bootProductionBundle() {
-          if (
-            window.__vite_plugin_react_preamble_installed__ ||
-            document.querySelector('script[src*="@vite/client"]') ||
-            document.querySelector('script[src*="/assets/index-"]')
-          ) {
-            return;
-          }
-          setTimeout(function () {
-            if (
-              !window.__vite_plugin_react_preamble_installed__ &&
-              !document.querySelector('script[src*="@vite/client"]') &&
-              document.getElementById('vs-boot-loader')
-            ) {
-              injectPrebuiltScript();
-            }
-          }, 800);
-        }
-
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', bootProductionBundle);
-        } else {
-          bootProductionBundle();
-        }
-      })();
-    </script>
+    <script type="module" src="/src/main.tsx" onerror="window.__vsLoadPrebuiltFallback && window.__vsLoadPrebuiltFallback()"></script>
   </body>
 </html>
