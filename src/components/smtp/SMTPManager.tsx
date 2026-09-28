@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useApp, getSMTPWarmupDetails } from '../../context/AppContext';
+import React, { useState, useMemo } from 'react';
+import { useApp, getSMTPWarmupDetails, getSMTPAccountMetrics } from '../../context/AppContext';
 import { SMTPAccount } from '../../types';
 import { SMTPConnectModal } from './SMTPConnectModal';
 import { safeParseResponse } from '../../lib/safeFetch';
@@ -26,7 +26,9 @@ import {
   Send,
   Clock,
   Flame,
-  Radio
+  Radio,
+  Eye,
+  MessageSquare
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -34,6 +36,8 @@ export const SMTPManager: React.FC = () => {
   const { 
     smtpAccounts, 
     campaigns,
+    sentEmails,
+    threads,
     updateSMTPAccount, 
     deleteSMTPAccount, 
     permanentDeleteSMTPAccount,
@@ -49,7 +53,67 @@ export const SMTPManager: React.FC = () => {
   const [testLogs, setTestLogs] = useState<string[]>([]);
   const [showLogsModal, setShowLogsModal] = useState<boolean>(false);
 
-  const activeSmtps = smtpAccounts.filter(s => !s.isTrash);
+  const activeSmtps = useMemo(() => smtpAccounts.filter(s => !s.isTrash), [smtpAccounts]);
+
+  // Compute live metrics per connected SMTP relay account
+  const smtpMetricsMap = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof getSMTPAccountMetrics>>();
+    for (const s of activeSmtps) {
+      map.set(s.id, getSMTPAccountMetrics(s, activeSmtps, sentEmails, campaigns, threads));
+    }
+    return map;
+  }, [activeSmtps, sentEmails, campaigns, threads]);
+
+  // Aggregate live totals across all connected relays for the top summary bar
+  const aggregateStats = useMemo(() => {
+    let totalSentToday = 0;
+    let totalDispatched = 0;
+    let totalOpened = 0;
+    let totalReplied = 0;
+    let totalEffectiveCap = 0;
+    let totalMaxCap = 0;
+    let totalRemaining = 0;
+    let onlineCount = 0;
+    let rampingCount = 0;
+    let healthSum = 0;
+
+    for (const s of activeSmtps) {
+      const m = smtpMetricsMap.get(s.id);
+      if (m) {
+        totalSentToday += m.sentToday;
+        totalDispatched += m.totalDispatched;
+        totalOpened += m.openedCount;
+        totalReplied += m.repliedCount;
+        totalEffectiveCap += m.effectiveDailyLimit;
+        totalMaxCap += m.dailyCap;
+        totalRemaining += m.remainingToday;
+        if (m.warmup.isRamping) rampingCount++;
+      }
+      if (s.isConnected !== false) onlineCount++;
+      healthSum += s.healthScore || 99;
+    }
+
+    const avgHealth = activeSmtps.length > 0 ? Math.round((healthSum / activeSmtps.length) * 10) / 10 : 0;
+    const openRate = totalDispatched > 0 ? Math.min(100, Math.round((totalOpened / totalDispatched) * 100)) : 0;
+    const replyRate = totalDispatched > 0 ? Math.min(100, Math.round((totalReplied / totalDispatched) * 100)) : 0;
+    const runningCampaignsCount = campaigns.filter(c => !c.isTrash && c.status === 'running').length;
+
+    return {
+      totalSentToday,
+      totalDispatched,
+      totalOpened,
+      totalReplied,
+      totalEffectiveCap,
+      totalMaxCap,
+      totalRemaining,
+      onlineCount,
+      rampingCount,
+      avgHealth,
+      openRate,
+      replyRate,
+      runningCampaignsCount
+    };
+  }, [activeSmtps, smtpMetricsMap, campaigns]);
 
   const handleOpenConnect = (provider: SMTPAccount['provider'] = 'domain_webmail') => {
     setEditingAccount(null);
@@ -106,11 +170,6 @@ export const SMTPManager: React.FC = () => {
     }
   };
 
-  // Find active campaigns utilizing a given relay
-  const getActiveCampaignsForSMTP = (smtpId: string) => {
-    return campaigns.filter(c => c.status === 'running');
-  };
-
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
       {/* Top Header */}
@@ -134,37 +193,61 @@ export const SMTPManager: React.FC = () => {
           </button>
         </div>
 
-        {/* Deliverability Health Bar */}
+        {/* Deliverability & Live Relay Activity Bar */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-1">
             <div className="text-xs text-slate-400 font-medium">Active Connected Relays</div>
-            <div className="text-2xl font-black text-slate-100 flex items-center gap-2">
-              {activeSmtps.length}
+            <div className="text-2xl font-black text-slate-100 flex items-center gap-2 flex-wrap">
+              <span>{activeSmtps.length}</span>
               <span className="text-xs font-bold text-emerald-400 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">
-                100% Online
+                {activeSmtps.length > 0 ? `${aggregateStats.onlineCount}/${activeSmtps.length} Online` : '0 Online'}
               </span>
             </div>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-1">
-            <div className="text-xs text-slate-400 font-medium">Daily Outbound Capacity</div>
-            <div className="text-2xl font-black text-cyan-400">
-              {activeSmtps.reduce((acc, s) => acc + s.dailyLimit, 0).toLocaleString()} <span className="text-xs text-slate-400 font-normal">emails/day</span>
+            <div className="text-[11px] text-slate-500 font-mono">
+              {aggregateStats.runningCampaignsCount} active campaign{aggregateStats.runningCampaignsCount === 1 ? '' : 's'} linked
             </div>
           </div>
 
           <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-1">
-            <div className="text-xs text-slate-400 font-medium">Avg Inbox Deliverability</div>
-            <div className="text-2xl font-black text-emerald-400">
-              99.8% <span className="text-xs text-emerald-400 font-bold">SPF/DKIM</span>
+            <div className="text-xs text-slate-400 font-medium">Today's Outbound Dispatch</div>
+            <div className="text-2xl font-black text-cyan-400 flex items-baseline gap-1.5 flex-wrap">
+              <span>{aggregateStats.totalSentToday.toLocaleString()}</span>
+              <span className="text-xs text-slate-400 font-mono font-semibold">
+                / {aggregateStats.totalEffectiveCap.toLocaleString()} cap
+              </span>
+            </div>
+            <div className="text-[11px] text-emerald-400 font-mono">
+              {aggregateStats.totalRemaining.toLocaleString()} emails remaining today
             </div>
           </div>
 
           <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-1">
-            <div className="text-xs text-slate-400 font-medium">Warmup Engine Status</div>
-            <div className="text-2xl font-black text-purple-400 flex items-center gap-1.5">
-              <Zap className="w-5 h-5 text-purple-400" />
-              +15/Day Ramp
+            <div className="text-xs text-slate-400 font-medium">Live Relay Engagement</div>
+            <div className="text-2xl font-black text-emerald-400 flex items-baseline gap-2 flex-wrap">
+              <span>{aggregateStats.totalDispatched.toLocaleString()} Sent</span>
+              <span className="text-xs text-cyan-300 font-bold">
+                • {aggregateStats.totalOpened} Opened ({aggregateStats.openRate}%)
+              </span>
+            </div>
+            <div className="text-[11px] text-purple-300 font-mono">
+              {aggregateStats.totalReplied} replies received ({aggregateStats.replyRate}%)
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-1">
+            <div className="text-xs text-slate-400 font-medium">Warmup & Health Status</div>
+            <div className="text-xl sm:text-2xl font-black text-purple-400 flex items-center gap-1.5">
+              <Zap className="w-5 h-5 text-purple-400 shrink-0" />
+              <span className="truncate">
+                {activeSmtps.length === 0
+                  ? 'No Relay'
+                  : aggregateStats.rampingCount > 0
+                  ? `${aggregateStats.rampingCount} Ramping (+15/d)`
+                  : 'Full Capacity'}
+              </span>
+            </div>
+            <div className="text-[11px] text-emerald-400 font-mono">
+              {activeSmtps.length > 0 ? `${aggregateStats.avgHealth}% SPF/DKIM Health` : 'Connect relay to start'}
             </div>
           </div>
         </div>
@@ -202,7 +285,7 @@ export const SMTPManager: React.FC = () => {
             <h2 className="text-sm font-extrabold text-slate-300 uppercase tracking-wider">
               Connected Relay Accounts ({activeSmtps.length})
             </h2>
-            <span className="text-xs text-slate-400">Auto-rotates during campaign dispatch</span>
+            <span className="text-xs text-slate-400">Live synchronized with Outbox, Smart Inbox & Campaigns</span>
           </div>
 
           {activeSmtps.length === 0 ? (
@@ -224,11 +307,20 @@ export const SMTPManager: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {activeSmtps.map((smtp) => {
                 const isTestingThis = testingId === smtp.id;
-                const warmup = getSMTPWarmupDetails(smtp);
-                const runningCampaigns = getActiveCampaignsForSMTP(smtp.id);
-                const sentToday = smtp.sentToday || 0;
-                const dailyCap = smtp.dailyLimit || 500;
-                const remainingLimit = Math.max(0, (warmup.isRamping ? warmup.currentDailyLimit : dailyCap) - sentToday);
+                const metrics = smtpMetricsMap.get(smtp.id) || getSMTPAccountMetrics(smtp, activeSmtps, sentEmails, campaigns, threads);
+                const {
+                  sentToday,
+                  totalDispatched,
+                  openedCount,
+                  repliedCount,
+                  warmup,
+                  effectiveDailyLimit,
+                  remainingToday,
+                  usagePct,
+                  openRatePct,
+                  replyRatePct,
+                  runningCampaigns
+                } = metrics;
 
                 return (
                   <div
@@ -238,19 +330,19 @@ export const SMTPManager: React.FC = () => {
                     {/* Header */}
                     <div className="space-y-2">
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2.5">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           <div className="w-9 h-9 rounded-xl bg-slate-800/90 border border-slate-700 flex items-center justify-center text-cyan-400 shrink-0 shadow-inner">
                             {smtp.provider === 'domain_webmail' ? <Globe className="w-4 h-4" /> : <Server className="w-4 h-4" />}
                           </div>
-                          <div>
-                            <h3 className="font-bold text-sm text-slate-100 leading-tight">{smtp.name}</h3>
-                            <span className="text-[11px] text-slate-400 font-mono">{smtp.username}</span>
+                          <div className="min-w-0">
+                            <h3 className="font-bold text-sm text-slate-100 leading-tight truncate">{smtp.name}</h3>
+                            <span className="text-[11px] text-slate-400 font-mono truncate block">{smtp.fromEmail || smtp.username}</span>
                           </div>
                         </div>
 
-                        <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded flex items-center gap-1">
+                        <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded flex items-center gap-1 shrink-0">
                           <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                          99.8%
+                          {smtp.healthScore || 99.8}%
                         </span>
                       </div>
 
@@ -282,29 +374,22 @@ export const SMTPManager: React.FC = () => {
                           <span>Today's Outbound Dispatch</span>
                         </span>
                         <span className="text-[11px] font-mono font-bold text-cyan-300">
-                          {sentToday} / {warmup.isRamping ? warmup.currentDailyLimit : dailyCap} sent
+                          {sentToday} / {effectiveDailyLimit} sent
                         </span>
                       </div>
                       
-                      {/* Accurate Progress Bar matching Sent Today */}
-                      {(() => {
-                        const effectiveCap = warmup.isRamping ? warmup.currentDailyLimit : dailyCap;
-                        const usagePct = effectiveCap > 0 ? Math.min(100, Math.round((sentToday / effectiveCap) * 100)) : 0;
-                        return (
-                          <div className="space-y-1">
-                            <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                              <div 
-                                className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-500"
-                                style={{ width: `${Math.max(usagePct, sentToday > 0 ? 3 : 0)}%` }}
-                              />
-                            </div>
-                            <div className="flex items-center justify-between text-[10px] text-slate-500">
-                              <span>{usagePct}% consumed today</span>
-                              <span>{remainingLimit} remaining</span>
-                            </div>
-                          </div>
-                        );
-                      })()}
+                      <div className="space-y-1">
+                        <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-500"
+                            style={{ width: `${Math.max(usagePct, sentToday > 0 ? 4 : 0)}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                          <span>{usagePct}% consumed today</span>
+                          <span className="text-emerald-400 font-bold">{remainingToday} remaining</span>
+                        </div>
+                      </div>
 
                       {/* Warm-up Status Sub-bar */}
                       <div className="pt-1.5 border-t border-slate-800/60 flex items-center justify-between text-[10px]">
@@ -315,6 +400,39 @@ export const SMTPManager: React.FC = () => {
                         <span className="font-mono text-slate-400">
                           {warmup.isRamping ? `${warmup.percentComplete}% ramped` : '100% max'}
                         </span>
+                      </div>
+                    </div>
+
+                    {/* Live Relay Performance Counters (Total Sent, Opened, Replies, Remaining) */}
+                    <div className="grid grid-cols-3 gap-2 text-center bg-slate-950/90 p-2.5 rounded-xl border border-slate-800/90">
+                      <div className="p-1.5 rounded-lg bg-slate-900/90 border border-slate-800/80">
+                        <div className="text-[10px] text-slate-400 font-medium flex items-center justify-center gap-1">
+                          <Send className="w-2.5 h-2.5 text-cyan-400" />
+                          <span>Total Sent</span>
+                        </div>
+                        <div className="text-sm font-black text-slate-100 font-mono mt-0.5">
+                          {totalDispatched}
+                        </div>
+                      </div>
+
+                      <div className="p-1.5 rounded-lg bg-slate-900/90 border border-slate-800/80">
+                        <div className="text-[10px] text-slate-400 font-medium flex items-center justify-center gap-1">
+                          <Eye className="w-2.5 h-2.5 text-emerald-400" />
+                          <span>Opened</span>
+                        </div>
+                        <div className="text-sm font-black text-emerald-400 font-mono mt-0.5">
+                          {openedCount} <span className="text-[10px] font-normal text-slate-400">({openRatePct}%)</span>
+                        </div>
+                      </div>
+
+                      <div className="p-1.5 rounded-lg bg-slate-900/90 border border-slate-800/80">
+                        <div className="text-[10px] text-slate-400 font-medium flex items-center justify-center gap-1">
+                          <MessageSquare className="w-2.5 h-2.5 text-purple-400" />
+                          <span>Replies</span>
+                        </div>
+                        <div className="text-sm font-black text-purple-400 font-mono mt-0.5">
+                          {repliedCount} <span className="text-[10px] font-normal text-slate-400">({replyRatePct}%)</span>
+                        </div>
                       </div>
                     </div>
 
@@ -334,25 +452,35 @@ export const SMTPManager: React.FC = () => {
                       </div>
                       <div>
                         <span className="text-slate-500 text-[10px] block">Sent Today / Cap</span>
-                        <span className="font-bold text-slate-200 text-[11px]">
-                          {sentToday} / {warmup.isRamping ? warmup.currentDailyLimit : dailyCap}
+                        <span className="font-bold text-slate-200 font-mono text-[11px]">
+                          {sentToday} / {effectiveDailyLimit}
                         </span>
                       </div>
                       <div>
                         <span className="text-slate-500 text-[10px] block">Remaining Today</span>
-                        <span className="font-bold text-emerald-400 text-[11px]">
-                          {remainingLimit} emails
+                        <span className="font-bold text-emerald-400 font-mono text-[11px]">
+                          {remainingToday} emails
                         </span>
                       </div>
                     </div>
 
                     {/* Active Campaign Indicator */}
-                    {runningCampaigns.length > 0 && (
-                      <div className="flex items-center gap-1.5 text-[11px] text-cyan-300 bg-cyan-950/30 px-2 py-1 rounded-lg border border-cyan-500/20">
-                        <Radio className="w-3 h-3 text-cyan-400 animate-pulse" />
-                        <span className="truncate">Active in {runningCampaigns.length} Campaign{runningCampaigns.length > 1 ? 's' : ''}: <strong>{runningCampaigns[0].name}</strong></span>
+                    <div className={`flex items-center justify-between gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg border ${
+                      runningCampaigns.length > 0
+                        ? 'text-cyan-300 bg-cyan-950/30 border-cyan-500/30'
+                        : 'text-slate-400 bg-slate-950/50 border-slate-800/80'
+                    }`}>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Radio className={`w-3 h-3 shrink-0 ${runningCampaigns.length > 0 ? 'text-cyan-400 animate-pulse' : 'text-slate-500'}`} />
+                        <span className="truncate">
+                          {runningCampaigns.length > 0 ? (
+                            <>Active in <strong>{runningCampaigns.length}</strong> Running Campaign{runningCampaigns.length > 1 ? 's' : ''}: <strong>{runningCampaigns[0].name}</strong></>
+                          ) : (
+                            <>Ready for Campaign Rotation (0 running)</>
+                          )}
+                        </span>
                       </div>
-                    )}
+                    </div>
 
                     {/* Action Buttons */}
                     <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 gap-2">

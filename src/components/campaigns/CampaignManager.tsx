@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { useApp } from '../../context/AppContext';
+import { useApp, getSMTPAccountMetrics } from '../../context/AppContext';
 import { Campaign, CampaignStep, Lead, SMTPAccount, EmailTemplate } from '../../types';
 import { SMTPConnectModal } from '../smtp/SMTPConnectModal';
 import { safeParseResponse } from '../../lib/safeFetch';
@@ -65,10 +65,15 @@ export const CampaignManager: React.FC = () => {
     addTemplateCategory,
     addEmailTemplate,
     addSentEmailLog,
+    sentEmails,
+    threads,
     addNotification,
     activeFollowUpCohort,
     setActiveFollowUpCohort
   } = useApp();
+
+  // Filter state for Active / Running Campaigns
+  const [campaignStatusFilter, setCampaignStatusFilter] = useState<'all' | 'running' | 'paused'>('all');
 
   // Wizard modal state & step
   const [showWizardModal, setShowWizardModal] = useState<boolean>(false);
@@ -1210,6 +1215,244 @@ export const CampaignManager: React.FC = () => {
         </div>
       )}
 
+      {/* ACTIVE CAMPAIGNS LIST (Placed prominently at the top so Running Campaigns are always immediately visible!) */}
+      <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800 space-y-4 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-800/80 pb-3.5">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+              <Activity className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-base font-black text-slate-100">
+                  Running & Active Campaign Sequences ({activeCampaigns.length})
+                </h2>
+                {activeCampaigns.filter(c => c.status === 'running').length > 0 && (
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[11px] font-extrabold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                    <span>{activeCampaigns.filter(c => c.status === 'running').length} Running Live</span>
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-400">
+                Real-time campaign execution status, outbound delivery progress, opens, and replies.
+              </p>
+            </div>
+          </div>
+
+          {/* Filter Tabs: All / Running / Paused */}
+          <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 self-start sm:self-auto">
+            {[
+              { id: 'all', label: `All (${activeCampaigns.length})` },
+              { id: 'running', label: `● Running (${activeCampaigns.filter(c => c.status === 'running').length})` },
+              { id: 'paused', label: `⏸ Paused (${activeCampaigns.filter(c => c.status !== 'running').length})` },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setCampaignStatusFilter(tab.id as any)}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  campaignStatusFilter === tab.id
+                    ? 'bg-cyan-500 text-black shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {activeCampaigns.length === 0 ? (
+          <div className="p-8 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 text-center space-y-3">
+            <Send className="w-9 h-9 text-slate-600 mx-auto" />
+            <div className="text-sm font-bold text-slate-300">No active campaigns running yet</div>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto">
+              Click "Launch Campaign Wizard" above to create and start your first automated cold email sequence.
+            </p>
+            <button
+              onClick={handleOpenWizard}
+              className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Launch First Campaign</span>
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-3.5">
+            {activeCampaigns
+              .filter(c => {
+                if (campaignStatusFilter === 'running') return c.status === 'running';
+                if (campaignStatusFilter === 'paused') return c.status !== 'running';
+                return true;
+              })
+              .map((camp) => {
+                const assignedSmtp = smtpAccounts.find(s => s.id === camp.assignedSmtpId);
+                const campNormName = (camp.name || '').trim().toLowerCase();
+                const campLogs = (sentEmails || []).filter(
+                  s =>
+                    !s.isTrash &&
+                    (s.campaignId === camp.id ||
+                      (s.campaignName && s.campaignName.trim().toLowerCase() === campNormName))
+                );
+                const liveSentCount = Math.max(
+                  camp.sentCount || 0,
+                  campLogs.filter(l => l.status !== 'failed' && l.status !== 'bounced').length
+                );
+                const liveOpenCount = Math.max(
+                  camp.openCount || 0,
+                  campLogs.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length
+                );
+                const liveReplyCount = Math.max(
+                  camp.replyCount || 0,
+                  campLogs.filter(l => l.status === 'replied').length
+                );
+                const liveTotalLeads = Math.max(
+                  camp.totalLeads || 0,
+                  camp.leadIds?.length || 0,
+                  liveSentCount
+                );
+                const progressPct =
+                  liveTotalLeads > 0 ? Math.min(100, Math.round((liveSentCount / liveTotalLeads) * 100)) : 0;
+
+                return (
+                  <div
+                    key={camp.id}
+                    className={`p-5 rounded-2xl border transition flex flex-col gap-4 shadow-lg ${
+                      camp.status === 'running'
+                        ? 'bg-gradient-to-r from-slate-900 via-slate-900/95 to-emerald-950/20 border-emerald-500/30 hover:border-emerald-500/50'
+                        : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                      <div className="space-y-2 flex-1 min-w-0">
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold uppercase border flex items-center gap-1.5 ${
+                            camp.status === 'running'
+                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                              : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                          }`}>
+                            {camp.status === 'running' ? (
+                              <>
+                                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                <span>Running</span>
+                              </>
+                            ) : (
+                              <span>⏸ Paused</span>
+                            )}
+                          </span>
+                          <h3 className="font-black text-base text-slate-100 truncate">{camp.name}</h3>
+                          <span className="text-xs text-slate-400 font-mono">({camp.niche || 'B2B Outreach'})</span>
+                        </div>
+
+                        <div className="flex items-center gap-3 sm:gap-4 text-xs text-slate-400 flex-wrap">
+                          <span className="flex items-center gap-1 bg-slate-950/70 px-2.5 py-1 rounded-lg border border-slate-800">
+                            <Users className="w-3.5 h-3.5 text-cyan-400" />
+                            <strong className="text-slate-100 font-mono">{liveTotalLeads}</strong> leads
+                          </span>
+                          <span className="flex items-center gap-1 bg-slate-950/70 px-2.5 py-1 rounded-lg border border-slate-800">
+                            <Send className="w-3.5 h-3.5 text-blue-400" />
+                            <strong className="text-cyan-300 font-mono">{liveSentCount}</strong> sent
+                          </span>
+                          <span className="flex items-center gap-1 bg-slate-950/70 px-2.5 py-1 rounded-lg border border-slate-800">
+                            <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                            <strong className="text-emerald-300 font-mono">{liveOpenCount}</strong> opened
+                          </span>
+                          <span className="flex items-center gap-1 bg-slate-950/70 px-2.5 py-1 rounded-lg border border-slate-800">
+                            <MessageSquare className="w-3.5 h-3.5 text-purple-400" />
+                            <strong className="text-purple-300 font-mono">{liveReplyCount}</strong> replies
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Layers className="w-3.5 h-3.5 text-amber-400" />
+                            <strong className="text-slate-200">{camp.steps?.length || 1}</strong> step{(camp.steps?.length || 1) > 1 ? 's' : ''}
+                          </span>
+                          {camp.sendingIntervalSec && (
+                            <span className="flex items-center gap-1 font-mono text-cyan-300">
+                              <Clock className="w-3.5 h-3.5" />
+                              {camp.sendingIntervalSec}s delay
+                            </span>
+                          )}
+                          {camp.assignedSmtpId === 'round_robin' || !camp.assignedSmtpId ? (
+                            <span className="flex items-center gap-1 text-[11px] text-cyan-300 bg-cyan-950/40 px-2 py-0.5 rounded-lg border border-cyan-800/40 font-mono">
+                              <Server className="w-3 h-3 text-cyan-400" />
+                              <span>⚡ Smart Round-Robin ({activeSmtps.length} Relays)</span>
+                            </span>
+                          ) : assignedSmtp ? (
+                            <span className="flex items-center gap-1 text-[11px] text-slate-200 bg-slate-800/90 px-2 py-0.5 rounded-lg border border-slate-700 font-mono">
+                              <Server className="w-3 h-3 text-cyan-400" />
+                              <span>{assignedSmtp.name} ({assignedSmtp.fromEmail || assignedSmtp.username})</span>
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => handleOpenEditWizard(camp)}
+                          className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer border border-slate-700"
+                          title="Edit Campaign Sequence, Steps, Schedule & Leads"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Edit</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            if (camp.status === 'running') {
+                              toggleCampaignStatus(camp.id);
+                              handleStopDispatch();
+                            } else {
+                              toggleCampaignStatus(camp.id);
+                              startLiveDispatcher(camp);
+                            }
+                          }}
+                          className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer border border-slate-700"
+                        >
+                          {camp.status === 'running' ? <Pause className="w-3.5 h-3.5 text-amber-400" /> : <Play className="w-3.5 h-3.5 text-emerald-400" />}
+                          <span>{camp.status === 'running' ? 'Pause' : 'Resume & Dispatch'}</span>
+                        </button>
+
+                        {camp.status === 'running' && !isDispatching && liveSentCount < liveTotalLeads && (
+                          <button
+                            onClick={() => startLiveDispatcher(camp)}
+                            className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center gap-1 transition cursor-pointer shadow-md"
+                            title="Continue dispatching remaining emails now"
+                          >
+                            <Send className="w-3 h-3" />
+                            <span>Send Next</span>
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => setCampaignToDelete(camp)}
+                          className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-rose-950 hover:text-rose-400 text-slate-400 flex items-center justify-center transition cursor-pointer"
+                          title="Delete Campaign"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Campaign Dispatch Progress Bar */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                        <span>Sequence Dispatch Progress ({liveSentCount} of {liveTotalLeads} sent)</span>
+                        <span className="text-cyan-300 font-bold">{progressPct}% complete</span>
+                      </div>
+                      <div className="w-full h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                        <div
+                          className="h-full bg-gradient-to-r from-emerald-500 via-cyan-500 to-blue-500 rounded-full transition-all duration-500"
+                          style={{ width: `${Math.max(progressPct, liveSentCount > 0 ? 4 : 0)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        )}
+      </div>
+
       {/* 1-CLICK FOLLOW-UP COHORTS SECTION */}
       <div className="p-5 rounded-3xl bg-slate-900/60 border border-slate-800 space-y-4 shadow-lg">
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1283,133 +1526,6 @@ export const CampaignManager: React.FC = () => {
             </div>
           </button>
         </div>
-      </div>
-
-      {/* ACTIVE CAMPAIGNS LIST */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Layers className="w-5 h-5 text-cyan-400" />
-            <h2 className="text-base font-bold text-slate-100">Active Campaign Sequences ({activeCampaigns.length})</h2>
-          </div>
-        </div>
-
-        {activeCampaigns.length === 0 ? (
-          <div className="p-12 rounded-3xl bg-slate-900/40 border border-dashed border-slate-800 text-center space-y-3">
-            <Send className="w-10 h-10 text-slate-600 mx-auto" />
-            <div className="text-sm font-bold text-slate-300">No campaigns launched yet</div>
-            <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              Create your first automated cold email sequence to start booking meetings on autopilot.
-            </p>
-            <button
-              onClick={handleOpenWizard}
-              className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Launch First Campaign</span>
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4">
-            {activeCampaigns.map((camp) => {
-              const assignedSmtp = smtpAccounts.find(s => s.id === camp.assignedSmtpId);
-              return (
-                <div
-                  key={camp.id}
-                  className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition flex flex-col md:flex-row md:items-center md:justify-between gap-4 shadow-lg"
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border ${
-                        camp.status === 'running'
-                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                          : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                      }`}>
-                        {camp.status === 'running' ? '● Running' : '⏸ Paused'}
-                      </span>
-                      <h3 className="font-bold text-base text-slate-100">{camp.name}</h3>
-                      <span className="text-xs text-slate-400 font-mono">({camp.niche})</span>
-                    </div>
-
-                    <div className="flex items-center gap-4 text-xs text-slate-400 flex-wrap">
-                      <span className="flex items-center gap-1">
-                        <Users className="w-3.5 h-3.5 text-cyan-400" />
-                        <strong className="text-slate-200">{camp.totalLeads}</strong> leads enrolled
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Send className="w-3.5 h-3.5 text-purple-400" />
-                        <strong className="text-slate-200">{camp.sentCount}</strong> dispatched
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Layers className="w-3.5 h-3.5 text-emerald-400" />
-                        <strong className="text-slate-200">{camp.steps?.length || 1}</strong> sequence steps
-                      </span>
-                      {camp.sendingIntervalSec && (
-                        <span className="flex items-center gap-1 font-mono text-cyan-300">
-                          <Clock className="w-3.5 h-3.5" />
-                          {camp.sendingIntervalSec}s interval delay
-                        </span>
-                      )}
-                      {camp.assignedSmtpId === 'round_robin' || !camp.assignedSmtpId ? (
-                        <span className="flex items-center gap-1 text-[11px] text-cyan-300 bg-cyan-950/40 px-2 py-0.5 rounded-lg border border-cyan-800/40 font-mono">
-                          <Server className="w-3 h-3 text-cyan-400" />
-                          <span>⚡ Smart Round-Robin</span>
-                        </span>
-                      ) : assignedSmtp ? (
-                        <span className="flex items-center gap-1 text-[11px] text-slate-200 bg-slate-800/90 px-2 py-0.5 rounded-lg border border-slate-700 font-mono">
-                          <Server className="w-3 h-3 text-cyan-400" />
-                          <span>{assignedSmtp.name}</span>
-                        </span>
-                      ) : null}
-                      {camp.sendMode === 'scheduled' && camp.scheduleStartTime && (
-                        <span className="flex items-center gap-1 text-[11px] text-purple-300 bg-purple-950/40 px-2 py-0.5 rounded-lg border border-purple-500/30 font-mono">
-                          <Calendar className="w-3 h-3 text-purple-400" />
-                          <span>{camp.scheduleStartTime}-{camp.scheduleEndTime}</span>
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {/* EDIT CAMPAIGN BUTTON (Explicit User Request) */}
-                    <button
-                      onClick={() => handleOpenEditWizard(camp)}
-                      className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer border border-slate-700"
-                      title="Edit Campaign Sequence, Steps, Schedule & Leads"
-                    >
-                      <Edit3 className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>Edit</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        if (camp.status === 'running') {
-                          toggleCampaignStatus(camp.id);
-                          handleStopDispatch();
-                        } else {
-                          toggleCampaignStatus(camp.id);
-                          startLiveDispatcher(camp);
-                        }
-                      }}
-                      className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
-                    >
-                      {camp.status === 'running' ? <Pause className="w-3.5 h-3.5 text-amber-400" /> : <Play className="w-3.5 h-3.5 text-emerald-400" />}
-                      <span>{camp.status === 'running' ? 'Pause' : 'Start & Dispatch'}</span>
-                    </button>
-
-                    <button
-                      onClick={() => setCampaignToDelete(camp)}
-                      className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-rose-950 hover:text-rose-400 text-slate-400 flex items-center justify-center transition cursor-pointer"
-                      title="Delete Campaign"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
       </div>
 
       {/* FULL-FEATURED 1-CLICK FOLLOW-UP COHORT MODAL (Explicit User Request) */}
@@ -1682,6 +1798,40 @@ export const CampaignManager: React.FC = () => {
                 );
               })}
             </div>
+
+            {/* Live Running Campaigns Strip inside Campaign Launch Wizard Modal */}
+            {activeCampaigns.filter(c => c.status === 'running').length > 0 && (
+              <div className="px-4 py-2.5 bg-emerald-950/30 border-b border-emerald-500/30 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shrink-0">
+                <div className="flex items-center gap-2 text-xs text-emerald-300 font-bold shrink-0">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                  <span>Running Campaigns ({activeCampaigns.filter(c => c.status === 'running').length}):</span>
+                </div>
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                  {activeCampaigns
+                    .filter(c => c.status === 'running')
+                    .map(rc => {
+                      const rcLogs = (sentEmails || []).filter(
+                        s => !s.isTrash && (s.campaignId === rc.id || s.campaignName === rc.name)
+                      );
+                      const rcSent = Math.max(rc.sentCount || 0, rcLogs.filter(l => l.status !== 'failed').length);
+                      const rcTotal = Math.max(rc.totalLeads || 0, rc.leadIds?.length || 0, rcSent);
+                      return (
+                        <button
+                          key={rc.id}
+                          type="button"
+                          onClick={() => handleOpenEditWizard(rc)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-emerald-500/40 text-[11px] text-slate-200 flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition"
+                          title="Click to inspect or edit this running campaign"
+                        >
+                          <span className="font-bold text-emerald-300">{rc.name}</span>
+                          <span className="font-mono text-cyan-300">({rcSent}/{rcTotal} sent)</span>
+                          <Edit3 className="w-3 h-3 text-slate-400" />
+                        </button>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
 
             {/* Step Validation Error Notification */}
             {stepValidationError && (
@@ -2045,9 +2195,14 @@ export const CampaignManager: React.FC = () => {
                                 </div>
 
                                 <div className="flex items-center gap-2.5 shrink-0 text-right">
-                                  <span className="text-[11px] text-slate-400 font-mono hidden sm:inline-block">
-                                    {smtp.sentToday || 0}/{smtp.dailyLimit || 500} today
-                                  </span>
+                                  {(() => {
+                                    const m = getSMTPAccountMetrics(smtp, activeSmtps, sentEmails, campaigns, threads);
+                                    return (
+                                      <span className="text-[11px] text-cyan-300 font-mono hidden sm:inline-block">
+                                        {m.sentToday}/{m.effectiveDailyLimit} today ({m.totalDispatched} total)
+                                      </span>
+                                    );
+                                  })()}
                                   <span className="text-xs font-bold text-emerald-400 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
                                     {smtp.healthScore || 99.8}% Health
                                   </span>

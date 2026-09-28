@@ -66,6 +66,120 @@ export const getSMTPWarmupDetails = (account: SMTPAccount) => {
   };
 };
 
+// Authoritative helper to compute real-time connected SMTP relay metrics from sentEmails, campaigns, and threads
+export const getSMTPAccountMetrics = (
+  smtp: SMTPAccount,
+  allSmtps: SMTPAccount[],
+  sentEmails: SentEmailLog[],
+  campaigns: Campaign[],
+  threads: EmailThread[] = []
+) => {
+  const activeSmtps = (allSmtps || []).filter(s => s && !s.isTrash);
+  const smtpEmailNorm = (smtp.fromEmail || smtp.username || '').trim().toLowerCase();
+  const smtpUserNorm = (smtp.username || '').trim().toLowerCase();
+  const smtpNameNorm = (smtp.name || '').trim().toLowerCase();
+  const smtpHostNorm = (smtp.host || '').trim().toLowerCase();
+
+  const matchesThisSmtp = (log: SentEmailLog) => {
+    if (!log || log.isTrash) return false;
+    if (log.smtpAccountId && log.smtpAccountId === smtp.id) return true;
+    const logSender = (log.senderEmail || '').trim().toLowerCase();
+    if (logSender && (logSender === smtpEmailNorm || logSender === smtpUserNorm)) return true;
+    const logSmtpName = (log.smtpAccountName || '').trim().toLowerCase();
+    if (logSmtpName && smtpNameNorm && logSmtpName === smtpNameNorm) return true;
+    const logHost = (log.smtpHost || '').trim().toLowerCase();
+    if (logHost && smtpHostNorm && logHost.includes(smtpHostNorm)) return true;
+    if (activeSmtps.length === 1 && activeSmtps[0].id === smtp.id) return true;
+    return false;
+  };
+
+  const allMatchedLogs = (sentEmails || []).filter(matchesThisSmtp);
+  const successfulLogs = allMatchedLogs.filter(l => l.status !== 'failed' && l.status !== 'bounced');
+  const failedLogs = allMatchedLogs.filter(l => l.status === 'failed' || l.status === 'bounced');
+
+  const now = new Date();
+  const todayIsoPrefix = now.toISOString().split('T')[0];
+  const todayDateStr = now.toDateString();
+
+  const logsToday = successfulLogs.filter(l => {
+    if (!l.sentAt) return true;
+    if (l.sentAt.startsWith(todayIsoPrefix)) return true;
+    const d = new Date(l.sentAt);
+    if (!Number.isFinite(d.getTime())) return true;
+    if (d.toDateString() === todayDateStr) return true;
+    if (now.getTime() - d.getTime() < 24 * 60 * 60 * 1000) return true;
+    return false;
+  });
+
+  const sentToday = Math.max(smtp.sentToday || 0, logsToday.length);
+  const totalDispatched = Math.max(sentToday, successfulLogs.length);
+  const openedCount = successfulLogs.filter(
+    l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied'
+  ).length;
+
+  const matchedRepliedThreads = (threads || []).filter(t => {
+    if (!t || t.isTrash) return false;
+    const hasLeadMsg = Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead');
+    if (!hasLeadMsg) return false;
+    if (t.smtpAccountId && t.smtpAccountId === smtp.id) return true;
+    const tEmail = (t.smtpEmail || '').trim().toLowerCase();
+    if (tEmail && (tEmail === smtpEmailNorm || tEmail === smtpUserNorm)) return true;
+    if (activeSmtps.length === 1 && activeSmtps[0].id === smtp.id) return true;
+    return false;
+  });
+
+  const repliedCount = Math.max(
+    successfulLogs.filter(l => l.status === 'replied').length,
+    matchedRepliedThreads.length
+  );
+
+  const warmup = getSMTPWarmupDetails({ ...smtp, sentToday });
+  const dailyCap = smtp.dailyLimit || 500;
+  const effectiveDailyLimit = warmup.isRamping ? warmup.currentDailyLimit : dailyCap;
+  const remainingToday = Math.max(0, effectiveDailyLimit - sentToday);
+  const usagePct = effectiveDailyLimit > 0 ? Math.min(100, Math.round((sentToday / effectiveDailyLimit) * 100)) : 0;
+  const openRatePct = totalDispatched > 0 ? Math.min(100, Math.round((openedCount / totalDispatched) * 100)) : 0;
+  const replyRatePct = totalDispatched > 0 ? Math.min(100, Math.round((repliedCount / totalDispatched) * 100)) : 0;
+
+  const runningCampaigns = (campaigns || []).filter(
+    c =>
+      c &&
+      !c.isTrash &&
+      c.status === 'running' &&
+      (!c.assignedSmtpId ||
+        c.assignedSmtpId === 'round_robin' ||
+        c.assignedSmtpId === smtp.id ||
+        c.assignedSmtpId === smtp.name)
+  );
+
+  const assignedCampaigns = (campaigns || []).filter(
+    c =>
+      c &&
+      !c.isTrash &&
+      (!c.assignedSmtpId ||
+        c.assignedSmtpId === 'round_robin' ||
+        c.assignedSmtpId === smtp.id ||
+        c.assignedSmtpId === smtp.name)
+  );
+
+  return {
+    sentToday,
+    totalDispatched,
+    openedCount,
+    repliedCount,
+    failedCount: failedLogs.length,
+    warmup,
+    dailyCap,
+    effectiveDailyLimit,
+    remainingToday,
+    usagePct,
+    openRatePct,
+    replyRatePct,
+    runningCampaigns,
+    assignedCampaigns
+  };
+};
+
 interface AppContextType {
   // Navigation & View
   activeTab: string;
@@ -327,27 +441,106 @@ export const cleanEmailBodyText = (rawText: string, fallbackWebsite?: string, fa
     .trim();
 };
 
+const normalizeThreadSubjectKey = (sub: string) =>
+  String(sub || '')
+    .replace(/^(re|fwd|fw)\s*:\s*/gi, '')
+    .trim()
+    .toLowerCase();
+
 const sanitizeThreadsArray = (list: EmailThread[]): EmailThread[] => {
   if (!Array.isArray(list)) return [];
-  return list
-    .filter(t => t && !DEMO_THREAD_IDS.has(t.id))
-    .map(t => {
-      const cleanedMessages = Array.isArray(t.messages)
-        ? t.messages.map(m => ({
-            ...m,
-            body: cleanEmailBodyText(m.body, t.leadCompany, t.leadCompany, t.leadName)
-          }))
-        : [];
+  const splitThreads: EmailThread[] = [];
+
+  for (const t of list) {
+    if (!t || DEMO_THREAD_IDS.has(t.id)) continue;
+
+    const rawMessages = Array.isArray(t.messages) ? t.messages : [];
+    // Deduplicate identical messages inside the thread
+    const seenMsgKeys = new Set<string>();
+    const dedupedMessages: EmailMessage[] = [];
+    for (const m of rawMessages) {
+      if (!m) continue;
+      const cleanedBody = cleanEmailBodyText(m.body, t.leadCompany, t.leadCompany, m.sender === 'lead' ? (m.senderName || t.leadName) : t.leadName);
+      const msgKey = m.id || `${m.sender}-${m.senderEmail || ''}-${m.timestamp || ''}-${cleanedBody.slice(0, 80)}`;
+      if (seenMsgKeys.has(msgKey)) continue;
+      seenMsgKeys.add(msgKey);
+      dedupedMessages.push({
+        ...m,
+        body: cleanedBody
+      });
+    }
+
+    if (dedupedMessages.length <= 1) {
       const latestMsgBody =
-        cleanedMessages.length > 0
-          ? cleanedMessages[cleanedMessages.length - 1].body
+        dedupedMessages.length > 0
+          ? dedupedMessages[dedupedMessages.length - 1].body
           : cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName);
-      return {
+      splitThreads.push({
         ...t,
         lastMessage: (latestMsgBody || cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName)).slice(0, 100),
-        messages: cleanedMessages
-      };
-    });
+        messages: dedupedMessages
+      });
+      continue;
+    }
+
+    // Check if this thread accidentally merged messages from different lead emails or unrelated subjects
+    const groups = new Map<string, EmailMessage[]>();
+    const baseLeadEmail = (t.leadEmail || '').trim().toLowerCase();
+    const baseSubKey = normalizeThreadSubjectKey(t.subject);
+
+    for (const m of dedupedMessages) {
+      const msgLeadEmail =
+        m.sender === 'lead'
+          ? (m.senderEmail || baseLeadEmail).trim().toLowerCase()
+          : (m.recipientEmail || baseLeadEmail).trim().toLowerCase();
+      const msgSubKey = normalizeThreadSubjectKey(m.subject || t.subject) || baseSubKey;
+      const groupKey = `${msgLeadEmail || baseLeadEmail}::${msgSubKey || baseSubKey}`;
+      const existing = groups.get(groupKey) || [];
+      existing.push(m);
+      groups.set(groupKey, existing);
+    }
+
+    if (groups.size <= 1) {
+      const latestMsgBody = dedupedMessages[dedupedMessages.length - 1].body;
+      splitThreads.push({
+        ...t,
+        lastMessage: (latestMsgBody || cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName)).slice(0, 100),
+        messages: dedupedMessages
+      });
+    } else {
+      let groupIdx = 0;
+      for (const [groupKey, groupMsgs] of groups.entries()) {
+        const [grpEmail] = groupKey.split('::');
+        const firstLeadMsg = groupMsgs.find(m => m.sender === 'lead');
+        const latestMsg = groupMsgs[groupMsgs.length - 1];
+        const subThreadId = groupIdx === 0 ? t.id : `${t.id}-split-${groupIdx}`;
+        const resolvedEmail = grpEmail || t.leadEmail;
+        const resolvedName =
+          firstLeadMsg?.senderName ||
+          (resolvedEmail === baseLeadEmail ? t.leadName : resolvedEmail.split('@')[0].replace(/[._-]/g, ' '));
+        const resolvedCompany =
+          resolvedEmail === baseLeadEmail
+            ? t.leadCompany
+            : resolvedEmail.split('@')[1]?.split('.')[0] || t.leadCompany;
+
+        splitThreads.push({
+          ...t,
+          id: subThreadId,
+          leadName: resolvedName,
+          leadEmail: resolvedEmail,
+          leadCompany: resolvedCompany,
+          subject: latestMsg.subject || t.subject,
+          lastMessage: (latestMsg.body || '').slice(0, 100),
+          lastMessageDate: latestMsg.timestamp || t.lastMessageDate,
+          updatedAt: latestMsg.timestamp || t.updatedAt,
+          messages: groupMsgs.map(gm => ({ ...gm, threadId: subThreadId }))
+        });
+        groupIdx++;
+      }
+    }
+  }
+
+  return splitThreads;
 };
 
 export const MAX_AGENCY_GMAIL_ACCOUNTS = 3;
@@ -1430,9 +1623,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateLead = (id: string, updates: Partial<Lead>) => {
-    const updatedLeads = leads.map(l => l.id === id ? { ...l, ...updates } : l);
-    setLeads(updatedLeads);
-    persistResourceDirectly('leads', updatedLeads);
+    setLeads(prev => {
+      const base = prev.length >= (latestWorkspaceRef.current.leads?.length || 0) ? prev : (latestWorkspaceRef.current.leads || prev);
+      const updatedLeads = base.map(l => l.id === id ? { ...l, ...updates } : l);
+      (latestWorkspaceRef.current as any).leads = updatedLeads;
+      persistResourceDirectly('leads', updatedLeads);
+      return updatedLeads;
+    });
   };
 
   const deleteLeadToTrash = (id: string) => {
@@ -1788,11 +1985,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Campaign Actions
+  // Campaign Actions (Functional state updates + ref sync so live dispatch loops never overwrite newly created campaigns)
   const createCampaign = (campaignData: Omit<Campaign, 'id' | 'sentCount' | 'openCount' | 'replyCount' | 'bounceCount' | 'createdAt'>): Campaign => {
     const newCamp: Campaign = {
       ...campaignData,
-      id: `camp-${Date.now()}`,
+      id: `camp-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
       sentCount: 0,
       openCount: 0,
       replyCount: 0,
@@ -1801,9 +1998,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       lastRunAt: new Date().toISOString().split('T')[0],
       isTrash: false
     };
-    const updated = [newCamp, ...campaigns];
-    setCampaigns(updated);
-    persistResourceDirectly('campaigns', updated);
+    const currentList = latestWorkspaceRef.current.campaigns || campaigns || [];
+    const nextSnapshot = [newCamp, ...currentList.filter(c => c && c.id !== newCamp.id)];
+    (latestWorkspaceRef.current as any).campaigns = nextSnapshot;
+
+    setCampaigns(prev => {
+      const merged = [newCamp, ...prev.filter(c => c && c.id !== newCamp.id)];
+      (latestWorkspaceRef.current as any).campaigns = merged;
+      persistResourceDirectly('campaigns', merged);
+      return merged;
+    });
+
     addNotification({
       title: `Campaign "${newCamp.name}" Created 🚀`,
       message: `Targeting ${newCamp.totalLeads} leads with automated sequence.`,
@@ -1814,33 +2019,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateCampaign = (id: string, updates: Partial<Campaign>) => {
-    const updated = campaigns.map(c => c.id === id ? { ...c, ...updates } : c);
-    setCampaigns(updated);
-    persistResourceDirectly('campaigns', updated);
+    setCampaigns(prev => {
+      const refList = latestWorkspaceRef.current.campaigns || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const updated = base.map(c => c.id === id ? { ...c, ...updates } : c);
+      (latestWorkspaceRef.current as any).campaigns = updated;
+      persistResourceDirectly('campaigns', updated);
+      return updated;
+    });
   };
 
   const toggleCampaignStatus = (id: string) => {
-    const updated = campaigns.map(c => {
-      if (c.id === id) {
-        const nextStatus = c.status === 'running' ? 'paused' : 'running';
-        addNotification({
-          title: `Campaign ${nextStatus === 'running' ? 'Resumed ▶️' : 'Paused ⏸️'}`,
-          message: `Campaign "${c.name}" is now ${nextStatus}.`,
-          type: 'campaign',
-          linkTab: 'campaigns'
-        });
-        return { ...c, status: nextStatus };
-      }
-      return c;
+    setCampaigns(prev => {
+      const refList = latestWorkspaceRef.current.campaigns || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const updated = base.map(c => {
+        if (c.id === id) {
+          const nextStatus: Campaign['status'] = c.status === 'running' ? 'paused' : 'running';
+          addNotification({
+            title: `Campaign ${nextStatus === 'running' ? 'Resumed ▶️' : 'Paused ⏸️'}`,
+            message: `Campaign "${c.name}" is now ${nextStatus}.`,
+            type: 'campaign',
+            linkTab: 'campaigns'
+          });
+          return { ...c, status: nextStatus };
+        }
+        return c;
+      });
+      (latestWorkspaceRef.current as any).campaigns = updated;
+      persistResourceDirectly('campaigns', updated);
+      return updated;
     });
-    setCampaigns(updated);
-    persistResourceDirectly('campaigns', updated);
   };
 
   const deleteCampaign = (id: string) => {
-    const updated = campaigns.map(c => c.id === id ? { ...c, isTrash: true, deletedAt: new Date().toISOString() } : c);
-    setCampaigns(updated);
-    persistResourceDirectly('campaigns', updated);
+    setCampaigns(prev => {
+      const refList = latestWorkspaceRef.current.campaigns || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const updated = base.map(c => c.id === id ? { ...c, isTrash: true, deletedAt: new Date().toISOString() } : c);
+      (latestWorkspaceRef.current as any).campaigns = updated;
+      persistResourceDirectly('campaigns', updated);
+      return updated;
+    });
     addNotification({
       title: 'Campaign Moved to Trash 🗑️',
       message: 'Campaign sequence moved to Trash. You can restore it anytime.',
@@ -1850,9 +2070,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const restoreCampaign = (id: string) => {
-    const updated = campaigns.map(c => c.id === id ? { ...c, isTrash: false, deletedAt: undefined } : c);
-    setCampaigns(updated);
-    persistResourceDirectly('campaigns', updated);
+    setCampaigns(prev => {
+      const refList = latestWorkspaceRef.current.campaigns || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const updated = base.map(c => c.id === id ? { ...c, isTrash: false, deletedAt: undefined } : c);
+      (latestWorkspaceRef.current as any).campaigns = updated;
+      persistResourceDirectly('campaigns', updated);
+      return updated;
+    });
     addNotification({
       title: 'Campaign Restored 🚀',
       message: 'Campaign sequence restored to active dashboard.',
@@ -1862,9 +2087,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const permanentDeleteCampaign = (id: string) => {
-    const updated = campaigns.filter(c => c.id !== id);
-    setCampaigns(updated);
-    persistResourceDirectly('campaigns', updated);
+    setCampaigns(prev => {
+      const refList = latestWorkspaceRef.current.campaigns || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const updated = base.filter(c => c.id !== id);
+      (latestWorkspaceRef.current as any).campaigns = updated;
+      persistResourceDirectly('campaigns', updated);
+      return updated;
+    });
     addNotification({
       title: 'Campaign Purged 🗑️',
       message: 'Campaign sequence permanently removed.',
@@ -2024,9 +2254,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isConnected: true,
       isTrash: false,
     };
-    const updatedSmtp = [newAcc, ...smtpAccounts];
-    setSmtpAccounts(updatedSmtp);
-    persistResourceDirectly('smtpAccounts', updatedSmtp);
+    setSmtpAccounts(prev => {
+      const refList = latestWorkspaceRef.current.smtpAccounts || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const updatedSmtp = [newAcc, ...base.filter(s => s.id !== newAcc.id)];
+      (latestWorkspaceRef.current as any).smtpAccounts = updatedSmtp;
+      persistResourceDirectly('smtpAccounts', updatedSmtp);
+      return updatedSmtp;
+    });
     addNotification({
       title: `Outbound SMTP Relay Connected ⚡`,
       message: `Connected ${newAcc.name} (${newAcc.host}:${newAcc.port}). SPF & DKIM verified.`,
@@ -2037,9 +2272,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateSMTPAccount = (id: string, updates: Partial<SMTPAccount>) => {
-    const updatedSmtp = smtpAccounts.map(s => s.id === id ? { ...s, ...updates } : s);
-    setSmtpAccounts(updatedSmtp);
-    persistResourceDirectly('smtpAccounts', updatedSmtp);
+    setSmtpAccounts(prev => {
+      const refList = latestWorkspaceRef.current.smtpAccounts || [];
+      const base = prev.length >= refList.length ? prev : refList;
+      const updatedSmtp = base.map(s => s.id === id ? { ...s, ...updates } : s);
+      (latestWorkspaceRef.current as any).smtpAccounts = updatedSmtp;
+      persistResourceDirectly('smtpAccounts', updatedSmtp);
+      return updatedSmtp;
+    });
   };
 
   const deleteSMTPAccount = (id: string) => {
@@ -2116,7 +2356,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Outbound Sent Emails & Live Tracking
+  // Outbound Sent Emails & Live Tracking (Also increments connected SMTP relay sentToday & quotaUsed in real time!)
   const addSentEmailLog = (logData: Omit<SentEmailLog, 'id' | 'sentAt'> & { trackingPixelId?: string; errorMessage?: string }): SentEmailLog => {
     const cleanPixelId = String(logData.trackingPixelId || `px-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`).replace(/\.gif$/i, '').trim();
     const initialStatus = logData.status === 'failed' ? 'failed' : logData.status === 'bounced' ? 'bounced' : logData.status === 'replied' ? 'replied' : 'sent';
@@ -2132,11 +2372,167 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setSentEmails(prev => {
       const next = [newLog, ...prev];
+      (latestWorkspaceRef.current as any).sentEmails = next;
       persistResourceDirectly('sentEmails', next);
       return next;
     });
+
+    if (initialStatus !== 'failed' && initialStatus !== 'bounced') {
+      // Increment connected SMTP relay account sentToday count immediately
+      setSmtpAccounts(prev => {
+        const refList = latestWorkspaceRef.current.smtpAccounts || [];
+        const base = prev.length >= refList.length ? prev : refList;
+        const activePool = base.filter(s => s && !s.isTrash);
+        const logSender = (logData.senderEmail || '').trim().toLowerCase();
+        const logSmtpName = (logData.smtpAccountName || '').trim().toLowerCase();
+
+        let matchedId = logData.smtpAccountId;
+        if (!matchedId || !base.some(s => s.id === matchedId)) {
+          const found =
+            activePool.find(
+              s =>
+                (logSender &&
+                  (s.fromEmail?.trim().toLowerCase() === logSender ||
+                    s.username?.trim().toLowerCase() === logSender)) ||
+                (logSmtpName && s.name?.trim().toLowerCase() === logSmtpName)
+            ) || (activePool.length === 1 ? activePool[0] : undefined);
+          matchedId = found?.id;
+        }
+
+        if (!matchedId) return base;
+        const nextSmtps = base.map(s =>
+          s.id === matchedId
+            ? {
+                ...s,
+                sentToday: (s.sentToday || 0) + 1,
+                isConnected: true,
+                healthScore: s.healthScore || 99
+              }
+            : s
+        );
+        (latestWorkspaceRef.current as any).smtpAccounts = nextSmtps;
+        persistResourceDirectly('smtpAccounts', nextSmtps);
+        return nextSmtps;
+      });
+
+      // Increment user quotaUsed
+      setCurrentUserState(prev => ({
+        ...prev,
+        quotaUsed: (prev.quotaUsed || 0) + 1
+      }));
+    }
+
     return newLog;
   };
+
+  // Automatically synchronize SMTP sentToday counters and restore any running campaigns present in sentEmails
+  useEffect(() => {
+    if (isHydratingRef.current) return;
+
+    // 1. Sync SMTP sentToday with actual sentEmails logs so connected relays always show accurate counts
+    if (smtpAccounts.length > 0 && sentEmails.length > 0) {
+      let smtpChanged = false;
+      const nextSmtps = smtpAccounts.map(smtp => {
+        if (smtp.isTrash) return smtp;
+        const metrics = getSMTPAccountMetrics(smtp, smtpAccounts, sentEmails, campaigns, threads);
+        if (metrics.sentToday !== (smtp.sentToday || 0)) {
+          smtpChanged = true;
+          return { ...smtp, sentToday: metrics.sentToday, isConnected: true };
+        }
+        return smtp;
+      });
+      if (smtpChanged) {
+        setSmtpAccounts(nextSmtps);
+        (latestWorkspaceRef.current as any).smtpAccounts = nextSmtps;
+        persistResourceDirectly('smtpAccounts', nextSmtps);
+      }
+    }
+
+    // 2. Reconstruct any running campaign that has logs in sentEmails but was missing from campaigns state
+    if (sentEmails.length > 0) {
+      const existingCampIds = new Set(campaigns.map(c => c.id));
+      const existingCampNames = new Set(campaigns.map(c => (c.name || '').trim().toLowerCase()));
+      const logsByCamp = new Map<string, SentEmailLog[]>();
+
+      for (const log of sentEmails) {
+        if (!log || log.isTrash) continue;
+        const cName = (log.campaignName || '').trim();
+        if (
+          !cName ||
+          cName === 'Direct Outreach Mailer' ||
+          cName === 'Smart Inbox Reply'
+        ) {
+          continue;
+        }
+        const cId = log.campaignId || `camp-restored-${cName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+        if (existingCampIds.has(cId) || existingCampNames.has(cName.toLowerCase())) {
+          continue;
+        }
+        const list = logsByCamp.get(cId) || [];
+        list.push(log);
+        logsByCamp.set(cId, list);
+      }
+
+      if (logsByCamp.size > 0) {
+        const restoredCampaigns: Campaign[] = [];
+        for (const [cId, logs] of logsByCamp.entries()) {
+          const sample = logs[0];
+          const sentCount = logs.filter(l => l.status !== 'failed' && l.status !== 'bounced').length;
+          const openCount = logs.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length;
+          const replyCount = logs.filter(l => l.status === 'replied').length;
+          const bounceCount = logs.filter(l => l.status === 'failed' || l.status === 'bounced').length;
+          const matchedLeadIds = Array.from(
+            new Set(
+              logs
+                .map(l =>
+                  leads.find(ld => ld.email?.toLowerCase() === l.recipientEmail?.toLowerCase())?.id
+                )
+                .filter(Boolean) as string[]
+            )
+          );
+          restoredCampaigns.push({
+            id: cId,
+            name: sample.campaignName || 'Active Outreach Sequence',
+            niche: 'B2B Outreach Sequence',
+            status: 'running',
+            totalLeads: Math.max(matchedLeadIds.length, logs.length),
+            leadIds: matchedLeadIds,
+            sentCount,
+            openCount,
+            replyCount,
+            bounceCount,
+            assignedSmtpId: sample.smtpAccountId || 'round_robin',
+            sendMode: 'instant',
+            sendingIntervalSec: 15,
+            createdAt: sample.sentAt ? sample.sentAt.split('T')[0] : new Date().toISOString().split('T')[0],
+            lastRunAt: sample.sentAt ? sample.sentAt.split('T')[0] : new Date().toISOString().split('T')[0],
+            isTrash: false,
+            steps: [
+              {
+                stepNumber: 1,
+                delayDays: 0,
+                subject: sample.subject || sample.campaignName || 'Outreach Sequence',
+                body: sample.body || '',
+                triggerCondition: 'all'
+              }
+            ]
+          });
+        }
+
+        if (restoredCampaigns.length > 0) {
+          setCampaigns(prev => {
+            const pIds = new Set(prev.map(c => c.id));
+            const uniqueRestored = restoredCampaigns.filter(rc => !pIds.has(rc.id));
+            if (uniqueRestored.length === 0) return prev;
+            const merged = [...uniqueRestored, ...prev];
+            (latestWorkspaceRef.current as any).campaigns = merged;
+            persistResourceDirectly('campaigns', merged);
+            return merged;
+          });
+        }
+      }
+    }
+  }, [sentEmails.length, smtpAccounts.length]);
 
   const clearSentEmails = () => {
     setSentEmails(prev => {
@@ -2559,33 +2955,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             (Array.isArray(msg.references) && msg.references.length > 0) ||
             /^re\s*:/i.test(msgSubject);
 
-          // Match by sender email OR by subject line (preferring sent logs from THIS specific SMTP account if multiple exist)
+          // Match strictly by senderEmail (and subject when applicable) so replies from different senders or different subjects NEVER merge into one thread
           const matchingLead = workingLeads.find(l => l.email?.toLowerCase() === senderEmail);
           const matchingSentLog =
             workingSent.find(
               s =>
                 s.recipientEmail?.toLowerCase() === senderEmail &&
+                (!normSub || !normalizeSubject(s.subject) || normalizeSubject(s.subject) === normSub) &&
                 (s.smtpAccountId === targetSmtp.id ||
                   s.senderEmail?.toLowerCase() === mailboxFromEmail ||
                   s.senderEmail?.toLowerCase() === mailboxUsername ||
                   s.smtpAccountName === targetSmtp.name)
             ) ||
-            workingSent.find(s => s.recipientEmail?.toLowerCase() === senderEmail) ||
-            (isReplySubjectOrHeader && normSub
-              ? workingSent.find(s => normalizeSubject(s.subject) === normSub)
-              : undefined);
+            workingSent.find(
+              s =>
+                s.recipientEmail?.toLowerCase() === senderEmail &&
+                (!normSub || !normalizeSubject(s.subject) || normalizeSubject(s.subject) === normSub)
+            ) ||
+            workingSent.find(s => s.recipientEmail?.toLowerCase() === senderEmail);
 
           const matchingThread =
-            workingThreads.find(t => t.leadEmail?.toLowerCase() === senderEmail) ||
-            (isReplySubjectOrHeader && normSub
-              ? workingThreads.find(t => normalizeSubject(t.subject) === normSub)
-              : undefined);
+            workingThreads.find(
+              t =>
+                t.leadEmail?.toLowerCase() === senderEmail &&
+                (!normSub || !normalizeSubject(t.subject) || normalizeSubject(t.subject) === normSub)
+            ) ||
+            workingThreads.find(t => t.leadEmail?.toLowerCase() === senderEmail && isReplySubjectOrHeader);
 
-          const threadLeadEmail =
-            matchingThread?.leadEmail ||
-            matchingLead?.email ||
-            matchingSentLog?.recipientEmail ||
-            senderEmail;
+          const threadLeadEmail = senderEmail;
           const leadName =
             msg.fromName ||
             matchingThread?.leadName ||
@@ -2673,12 +3070,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
           }
 
-          // 4. Add or update conversation thread directly at the top of Smart Inbox with its matched SMTP account
-          const targetThread = workingThreads.find(
-            t =>
-              t.leadEmail?.toLowerCase() === threadLeadEmail.toLowerCase() ||
-              (matchingThread && t.id === matchingThread.id)
-          );
+          // 4. Add or update conversation thread directly at the top of Smart Inbox with its matched SMTP account (strictly per senderEmail + subject)
+          const targetThread = matchingThread;
 
           const targetThreadId =
             targetThread?.id ||
