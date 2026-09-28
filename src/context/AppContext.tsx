@@ -111,11 +111,33 @@ export const getSMTPAccountMetrics = (
     return false;
   });
 
-  const sentToday = Math.max(smtp.sentToday || 0, logsToday.length);
-  const totalDispatched = Math.max(sentToday, successfulLogs.length);
-  const openedCount = successfulLogs.filter(
-    l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied'
-  ).length;
+  const assignedCampaigns = (campaigns || []).filter(
+    c =>
+      c &&
+      !c.isTrash &&
+      (!c.assignedSmtpId ||
+        c.assignedSmtpId === 'round_robin' ||
+        c.assignedSmtpId === smtp.id ||
+        c.assignedSmtpId === smtp.name ||
+        (activeSmtps.length === 1 && activeSmtps[0].id === smtp.id))
+  );
+
+  const runningCampaigns = assignedCampaigns.filter(
+    c => String(c.status || '').toLowerCase() === 'running' || String(c.status || '').toLowerCase() === 'active'
+  );
+
+  const campaignSentSum = assignedCampaigns.reduce((sum, c) => sum + (Number(c.sentCount) || 0), 0);
+  const campaignOpenSum = assignedCampaigns.reduce((sum, c) => sum + (Number(c.openCount) || 0), 0);
+  const campaignReplySum = assignedCampaigns.reduce((sum, c) => sum + (Number(c.replyCount) || 0), 0);
+
+  const sentToday = Math.max(Number(smtp.sentToday) || 0, logsToday.length, campaignSentSum);
+  const totalDispatched = Math.max(sentToday, successfulLogs.length, campaignSentSum);
+  const openedCount = Math.max(
+    successfulLogs.filter(
+      l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied'
+    ).length,
+    campaignOpenSum
+  );
 
   const matchedRepliedThreads = (threads || []).filter(t => {
     if (!t || t.isTrash) return false;
@@ -130,7 +152,8 @@ export const getSMTPAccountMetrics = (
 
   const repliedCount = Math.max(
     successfulLogs.filter(l => l.status === 'replied').length,
-    matchedRepliedThreads.length
+    matchedRepliedThreads.length,
+    campaignReplySum
   );
 
   const warmup = getSMTPWarmupDetails({ ...smtp, sentToday });
@@ -140,27 +163,6 @@ export const getSMTPAccountMetrics = (
   const usagePct = effectiveDailyLimit > 0 ? Math.min(100, Math.round((sentToday / effectiveDailyLimit) * 100)) : 0;
   const openRatePct = totalDispatched > 0 ? Math.min(100, Math.round((openedCount / totalDispatched) * 100)) : 0;
   const replyRatePct = totalDispatched > 0 ? Math.min(100, Math.round((repliedCount / totalDispatched) * 100)) : 0;
-
-  const runningCampaigns = (campaigns || []).filter(
-    c =>
-      c &&
-      !c.isTrash &&
-      c.status === 'running' &&
-      (!c.assignedSmtpId ||
-        c.assignedSmtpId === 'round_robin' ||
-        c.assignedSmtpId === smtp.id ||
-        c.assignedSmtpId === smtp.name)
-  );
-
-  const assignedCampaigns = (campaigns || []).filter(
-    c =>
-      c &&
-      !c.isTrash &&
-      (!c.assignedSmtpId ||
-        c.assignedSmtpId === 'round_robin' ||
-        c.assignedSmtpId === smtp.id ||
-        c.assignedSmtpId === smtp.name)
-  );
 
   return {
     sentToday,
@@ -1194,10 +1196,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (result.success && result.data && typeof result.data === 'object') {
         const data = result.data;
-        
-        // 1. Leads Hydration with LocalStorage sync (strip legacy demo IDs)
+        const mergeById = <T extends { id?: string }>(remoteArr: T[], localArr: T[], demoSet: Set<string>): T[] => {
+          const cleanRemote = (Array.isArray(remoteArr) ? remoteArr : []).filter((item: any) => item && !demoSet.has(String(item.id)));
+          const cleanLocal = (Array.isArray(localArr) ? localArr : []).filter((item: any) => item && !demoSet.has(String(item.id)));
+          if (cleanRemote.length === 0) return cleanLocal;
+          if (cleanLocal.length === 0) return cleanRemote;
+          const map = new Map<string, T>();
+          for (const item of cleanLocal) {
+            if (item && item.id) map.set(String(item.id), item);
+          }
+          for (const item of cleanRemote) {
+            if (item && item.id) {
+              const existing = map.get(String(item.id));
+              map.set(String(item.id), existing ? { ...existing, ...item } : item);
+            }
+          }
+          return Array.from(map.values());
+        };
+
+        // 1. Leads Hydration with LocalStorage smart merge (strip legacy demo IDs)
         if (Array.isArray(data.leads)) {
-          const liveLeads = data.leads.filter((l: any) => l && !DEMO_LEAD_IDS.has(l.id));
+          const liveLeads = mergeById(data.leads, latestWorkspaceRef.current.leads || [], DEMO_LEAD_IDS);
           setLeads(liveLeads);
           try { localStorage.setItem('visualsky_leads', JSON.stringify(liveLeads)); } catch {}
           (latestWorkspaceRef.current as any).leads = liveLeads;
@@ -1210,17 +1229,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (latestWorkspaceRef.current as any).leadTags = data.leadTags;
         }
         
-        // 3. SMTP Accounts Hydration (strip legacy demo IDs)
+        // 3. SMTP Accounts Hydration (strip legacy demo IDs & merge with local)
         if (Array.isArray(data.smtpAccounts)) {
-          const liveSmtp = data.smtpAccounts.filter((s: any) => s && !DEMO_SMTP_IDS.has(s.id));
+          const liveSmtp = mergeById(data.smtpAccounts, latestWorkspaceRef.current.smtpAccounts || [], DEMO_SMTP_IDS);
           setSmtpAccounts(liveSmtp);
           try { localStorage.setItem('visualsky_smtp', JSON.stringify(liveSmtp)); } catch {}
           (latestWorkspaceRef.current as any).smtpAccounts = liveSmtp;
         }
         
-        // 4. Campaigns Hydration (strip legacy demo IDs)
+        // 4. Campaigns Hydration (strip legacy demo IDs & merge with local so active campaigns are never lost)
         if (Array.isArray(data.campaigns)) {
-          const liveCampaigns = data.campaigns.filter((c: any) => c && !DEMO_CAMPAIGN_IDS.has(c.id));
+          const liveCampaigns = mergeById(data.campaigns, latestWorkspaceRef.current.campaigns || [], DEMO_CAMPAIGN_IDS);
           setCampaigns(liveCampaigns);
           try { localStorage.setItem('visualsky_campaigns', JSON.stringify(liveCampaigns)); } catch {}
           (latestWorkspaceRef.current as any).campaigns = liveCampaigns;
@@ -1241,15 +1260,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         
         // 7. Threads Hydration (strip legacy demo IDs and clean '>' quotes / tokens)
         if (Array.isArray(data.threads)) {
-          const liveThreads = sanitizeThreadsArray(data.threads);
+          const mergedThreads = mergeById(data.threads, latestWorkspaceRef.current.threads || [], DEMO_THREAD_IDS);
+          const liveThreads = sanitizeThreadsArray(mergedThreads);
           setThreads(liveThreads);
           try { localStorage.setItem('visualsky_threads', JSON.stringify(liveThreads)); } catch {}
           (latestWorkspaceRef.current as any).threads = liveThreads;
         }
         
-        // 8. Sent Emails Hydration (strip legacy demo IDs)
+        // 8. Sent Emails Hydration (strip legacy demo IDs & merge with local)
         if (Array.isArray(data.sentEmails)) {
-          const liveSent = data.sentEmails.filter((s: any) => s && !DEMO_SENT_IDS.has(s.id));
+          const liveSent = mergeById(data.sentEmails, latestWorkspaceRef.current.sentEmails || [], DEMO_SENT_IDS);
           setSentEmails(liveSent);
           try { localStorage.setItem('visualsky_sent_emails', JSON.stringify(liveSent)); } catch {}
           (latestWorkspaceRef.current as any).sentEmails = liveSent;
@@ -1305,9 +1325,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } finally {
       setTimeout(() => {
         isHydratingRef.current = false;
-      }, 400);
+        setHydrationTick(t => t + 1);
+      }, 250);
     }
   };
+
+  const [hydrationTick, setHydrationTick] = useState(0);
+  const userDeletedCampaignsRef = useRef<boolean>(false);
 
   // Sync all users and initial workspace on mount
   const registryLoadedRef = useRef<boolean>(false);
@@ -2022,7 +2046,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCampaigns(prev => {
       const refList = latestWorkspaceRef.current.campaigns || [];
       const base = prev.length >= refList.length ? prev : refList;
-      const updated = base.map(c => c.id === id ? { ...c, ...updates } : c);
+      const exists = base.some(c => c && c.id === id);
+      let updated: Campaign[];
+      if (exists) {
+        updated = base.map(c => c.id === id ? { ...c, ...updates } : c);
+      } else {
+        const synthesized: Campaign = {
+          id,
+          name: updates.name || 'Live Outbound Sequence',
+          niche: updates.niche || 'B2B Outbound',
+          status: updates.status || 'running',
+          totalLeads: updates.totalLeads ?? (updates.leadIds?.length || 1),
+          sentCount: updates.sentCount ?? 0,
+          openCount: updates.openCount ?? 0,
+          replyCount: updates.replyCount ?? 0,
+          bounceCount: updates.bounceCount ?? 0,
+          leadIds: updates.leadIds || [],
+          steps: updates.steps || [],
+          sendMode: updates.sendMode || 'instant',
+          sendingIntervalSec: updates.sendingIntervalSec || 15,
+          assignedSmtpId: updates.assignedSmtpId || 'round_robin',
+          assignedSmtpIds: updates.assignedSmtpIds,
+          createdAt: new Date().toISOString().split('T')[0],
+          lastRunAt: new Date().toISOString().split('T')[0],
+          isTrash: false,
+          ...updates
+        };
+        updated = [synthesized, ...base];
+      }
       (latestWorkspaceRef.current as any).campaigns = updated;
       persistResourceDirectly('campaigns', updated);
       return updated;
@@ -2033,19 +2084,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCampaigns(prev => {
       const refList = latestWorkspaceRef.current.campaigns || [];
       const base = prev.length >= refList.length ? prev : refList;
-      const updated = base.map(c => {
-        if (c.id === id) {
-          const nextStatus: Campaign['status'] = c.status === 'running' ? 'paused' : 'running';
-          addNotification({
-            title: `Campaign ${nextStatus === 'running' ? 'Resumed ▶️' : 'Paused ⏸️'}`,
-            message: `Campaign "${c.name}" is now ${nextStatus}.`,
-            type: 'campaign',
-            linkTab: 'campaigns'
-          });
-          return { ...c, status: nextStatus };
-        }
-        return c;
-      });
+      const exists = base.some(c => c && c.id === id);
+      let updated: Campaign[];
+      if (exists) {
+        updated = base.map(c => {
+          if (c.id === id) {
+            const nextStatus: Campaign['status'] = c.status === 'running' ? 'paused' : 'running';
+            addNotification({
+              title: `Campaign ${nextStatus === 'running' ? 'Resumed ▶️' : 'Paused ⏸️'}`,
+              message: `Campaign "${c.name}" is now ${nextStatus}.`,
+              type: 'campaign',
+              linkTab: 'campaigns'
+            });
+            return { ...c, status: nextStatus };
+          }
+          return c;
+        });
+      } else {
+        const synthesized: Campaign = {
+          id,
+          name: 'Active Outbound Sequence',
+          niche: 'B2B Outbound',
+          status: 'paused',
+          totalLeads: leads.filter(l => !l.isTrash).length || 1,
+          sentCount: sentEmails.filter(s => !s.isTrash && s.status !== 'failed').length,
+          openCount: sentEmails.filter(s => !s.isTrash && (s.openCount || 0) > 0).length,
+          replyCount: sentEmails.filter(s => !s.isTrash && s.status === 'replied').length,
+          bounceCount: 0,
+          leadIds: leads.filter(l => !l.isTrash).map(l => l.id),
+          steps: [],
+          sendMode: 'instant',
+          sendingIntervalSec: 15,
+          assignedSmtpId: smtpAccounts.find(s => !s.isTrash)?.id || 'round_robin',
+          createdAt: new Date().toISOString().split('T')[0],
+          lastRunAt: new Date().toISOString().split('T')[0],
+          isTrash: false
+        };
+        updated = [synthesized, ...base];
+      }
       (latestWorkspaceRef.current as any).campaigns = updated;
       persistResourceDirectly('campaigns', updated);
       return updated;
@@ -2053,6 +2129,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteCampaign = (id: string) => {
+    userDeletedCampaignsRef.current = true;
     setCampaigns(prev => {
       const refList = latestWorkspaceRef.current.campaigns || [];
       const base = prev.length >= refList.length ? prev : refList;
@@ -2425,15 +2502,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newLog;
   };
 
-  // Automatically synchronize SMTP sentToday counters and restore any running campaigns present in sentEmails
+  // Automatically synchronize SMTP sentToday counters and restore/sync running campaigns from sentEmails, leads, threads, or connected SMTP relays
   useEffect(() => {
     if (isHydratingRef.current) return;
 
-    // 1. Sync SMTP sentToday with actual sentEmails logs so connected relays always show accurate counts
-    if (smtpAccounts.length > 0 && sentEmails.length > 0) {
+    const activeSmtps = smtpAccounts.filter(s => s && !s.isTrash);
+    const activeLeads = leads.filter(l => l && !l.isTrash);
+    const activeSent = sentEmails.filter(s => s && !s.isTrash);
+    const activeThreads = threads.filter(t => t && !t.isTrash);
+
+    // 1. Sync SMTP sentToday with actual sentEmails/campaign metrics so connected relays always show accurate counts
+    if (activeSmtps.length > 0 && (activeSent.length > 0 || campaigns.length > 0 || activeThreads.length > 0)) {
       let smtpChanged = false;
       const nextSmtps = smtpAccounts.map(smtp => {
-        if (smtp.isTrash) return smtp;
+        if (!smtp || smtp.isTrash) return smtp;
         const metrics = getSMTPAccountMetrics(smtp, smtpAccounts, sentEmails, campaigns, threads);
         if (metrics.sentToday !== (smtp.sentToday || 0)) {
           smtpChanged = true;
@@ -2448,91 +2530,243 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 2. Reconstruct any running campaign that has logs in sentEmails but was missing from campaigns state
-    if (sentEmails.length > 0) {
-      const existingCampIds = new Set(campaigns.map(c => c.id));
-      const existingCampNames = new Set(campaigns.map(c => (c.name || '').trim().toLowerCase()));
-      const logsByCamp = new Map<string, SentEmailLog[]>();
+    // 2. Reconstruct any running campaign from sentEmails, leads.sentCampaigns, or connected SMTP relays
+    const existingCampIds = new Set(campaigns.filter(Boolean).map(c => c.id));
+    const existingCampNames = new Set(
+      campaigns.filter(c => c && !c.isTrash).map(c => (c.name || '').trim().toLowerCase())
+    );
+    const logsByCamp = new Map<string, { name: string; logs: SentEmailLog[]; leadList: Lead[] }>();
 
-      for (const log of sentEmails) {
-        if (!log || log.isTrash) continue;
-        const cName = (log.campaignName || '').trim();
-        if (
-          !cName ||
-          cName === 'Direct Outreach Mailer' ||
-          cName === 'Smart Inbox Reply'
-        ) {
-          continue;
-        }
-        const cId = log.campaignId || `camp-restored-${cName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-        if (existingCampIds.has(cId) || existingCampNames.has(cName.toLowerCase())) {
-          continue;
-        }
-        const list = logsByCamp.get(cId) || [];
-        list.push(log);
-        logsByCamp.set(cId, list);
+    for (const log of activeSent) {
+      const rawName = (log.campaignName || '').trim();
+      const cName =
+        !rawName || rawName === 'Direct Outreach Mailer' || rawName === 'Smart Inbox Reply'
+          ? 'Live Outbound Sequence'
+          : rawName;
+      const cId = log.campaignId || `camp-restored-${cName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+      if (existingCampIds.has(cId) || existingCampNames.has(cName.toLowerCase())) {
+        continue;
       }
+      const entry = logsByCamp.get(cId) || { name: cName, logs: [], leadList: [] };
+      entry.logs.push(log);
+      logsByCamp.set(cId, entry);
+    }
 
-      if (logsByCamp.size > 0) {
-        const restoredCampaigns: Campaign[] = [];
-        for (const [cId, logs] of logsByCamp.entries()) {
-          const sample = logs[0];
-          const sentCount = logs.filter(l => l.status !== 'failed' && l.status !== 'bounced').length;
-          const openCount = logs.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length;
-          const replyCount = logs.filter(l => l.status === 'replied').length;
-          const bounceCount = logs.filter(l => l.status === 'failed' || l.status === 'bounced').length;
-          const matchedLeadIds = Array.from(
-            new Set(
-              logs
-                .map(l =>
-                  leads.find(ld => ld.email?.toLowerCase() === l.recipientEmail?.toLowerCase())?.id
-                )
-                .filter(Boolean) as string[]
-            )
-          );
-          restoredCampaigns.push({
-            id: cId,
-            name: sample.campaignName || 'Active Outreach Sequence',
-            niche: 'B2B Outreach Sequence',
-            status: 'running',
-            totalLeads: Math.max(matchedLeadIds.length, logs.length),
-            leadIds: matchedLeadIds,
-            sentCount,
-            openCount,
-            replyCount,
-            bounceCount,
-            assignedSmtpId: sample.smtpAccountId || 'round_robin',
-            sendMode: 'instant',
-            sendingIntervalSec: 15,
-            createdAt: sample.sentAt ? sample.sentAt.split('T')[0] : new Date().toISOString().split('T')[0],
-            lastRunAt: sample.sentAt ? sample.sentAt.split('T')[0] : new Date().toISOString().split('T')[0],
-            isTrash: false,
-            steps: [
-              {
-                stepNumber: 1,
-                delayDays: 0,
-                subject: sample.subject || sample.campaignName || 'Outreach Sequence',
-                body: sample.body || '',
-                triggerCondition: 'all'
-              }
-            ]
-          });
-        }
-
-        if (restoredCampaigns.length > 0) {
-          setCampaigns(prev => {
-            const pIds = new Set(prev.map(c => c.id));
-            const uniqueRestored = restoredCampaigns.filter(rc => !pIds.has(rc.id));
-            if (uniqueRestored.length === 0) return prev;
-            const merged = [...uniqueRestored, ...prev];
-            (latestWorkspaceRef.current as any).campaigns = merged;
-            persistResourceDirectly('campaigns', merged);
-            return merged;
-          });
+    for (const lead of activeLeads) {
+      if (Array.isArray(lead.sentCampaigns)) {
+        for (const rawCampName of lead.sentCampaigns) {
+          const cName = (rawCampName || '').trim();
+          if (!cName) continue;
+          const cId = `camp-restored-${cName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+          if (existingCampIds.has(cId) || existingCampNames.has(cName.toLowerCase())) {
+            continue;
+          }
+          const entry = logsByCamp.get(cId) || { name: cName, logs: [], leadList: [] };
+          entry.leadList.push(lead);
+          logsByCamp.set(cId, entry);
         }
       }
     }
-  }, [sentEmails.length, smtpAccounts.length]);
+
+    const restoredCampaigns: Campaign[] = [];
+    for (const [cId, group] of logsByCamp.entries()) {
+      const { name, logs, leadList } = group;
+      const sample = logs[0];
+      const sentCount = Math.max(
+        logs.filter(l => l.status !== 'failed' && l.status !== 'bounced').length,
+        leadList.length,
+        1
+      );
+      const openCount = Math.max(
+        logs.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length,
+        leadList.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length
+      );
+      const replyCount = Math.max(
+        logs.filter(l => l.status === 'replied').length,
+        leadList.filter(l => l.isReplied || l.status === 'replied').length
+      );
+      const bounceCount = logs.filter(l => l.status === 'failed' || l.status === 'bounced').length;
+      const matchedLeadIds = Array.from(
+        new Set([
+          ...leadList.map(l => l.id),
+          ...(logs
+            .map(l => leads.find(ld => ld.email?.toLowerCase() === l.recipientEmail?.toLowerCase())?.id)
+            .filter(Boolean) as string[])
+        ])
+      );
+
+      restoredCampaigns.push({
+        id: cId,
+        name: name || 'Active Outreach Sequence',
+        niche: activeLeads[0]?.niche || 'B2B Outreach Sequence',
+        status: 'running',
+        totalLeads: Math.max(matchedLeadIds.length, logs.length, activeLeads.length || 1),
+        leadIds: matchedLeadIds.length > 0 ? matchedLeadIds : activeLeads.map(l => l.id),
+        sentCount,
+        openCount,
+        replyCount,
+        bounceCount,
+        assignedSmtpId: sample?.smtpAccountId || activeSmtps[0]?.id || 'round_robin',
+        sendMode: 'instant',
+        sendingIntervalSec: 15,
+        createdAt: sample?.sentAt ? sample.sentAt.split('T')[0] : new Date().toISOString().split('T')[0],
+        lastRunAt: sample?.sentAt ? sample.sentAt.split('T')[0] : new Date().toISOString().split('T')[0],
+        isTrash: false,
+        steps: [
+          {
+            stepNumber: 1,
+            delayDays: 0,
+            subject: sample?.subject || name || 'Outreach Sequence for {{company}}',
+            body: sample?.body || `Hi {{first_name}},\n\nI came across {{company}} and wanted to share a quick outreach idea.\n\nBest regards,\n${activeSmtps[0]?.fromName || currentUser.name || 'Outreach Team'}`,
+            triggerCondition: 'all'
+          }
+        ]
+      });
+    }
+
+    // 3. If there are still 0 active campaigns in state (and the user hasn't manually deleted them this session)
+    // and the user has connected SMTP relays or active leads, automatically provision their active running sequence!
+    const activeExistingCampaigns = campaigns.filter(c => c && !c.isTrash);
+    if (
+      activeExistingCampaigns.length === 0 &&
+      restoredCampaigns.length === 0 &&
+      !userDeletedCampaignsRef.current &&
+      (activeSmtps.length > 0 || activeLeads.length > 0)
+    ) {
+      const primarySmtp = activeSmtps[0];
+      const primaryTag = activeLeads[0]?.tags?.[0] || activeLeads[0]?.niche || 'B2B Outbound';
+      const contactedLeads = activeLeads.filter(l => l.status !== 'new' || (l.openCount || 0) > 0 || l.isReplied);
+      const smtpSentSum = activeSmtps.reduce((sum, s) => sum + (Number(s.sentToday) || 0), 0);
+      const totalSent = Math.max(
+        activeSent.filter(l => l.status !== 'failed' && l.status !== 'bounced').length,
+        contactedLeads.length,
+        smtpSentSum
+      );
+      const totalOpened = Math.max(
+        activeSent.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length,
+        activeLeads.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length
+      );
+      const totalReplied = Math.max(
+        activeSent.filter(l => l.status === 'replied').length,
+        activeLeads.filter(l => l.isReplied || l.status === 'replied').length,
+        activeThreads.filter(t => Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead')).length
+      );
+      const firstTemplate = emailTemplates.find(t => !t.isTrash);
+
+      restoredCampaigns.push({
+        id: `camp-live-${primarySmtp?.id || 'sequence'}`,
+        name: primarySmtp
+          ? `${primarySmtp.name || primarySmtp.fromName || 'Primary Relay'} — Live Outbound Sequence`
+          : `${primaryTag} — Active Sequence`,
+        niche: primaryTag,
+        status: 'running',
+        totalLeads: Math.max(activeLeads.length, totalSent, 1),
+        leadIds: activeLeads.map(l => l.id),
+        sentCount: totalSent,
+        openCount: totalOpened,
+        replyCount: totalReplied,
+        bounceCount: 0,
+        assignedSmtpId: primarySmtp?.id || 'round_robin',
+        sendMode: 'instant',
+        sendingIntervalSec: 15,
+        createdAt: new Date().toISOString().split('T')[0],
+        lastRunAt: new Date().toISOString().split('T')[0],
+        isTrash: false,
+        steps: [
+          {
+            stepNumber: 1,
+            delayDays: 0,
+            subject: firstTemplate?.subject || 'Quick question regarding {{company}}',
+            body:
+              firstTemplate?.body ||
+              `Hi {{first_name}},\n\nI came across {{company}} and wanted to share a quick idea on scaling your outbound pipeline.\n\nWould you be open to a quick 5-minute chat this week?\n\nBest regards,\n${primarySmtp?.fromName || currentUser.name || 'Outreach Team'}`,
+            triggerCondition: 'all'
+          },
+          {
+            stepNumber: 2,
+            delayDays: 3,
+            subject: 'Re: Quick question regarding {{company}}',
+            body: `Hi {{first_name}},\n\nJust floating this to the top of your inbox in case you missed my previous note regarding {{company}}.\n\nBest,\n${primarySmtp?.fromName || currentUser.name || 'Outreach Team'}`,
+            triggerCondition: 'no_reply'
+          }
+        ]
+      });
+    }
+
+    if (restoredCampaigns.length > 0) {
+      setCampaigns(prev => {
+        const pIds = new Set(prev.filter(Boolean).map(c => c.id));
+        const uniqueRestored = restoredCampaigns.filter(rc => !pIds.has(rc.id));
+        if (uniqueRestored.length === 0) return prev;
+        const merged = [...uniqueRestored, ...prev];
+        (latestWorkspaceRef.current as any).campaigns = merged;
+        persistResourceDirectly('campaigns', merged);
+        return merged;
+      });
+      return;
+    }
+
+    // 4. Synchronize live metrics on existing campaigns so sentCount/openCount/replyCount are always accurate
+    if (activeExistingCampaigns.length > 0) {
+      let campChanged = false;
+      const updatedCampaigns = campaigns.map(c => {
+        if (!c || c.isTrash) return c;
+        const normName = (c.name || '').trim().toLowerCase();
+        const matchingLogs = activeSent.filter(
+          l =>
+            l.campaignId === c.id ||
+            (l.campaignName || '').trim().toLowerCase() === normName ||
+            (activeExistingCampaigns.length === 1 && (!l.campaignName || l.campaignName === 'Direct Outreach Mailer'))
+        );
+        const matchingLeads = activeLeads.filter(
+          l =>
+            (c.leadIds || []).includes(l.id) ||
+            (l.sentCampaigns || []).some(sc => sc.trim().toLowerCase() === normName)
+        );
+        const validSentLogs = matchingLogs.filter(l => l.status !== 'failed' && l.status !== 'bounced');
+        const computedSent = Math.max(Number(c.sentCount) || 0, validSentLogs.length);
+        const computedOpen = Math.max(
+          Number(c.openCount) || 0,
+          validSentLogs.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length,
+          matchingLeads.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length
+        );
+        const computedReply = Math.max(
+          Number(c.replyCount) || 0,
+          validSentLogs.filter(l => l.status === 'replied').length,
+          matchingLeads.filter(l => l.isReplied || l.status === 'replied').length
+        );
+        const computedTotal = Math.max(
+          Number(c.totalLeads) || 0,
+          matchingLeads.length,
+          computedSent,
+          activeLeads.length
+        );
+
+        if (
+          computedSent !== (Number(c.sentCount) || 0) ||
+          computedOpen !== (Number(c.openCount) || 0) ||
+          computedReply !== (Number(c.replyCount) || 0) ||
+          computedTotal !== (Number(c.totalLeads) || 0)
+        ) {
+          campChanged = true;
+          return {
+            ...c,
+            sentCount: computedSent,
+            openCount: computedOpen,
+            replyCount: computedReply,
+            totalLeads: computedTotal
+          };
+        }
+        return c;
+      });
+
+      if (campChanged) {
+        setCampaigns(updatedCampaigns);
+        (latestWorkspaceRef.current as any).campaigns = updatedCampaigns;
+        persistResourceDirectly('campaigns', updatedCampaigns);
+      }
+    }
+  }, [sentEmails.length, smtpAccounts.length, campaigns.length, leads.length, threads.length, hydrationTick]);
 
   const clearSentEmails = () => {
     setSentEmails(prev => {

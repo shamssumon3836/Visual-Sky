@@ -55,9 +55,24 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
   const [recipientName, setRecipientName] = useState<string>(() => {
     return initialLead?.name || defaultRecipientName || sessionStorage.getItem('visualsky_sendmail_draft_name') || '';
   });
+  const activeSmtps = smtpAccounts.filter(s => !s.isTrash);
   const [selectedSmtpId, setSelectedSmtpId] = useState<string>(() => {
-    return sessionStorage.getItem('visualsky_sendmail_draft_smtpid') || smtpAccounts[0]?.id || '';
+    const saved = sessionStorage.getItem('visualsky_sendmail_draft_smtpid');
+    if (saved && activeSmtps.some(s => s.id === saved)) return saved;
+    return activeSmtps[0]?.id || '';
   });
+  const prevSmtpLenRef = React.useRef<number>(activeSmtps.length);
+
+  useEffect(() => {
+    if (activeSmtps.length > 0) {
+      const exists = activeSmtps.some(s => s.id === selectedSmtpId);
+      if (activeSmtps.length > prevSmtpLenRef.current || !exists) {
+        setSelectedSmtpId(activeSmtps[0].id);
+        sessionStorage.setItem('visualsky_sendmail_draft_smtpid', activeSmtps[0].id);
+      }
+    }
+    prevSmtpLenRef.current = activeSmtps.length;
+  }, [activeSmtps, isOpen]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   
   const availableTemplates = emailTemplates && emailTemplates.length > 0 ? emailTemplates : INITIAL_TEMPLATES;

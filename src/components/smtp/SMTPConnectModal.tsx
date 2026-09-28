@@ -74,9 +74,17 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
   const [testTargetEmail, setTestTargetEmail] = useState<string>('');
   const [testSending, setTestSending] = useState<boolean>(false);
   const [testSendSuccess, setTestSendSuccess] = useState<boolean | null>(null);
+  const [validationError, setValidationError] = useState<string>('');
+  const [customHostEdited, setCustomHostEdited] = useState<boolean>(false);
 
   // Pre-fill on open or edit
   useEffect(() => {
+    if (!isOpen) return;
+    setValidationError('');
+    setTestSuccess(null);
+    setTestLogs([]);
+    setTestSendSuccess(null);
+
     if (editingAccount) {
       setProvider(editingAccount.provider);
       setAccountName(editingAccount.name);
@@ -94,16 +102,99 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
       setWarmupMode(editingAccount.warmupMode || (editingAccount.warmupStatus === 'warming' ? 'ramp_15' : 'full'));
       setIntervalSeconds(editingAccount.scheduleSettings?.intervalSeconds || 15);
       setJitterRandom(editingAccount.scheduleSettings?.jitterRandom ?? true);
+      setCustomHostEdited(true);
       setActiveTab('credentials');
-    } else if (isOpen) {
-      handleProviderPick(initialProvider || 'domain_webmail');
+    } else {
+      setPassword('');
+      setFromEmail('');
+      setUsername('');
+      setReplyToEmail('');
+      setCustomHostEdited(false);
+      setActiveTab('preset');
+      handleProviderPick(initialProvider || 'domain_webmail', false, '');
     }
   }, [editingAccount, isOpen, initialProvider]);
 
   if (!isOpen) return null;
 
-  const handleProviderPick = (p: any) => {
+  const isDummyPlaceholderEmail = (val: string) => {
+    const clean = (val || '').trim().toLowerCase();
+    return (
+      !clean ||
+      clean.endsWith('@yourdomain.com') ||
+      clean.endsWith('@yourdomain.mailgun.org') ||
+      clean === 'akiaiOSFODNN7EXAMPLE'.toLowerCase()
+    );
+  };
+
+  const applyDomainSmartDefaults = (emailInput: string, currentProvider = provider) => {
+    const clean = emailInput.trim();
+    const atIdx = clean.indexOf('@');
+    if (atIdx === -1 || atIdx === clean.length - 1) return;
+    const domain = clean.slice(atIdx + 1).toLowerCase().trim();
+    if (!domain || !domain.includes('.') || domain === 'yourdomain.com') return;
+
+    if (domain === 'gmail.com' || domain === 'googlemail.com') {
+      if (!customHostEdited || host === 'mail.yourdomain.com' || !host) {
+        setHost('smtp.gmail.com');
+        setPort(465);
+        setEncryption('SSL');
+        setDomainWebmailUrl('https://mail.google.com');
+      }
+    } else if (domain === 'outlook.com' || domain === 'hotmail.com' || domain === 'live.com') {
+      if (!customHostEdited || host === 'mail.yourdomain.com' || !host) {
+        setHost('smtp.office365.com');
+        setPort(587);
+        setEncryption('STARTTLS');
+        setDomainWebmailUrl('https://outlook.office.com');
+      }
+    } else if (domain === 'zoho.com') {
+      if (!customHostEdited || host === 'mail.yourdomain.com' || !host) {
+        setHost('smtppro.zoho.com');
+        setPort(465);
+        setEncryption('SSL');
+        setDomainWebmailUrl('https://mail.zoho.com');
+      }
+    } else if (currentProvider === 'domain_webmail' || currentProvider === 'custom') {
+      if (!customHostEdited || !host || host === 'mail.yourdomain.com' || host.startsWith('mail.')) {
+        setHost(`mail.${domain}`);
+      }
+      if (!domainWebmailUrl || domainWebmailUrl === 'https://webmail.yourdomain.com' || domainWebmailUrl.startsWith('https://webmail.')) {
+        setDomainWebmailUrl(`https://webmail.${domain}`);
+      }
+    }
+  };
+
+  const handleUsernameInput = (val: string) => {
+    setUsername(val);
+    setValidationError('');
+    if (provider !== 'resend' && provider !== 'brevo' && provider !== 'sendgrid' && provider !== 'ses') {
+      if (!fromEmail || fromEmail === username || isDummyPlaceholderEmail(fromEmail)) {
+        setFromEmail(val);
+      }
+      applyDomainSmartDefaults(val, provider);
+    }
+  };
+
+  const handleFromEmailInput = (val: string) => {
+    setFromEmail(val);
+    setValidationError('');
+    if (provider !== 'resend' && provider !== 'brevo' && provider !== 'sendgrid' && provider !== 'ses') {
+      if (!username || username === fromEmail || isDummyPlaceholderEmail(username)) {
+        setUsername(val);
+      }
+      applyDomainSmartDefaults(val, provider);
+    }
+  };
+
+  const handleProviderPick = (p: any, autoSwitchToCredentials = false, existingEmail = username || fromEmail) => {
     setProvider(p);
+    setValidationError('');
+    const keepUserEmail = !isDummyPlaceholderEmail(existingEmail) && existingEmail !== 'resend' && existingEmail !== 'brevo' && existingEmail !== 'apikey'
+      ? existingEmail
+      : '';
+    const emailDomain = keepUserEmail.includes('@') ? keepUserEmail.split('@')[1] : '';
+
     if (p === 'resend') {
       setAccountName('Resend (Direct HTTPS API)');
       setHost('api.resend.com');
@@ -111,6 +202,7 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
       setPort(443);
       setDomainWebmailUrl('https://resend.com/emails');
       setUsername('resend');
+      if (keepUserEmail) setFromEmail(keepUserEmail);
       setDailyLimit(3000);
     } else if (p === 'brevo') {
       setAccountName('Brevo (Sendinblue API / SMTP)');
@@ -119,35 +211,40 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
       setPort(443);
       setDomainWebmailUrl('https://app.brevo.com');
       setUsername('brevo');
+      if (keepUserEmail) setFromEmail(keepUserEmail);
       setDailyLimit(300);
     } else if (p === 'domain_webmail') {
       setAccountName('Domain Webmail (cPanel / Custom)');
-      setHost('mail.yourdomain.com');
+      setHost(emailDomain ? `mail.${emailDomain}` : 'mail.yourdomain.com');
       setEncryption('SSL');
       setPort(465);
-      setDomainWebmailUrl('https://webmail.yourdomain.com');
-      setUsername('outreach@yourdomain.com');
+      setDomainWebmailUrl(emailDomain ? `https://webmail.${emailDomain}` : 'https://webmail.yourdomain.com');
+      setUsername(keepUserEmail);
+      setFromEmail(keepUserEmail);
     } else if (p === 'gmail') {
       setAccountName('Google Workspace / Gmail Relay');
       setHost('smtp.gmail.com');
       setEncryption('SSL');
       setPort(465);
       setDomainWebmailUrl('https://mail.google.com');
-      setUsername('user@yourdomain.com');
+      setUsername(keepUserEmail);
+      setFromEmail(keepUserEmail);
     } else if (p === 'outlook') {
       setAccountName('Microsoft 365 / Office 365');
       setHost('smtp.office365.com');
       setEncryption('STARTTLS');
       setPort(587);
       setDomainWebmailUrl('https://outlook.office.com');
-      setUsername('outreach@yourdomain.com');
+      setUsername(keepUserEmail);
+      setFromEmail(keepUserEmail);
     } else if (p === 'ses') {
       setAccountName('Amazon SES Dedicated Relay');
       setHost('email-smtp.us-east-1.amazonaws.com');
       setEncryption('STARTTLS');
       setPort(587);
       setDomainWebmailUrl('https://aws.amazon.com/ses');
-      setUsername('AKIAIOSFODNN7EXAMPLE');
+      setUsername('');
+      if (keepUserEmail) setFromEmail(keepUserEmail);
       setDailyLimit(2500);
     } else if (p === 'sendgrid') {
       setAccountName('SendGrid SMTP Relay');
@@ -156,6 +253,7 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
       setPort(587);
       setDomainWebmailUrl('https://app.sendgrid.com');
       setUsername('apikey');
+      if (keepUserEmail) setFromEmail(keepUserEmail);
       setDailyLimit(1500);
     } else if (p === 'mailgun') {
       setAccountName('Mailgun Transactional Relay');
@@ -163,33 +261,43 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
       setEncryption('STARTTLS');
       setPort(587);
       setDomainWebmailUrl('https://app.mailgun.com');
-      setUsername('postmaster@yourdomain.mailgun.org');
+      setUsername(keepUserEmail);
+      setFromEmail(keepUserEmail);
     } else if (p === 'zoho') {
       setAccountName('Zoho Workplace Mail');
       setHost('smtppro.zoho.com');
       setEncryption('SSL');
       setPort(465);
       setDomainWebmailUrl('https://mail.zoho.com');
-      setUsername('sales@yourdomain.com');
+      setUsername(keepUserEmail);
+      setFromEmail(keepUserEmail);
     } else if (p === 'hostinger') {
       setAccountName('Hostinger Business Email');
       setHost('smtp.hostinger.com');
       setEncryption('SSL');
       setPort(465);
       setDomainWebmailUrl('https://mail.hostinger.com');
-      setUsername('info@yourdomain.com');
+      setUsername(keepUserEmail);
+      setFromEmail(keepUserEmail);
     } else {
       setAccountName('Custom Outbound SMTP Server');
-      setHost('mail.yourdomain.com');
+      setHost(emailDomain ? `mail.${emailDomain}` : 'mail.yourdomain.com');
       setEncryption('SSL');
       setPort(465);
       setDomainWebmailUrl('');
+      setUsername(keepUserEmail);
+      setFromEmail(keepUserEmail);
+    }
+
+    if (autoSwitchToCredentials) {
+      setActiveTab('credentials');
     }
   };
 
   // Select protocol with auto port adjustment & custom port preservation
   const handleSelectEncryption = (enc: 'STARTTLS' | 'SSL' | 'TLS' | 'NONE') => {
     setEncryption(enc);
+    setValidationError('');
     if (enc === 'SSL') {
       setPort(465);
     } else if (enc === 'STARTTLS' || enc === 'TLS') {
@@ -199,12 +307,48 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
     }
   };
 
+  const resolveEffectiveConnectionValues = () => {
+    const effUsername = (username || fromEmail || '').trim();
+    const effFromEmail = (fromEmail || (effUsername.includes('@') ? effUsername : '') || '').trim();
+    const emailDomain = effFromEmail.includes('@') ? effFromEmail.split('@')[1].trim() : '';
+    let effHost = (host || '').trim();
+    if (!effHost || effHost === 'mail.yourdomain.com') {
+      if (emailDomain === 'gmail.com' || emailDomain === 'googlemail.com') effHost = 'smtp.gmail.com';
+      else if (emailDomain === 'outlook.com' || emailDomain === 'hotmail.com') effHost = 'smtp.office365.com';
+      else if (emailDomain === 'zoho.com') effHost = 'smtppro.zoho.com';
+      else if (emailDomain) effHost = `mail.${emailDomain}`;
+    }
+    const effWebmail =
+      domainWebmailUrl && domainWebmailUrl !== 'https://webmail.yourdomain.com'
+        ? domainWebmailUrl
+        : emailDomain && (provider === 'domain_webmail' || provider === 'custom')
+        ? `https://webmail.${emailDomain}`
+        : domainWebmailUrl;
+
+    return {
+      effUsername,
+      effFromEmail: effFromEmail || effUsername,
+      effHost: effHost || host,
+      effPort: Number(port) || 465,
+      effEncryption: (encryption || 'SSL') as 'STARTTLS' | 'SSL' | 'TLS' | 'NONE',
+      effWebmail
+    };
+  };
+
   const handleTestHandshake = async () => {
+    const { effUsername, effHost, effPort, effEncryption, effWebmail } = resolveEffectiveConnectionValues();
+    if (!effUsername || !password.trim()) {
+      setValidationError('⚠️ Please enter your Username / Mailbox Address and Password / App Key before testing.');
+      setActiveTab('credentials');
+      return;
+    }
+
+    setValidationError('');
     setIsTesting(true);
     setTestSuccess(null);
     setTestLogs([
-      `[DNS] Looking up MX records for ${host || 'mail.domain.com'}...`,
-      `[SOCKET] Opening TCP socket connection on port ${port} (Protocol: ${encryption || 'NONE'})...`,
+      `[DNS] Looking up MX records for ${effHost || 'mail.domain.com'}...`,
+      `[SOCKET] Opening TCP socket connection on port ${effPort} (Protocol: ${effEncryption})...`,
     ]);
 
     try {
@@ -213,12 +357,12 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider,
-          host,
-          port,
-          username,
+          host: effHost,
+          port: effPort,
+          username: effUsername,
           password,
-          encryption: encryption || 'STARTTLS',
-          domainWebmailUrl
+          encryption: effEncryption,
+          domainWebmailUrl: effWebmail
         })
       });
       const parsed = await safeParseResponse(res, 'SMTP handshake failed');
@@ -227,11 +371,11 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
       if (parsed.ok && data.success) {
         setTestSuccess(true);
         setTestLogs(data.logs || [
-          `[DNS] MX records verified for ${host}`,
-          `[SOCKET] TCP connection established on port ${port}`,
-          `[AUTH] 235 2.7.0 Authentication successful for ${username}`,
+          `[DNS] MX records verified for ${effHost}`,
+          `[SOCKET] TCP connection established on port ${effPort}`,
+          `[AUTH] 235 2.7.0 Authentication successful for ${effUsername}`,
           `[DELIVERABILITY] SPF, DKIM (2048-bit), and DMARC alignment verified (Score: 99/100)`,
-          domainWebmailUrl ? `[WEBMAIL] Webmail endpoint verified: ${domainWebmailUrl}` : `[READY] SMTP account warmed and ready for outbound.`
+          effWebmail ? `[WEBMAIL] Webmail endpoint verified: ${effWebmail}` : `[READY] SMTP account warmed and ready for outbound.`
         ]);
         confetti({ particleCount: 40, spread: 60, origin: { y: 0.7 } });
       } else {
@@ -255,6 +399,7 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
 
   const handleSendTestEmail = async () => {
     if (!testTargetEmail) return;
+    const { effUsername, effFromEmail, effHost, effPort, effEncryption, effWebmail } = resolveEffectiveConnectionValues();
     setTestSending(true);
     setTestSendSuccess(null);
 
@@ -265,15 +410,17 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
         body: JSON.stringify({
           to: testTargetEmail,
           toName: 'Deliverability Tester',
-          from: username,
+          from: effFromEmail || effUsername,
           fromName,
           subject: `Visual Sky SMTP Relay Test Ping [${Date.now().toString().slice(-4)}]`,
-          text: `Hello!\n\nThis is a real-time deliverability handshake test from Visual Sky Outbound Relay (${accountName}).\n\n- SMTP Host: ${host}:${port}\n- Security: ${encryption}\n- Webmail: ${domainWebmailUrl || 'N/A'}\n- Time: ${new Date().toUTCString()}\n\nVerified direct delivery test.`,
+          text: `Hello!\n\nThis is a real-time deliverability handshake test from Visual Sky Outbound Relay (${accountName}).\n\n- SMTP Host: ${effHost}:${effPort}\n- Security: ${effEncryption}\n- Webmail: ${effWebmail || 'N/A'}\n- Time: ${new Date().toUTCString()}\n\nVerified direct delivery test.`,
           smtpConfig: {
-            host,
-            port,
-            encryption: encryption || 'STARTTLS',
-            username,
+            provider,
+            host: effHost,
+            port: effPort,
+            encryption: effEncryption,
+            username: effUsername,
+            fromEmail: effFromEmail,
             password
           }
         })
@@ -301,37 +448,54 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
     }
   };
 
+  const { effUsername, effFromEmail, effHost, effPort, effEncryption, effWebmail } = resolveEffectiveConnectionValues();
+
   // Validation: Check all required fields
   const isFormValid = Boolean(
-    accountName.trim() &&
-    host.trim() &&
-    port > 0 &&
-    encryption &&
-    username.trim() &&
+    effHost.trim() &&
+    effPort > 0 &&
+    effEncryption &&
+    effUsername.trim() &&
     password.trim()
   );
 
   const handleSaveAccount = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isFormValid) return;
+    setValidationError('');
+
+    if (!effUsername.trim()) {
+      setActiveTab('credentials');
+      setValidationError('⚠️ Please enter your Username / Mailbox Email Address (e.g. you@yourdomain.com).');
+      return;
+    }
+    if (!password.trim()) {
+      setActiveTab('credentials');
+      setValidationError('⚠️ Please enter your Mailbox Password, 16-digit Google App Password, or API Key.');
+      return;
+    }
+    if (!effHost.trim() || effHost === 'mail.yourdomain.com') {
+      setActiveTab('credentials');
+      setValidationError('⚠️ Please enter a valid SMTP Server Host (e.g. mail.yourdomain.com or smtp.gmail.com).');
+      return;
+    }
 
     const payload = {
-      name: accountName || `${provider.toUpperCase()} Relay`,
+      name: accountName.trim() || `${effFromEmail || provider.toUpperCase()} Relay`,
       provider,
-      host,
-      port: Number(port) || 587,
-      encryption: (encryption as any) || 'STARTTLS',
-      username,
-      fromName: fromName || 'Outreach Team',
-      fromEmail: fromEmail || username,
-      domainWebmailUrl: domainWebmailUrl || undefined,
-      replyToEmail: replyToEmail || undefined,
+      host: effHost,
+      port: effPort,
+      encryption: effEncryption,
+      username: effUsername,
+      fromName: fromName.trim() || 'Outreach Team',
+      fromEmail: effFromEmail || effUsername,
+      domainWebmailUrl: effWebmail && effWebmail !== 'https://webmail.yourdomain.com' ? effWebmail : undefined,
+      replyToEmail: replyToEmail.trim() || undefined,
       authMethod,
       dailyLimit: Number(dailyLimit) || 500,
-      warmupStatus: warmupMode === 'ramp_15' ? 'warming' : warmupMode === 'paused' ? 'paused' : 'active',
+      warmupStatus: (warmupMode === 'ramp_15' ? 'warming' : warmupMode === 'paused' ? 'paused' : 'active') as 'active' | 'warming' | 'paused',
       warmupMode,
       warmupStartDate: editingAccount?.warmupStartDate || new Date().toISOString(),
-      password,
+      password: password.trim(),
       scheduleSettings: {
         sendMode: 'instant' as const,
         intervalSeconds: Number(intervalSeconds) || 15,
@@ -412,6 +576,23 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
           })}
         </div>
 
+        {/* Validation Error Banner */}
+        {validationError && (
+          <div className="px-4 py-2.5 bg-rose-950/80 border-b border-rose-500/50 text-rose-200 text-xs font-semibold flex items-center justify-between gap-2 animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>{validationError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setValidationError('')}
+              className="text-rose-300 hover:text-white cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Form Body */}
         <form onSubmit={handleSaveAccount} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
           {/* TAB 1: Provider Presets */}
@@ -421,7 +602,7 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
                 <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
                   Select SMTP / Webmail Architecture
                 </label>
-                <span className="text-[11px] text-cyan-400 font-medium">Click to select & auto-configure</span>
+                <span className="text-[11px] text-cyan-400 font-medium">Click any provider to auto-configure & enter credentials</span>
               </div>
 
               {/* Cloud / Vercel Guarantee Notice */}
@@ -456,7 +637,7 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => handleProviderPick(item.id as any)}
+                      onClick={() => handleProviderPick(item.id as any, true)}
                       className={`p-3.5 rounded-xl border text-left flex flex-col justify-between transition-all cursor-pointer ${
                         isSelected
                           ? 'bg-gradient-to-br from-cyan-950/50 to-slate-900 border-cyan-400 ring-2 ring-cyan-400 shadow-lg shadow-cyan-500/20'
@@ -498,44 +679,115 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
           {/* TAB 2: Server Credentials & Domain Webmail Address */}
           {activeTab === 'credentials' && (
             <div className="space-y-5 animate-in fade-in">
+              {/* Active Provider Quick Bar */}
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-extrabold uppercase text-[10px]">
+                    {provider.replace('_', ' ')}
+                  </span>
+                  <span className="text-slate-300 font-semibold">{accountName}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('preset')}
+                  className="text-[11px] text-cyan-400 hover:underline font-bold cursor-pointer"
+                >
+                  Change Provider Preset
+                </button>
+              </div>
+
+              {/* Authentication Credentials FIRST for maximum user-friendliness (auto-fills host & webmail from email!) */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Account Label */}
+                {/* Username / Mailbox Email */}
                 <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-300">Account Friendly Name *</label>
+                  <label className="block text-xs font-bold text-slate-200">
+                    {provider === 'resend' ? 'Resend Identifier' : provider === 'brevo' ? 'Brevo Identifier / Email' : 'Username / Mailbox Email Address *'}
+                  </label>
                   <input
                     type="text"
-                    required
-                    value={accountName}
-                    onChange={(e) => setAccountName(e.target.value)}
-                    placeholder="e.g. Primary Domain Webmail Relay"
+                    value={username}
+                    onChange={(e) => handleUsernameInput(e.target.value)}
+                    placeholder={provider === 'resend' ? 'resend' : provider === 'brevo' ? 'brevo' : 'e.g. outreach@yourdomain.com'}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
+                  />
+                  {provider === 'resend' ? (
+                    <span className="text-[10px] text-cyan-400">Fixed as &apos;resend&apos; for HTTPS API</span>
+                  ) : (
+                    <span className="text-[10px] text-slate-500">Typing your email auto-fills Sender Email & Domain Host</span>
+                  )}
+                </div>
+
+                {/* Password / App Password / API Key */}
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-200">
+                    {provider === 'resend' ? 'Resend API Key (re_...) *' : provider === 'brevo' ? 'Brevo API Key (xkeysib-...) or SMTP Key *' : 'Mailbox Password / App Secret *'}
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        setValidationError('');
+                      }}
+                      placeholder={provider === 'resend' ? 're_123456789...' : provider === 'brevo' ? 'xkeysib-...' : 'Enter mailbox password or 16-char App Password'}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-3 pr-9 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <span className="text-[10px] text-slate-500">
+                    {provider === 'resend' ? 'Get free key at resend.com/api-keys' : provider === 'brevo' ? 'Get free key at app.brevo.com/settings/keys/api' : 'For Google Workspace / Gmail, use 16-digit App Password'}
+                  </span>
+                </div>
+
+                {/* Sender Display Name */}
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-300">From Name (Display Name)</label>
+                  <input
+                    type="text"
+                    value={fromName}
+                    onChange={(e) => setFromName(e.target.value)}
+                    placeholder="e.g. Alex Vance | Visual Sky"
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
                   />
                 </div>
 
-                {/* DOMAIN WEBMAIL ADDRESS FIELD */}
+                {/* Sender Email Address */}
                 <div className="space-y-1">
                   <label className="block text-xs font-bold text-cyan-300 flex items-center gap-1.5">
-                    <Globe className="w-3.5 h-3.5 text-cyan-400" />
-                    Domain Webmail Address (Webmail URL)
+                    <Mail className="w-3.5 h-3.5 text-cyan-400" />
+                    Sender Email Address *
                   </label>
                   <input
-                    type="url"
-                    value={domainWebmailUrl}
-                    onChange={(e) => setDomainWebmailUrl(e.target.value)}
-                    placeholder="https://webmail.yourdomain.com or :2096"
+                    type="email"
+                    value={fromEmail}
+                    onChange={(e) => handleFromEmailInput(e.target.value)}
+                    placeholder="e.g. outreach@yourdomain.com (auto-synced with username)"
                     className="w-full bg-slate-900 border border-cyan-500/40 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-400 font-mono"
                   />
-                  <span className="text-[10px] text-slate-500">Direct login URL for webmail portal</span>
+                  <span className="text-[10px] text-slate-500">The outbound sender email address used across all campaigns and sequences.</span>
                 </div>
+              </div>
 
+              {/* Server Host, Port & Domain Webmail */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-800/80">
                 {/* SMTP Host */}
                 <div className="space-y-1">
                   <label className="block text-xs font-bold text-slate-300">SMTP Host / Server Address *</label>
                   <input
                     type="text"
-                    required
                     value={host}
-                    onChange={(e) => setHost(e.target.value)}
+                    onChange={(e) => {
+                      setHost(e.target.value);
+                      setCustomHostEdited(true);
+                      setValidationError('');
+                    }}
                     placeholder="e.g. mail.yourdomain.com or smtp.gmail.com"
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
                   />
@@ -549,22 +801,60 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
                   </div>
                   <input
                     type="number"
-                    required
                     value={port}
                     onChange={(e) => setPort(Number(e.target.value))}
                     placeholder="e.g. 587, 465, 2525"
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
                   />
                 </div>
+
+                {/* Account Label */}
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-300">Account Friendly Name</label>
+                  <input
+                    type="text"
+                    value={accountName}
+                    onChange={(e) => setAccountName(e.target.value)}
+                    placeholder="e.g. Primary Domain Webmail Relay"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+
+                {/* DOMAIN WEBMAIL ADDRESS FIELD */}
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+                    <Globe className="w-3.5 h-3.5 text-cyan-400" />
+                    Domain Webmail Address (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={domainWebmailUrl}
+                    onChange={(e) => setDomainWebmailUrl(e.target.value)}
+                    placeholder="https://webmail.yourdomain.com"
+                    className="w-full bg-slate-900 border border-cyan-500/40 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-400 font-mono"
+                  />
+                </div>
+
+                {/* Reply-To Email */}
+                <div className="space-y-1 md:col-span-2">
+                  <label className="block text-xs font-bold text-slate-300">Reply-To Address (Optional)</label>
+                  <input
+                    type="email"
+                    value={replyToEmail}
+                    onChange={(e) => setReplyToEmail(e.target.value)}
+                    placeholder="replies@yourdomain.com (defaults to sender email)"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
+                  />
+                </div>
               </div>
 
-              {/* Security Encryption Protocol: Explicit Selectable Cards (NOT a toggle) */}
+              {/* Security Encryption Protocol: Explicit Selectable Cards */}
               <div className="space-y-2 pt-1 border-t border-slate-800/80">
                 <div className="flex items-center justify-between">
                   <label className="block text-xs font-bold text-slate-200">
                     Security Encryption Protocol *
                   </label>
-                  <span className="text-[10px] text-slate-400">Select protocol (auto-adjusts port, but allows custom edits)</span>
+                  <span className="text-[10px] text-slate-400">Select protocol (auto-adjusts port, allows custom edits)</span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -598,90 +888,45 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
                 </div>
               </div>
 
-              {/* Authentication Credentials */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1 border-t border-slate-800/80">
-                {/* Username / Mailbox Email */}
-                <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-300">
-                    {provider === 'resend' ? 'Resend Identifier' : provider === 'brevo' ? 'Brevo Identifier / Email' : 'Username / Mailbox Address *'}
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder={provider === 'resend' ? 'resend' : provider === 'brevo' ? 'brevo' : 'e.g. outreach@yourdomain.com'}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
-                  />
-                  {provider === 'resend' && <span className="text-[10px] text-cyan-400">Fixed as 'resend' for HTTPS API</span>}
-                </div>
-
-                {/* Password / App Password / API Key */}
-                <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-300">
-                    {provider === 'resend' ? 'Resend API Key (re_...) *' : provider === 'brevo' ? 'Brevo API Key (xkeysib-...) or SMTP Key *' : 'Mailbox Password / App Secret *'}
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder={provider === 'resend' ? 're_123456789...' : provider === 'brevo' ? 'xkeysib-...' : 'Enter mailbox password or 16-char App Password'}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-3 pr-9 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
+              {/* Inline Handshake Verification Bar right inside Tab 2 */}
+              <div className="p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-bold text-slate-200 flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-cyan-400" />
+                    <span>Quick Connection Verification</span>
+                    {testSuccess === true && (
+                      <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-extrabold">
+                        ✓ Verified & Ready
+                      </span>
+                    )}
+                    {testSuccess === false && (
+                      <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-extrabold">
+                        ✗ Handshake Failed
+                      </span>
+                    )}
                   </div>
-                  <span className="text-[10px] text-slate-500">
-                    {provider === 'resend' ? 'Get free key at resend.com/api-keys' : provider === 'brevo' ? 'Get free key at app.brevo.com/settings/keys/api' : 'For Google Workspace, use 16-digit Google App Password'}
-                  </span>
+                  <p className="text-[11px] text-slate-400">
+                    {testLogs.length > 0 ? testLogs[testLogs.length - 1] : 'Test your credentials right here or click Save & Connect Relay below.'}
+                  </p>
                 </div>
-
-                {/* Sender Display Name */}
-                <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-300">From Name (Display Name)</label>
-                  <input
-                    type="text"
-                    value={fromName}
-                    onChange={(e) => setFromName(e.target.value)}
-                    placeholder="e.g. Alex Vance | Visual Sky"
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
-                  />
-                </div>
-
-                {/* Sender Email Address (User explicit requirement) */}
-                <div className="space-y-1">
-                  <label className="block text-xs font-bold text-cyan-300 flex items-center gap-1.5">
-                    <Mail className="w-3.5 h-3.5 text-cyan-400" />
-                    Sender Email Address *
-                  </label>
-                  <input
-                    type="email"
-                    value={fromEmail}
-                    onChange={(e) => setFromEmail(e.target.value)}
-                    placeholder="e.g. outreach@yourdomain.com (defaults to username)"
-                    className="w-full bg-slate-900 border border-cyan-500/40 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-400 font-mono"
-                  />
-                  <span className="text-[10px] text-slate-500">The outbound sender email address used across all campaigns and sequences.</span>
-                </div>
-
-                {/* Reply-To Email */}
-                <div className="space-y-1 md:col-span-2">
-                  <label className="block text-xs font-bold text-slate-300">Reply-To Address (Optional)</label>
-                  <input
-                    type="email"
-                    value={replyToEmail}
-                    onChange={(e) => setReplyToEmail(e.target.value)}
-                    placeholder="replies@yourdomain.com (defaults to sender email)"
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-mono"
-                  />
-                </div>
+                <button
+                  type="button"
+                  onClick={handleTestHandshake}
+                  disabled={isTesting}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-cyan-500/40 text-cyan-300 font-bold text-xs flex items-center gap-1.5 transition shrink-0 cursor-pointer"
+                >
+                  {isTesting ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                      <span>Testing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Test Handshake</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           )}
@@ -935,9 +1180,7 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={!isFormValid}
-                title={!isFormValid ? "Please fill Host, Port, Encryption, Username, and Password to save" : "Save and connect relay"}
-                className="px-5 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 hover:from-blue-500 hover:via-cyan-400 hover:to-indigo-500 text-white font-extrabold text-xs shadow-lg shadow-cyan-500/25 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 hover:from-blue-500 hover:via-cyan-400 hover:to-indigo-500 text-white font-extrabold text-xs shadow-lg shadow-cyan-500/25 transition cursor-pointer flex items-center gap-1.5"
               >
                 <Check className="w-4 h-4" />
                 <span>{editingAccount ? 'Update Relay Settings' : 'Save & Connect Relay'}</span>

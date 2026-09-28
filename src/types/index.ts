@@ -117,6 +117,9 @@ export interface Campaign {
   scheduledTime?: string;
   sendingIntervalSec?: number;
   assignedSmtpId?: string;
+  assignedSmtpIds?: string[];
+  senderName?: string;
+  senderEmail?: string;
   scheduleActiveDays?: string[]; // e.g. ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
   scheduleStartTime?: string; // "09:00"
   scheduleEndTime?: string; // "18:00"

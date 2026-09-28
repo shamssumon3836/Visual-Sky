@@ -48,14 +48,80 @@ export async function queryUserWorkspace(identifiers: {
   let bestSource: 'supabase-auth' | 'supabase-table' | 'backend-db' | 'none' = 'none';
   let bestTimestamp = 0;
 
-  // Helper to compare candidate records and retain the most recent update
+  const DEMO_IDS = new Set([
+    'lead-saas-101', 'lead-saas-102', 'lead-saas-103', 'lead-saas-104', 'lead-saas-105',
+    'camp-b2b-saas-growth', 'camp-enterprise-partners',
+    'smtp-primary-google', 'smtp-secondary-relay',
+    'thread-liam-103', 'sent-init-1', 'sent-init-2'
+  ]);
+
+  const mergeArraysById = (arrA?: any[], arrB?: any[], fallbackKey?: string): any[] => {
+    const cleanA = (Array.isArray(arrA) ? arrA : []).filter(x => x && !DEMO_IDS.has(x.id));
+    const cleanB = (Array.isArray(arrB) ? arrB : []).filter(x => x && !DEMO_IDS.has(x.id));
+    if (cleanA.length === 0) return cleanB;
+    if (cleanB.length === 0) return cleanA;
+    const result = [...cleanA];
+    const seenIds = new Set(cleanA.map(x => String(x.id || '')).filter(Boolean));
+    const seenFallbacks = fallbackKey
+      ? new Set(cleanA.map(x => String(x[fallbackKey] || '').trim().toLowerCase()).filter(Boolean))
+      : null;
+
+    for (const item of cleanB) {
+      const idStr = String(item.id || '');
+      const fbStr = fallbackKey ? String(item[fallbackKey] || '').trim().toLowerCase() : '';
+      const hasId = idStr && seenIds.has(idStr);
+      const hasFb = fbStr && seenFallbacks && seenFallbacks.has(fbStr);
+      if (!hasId && !hasFb) {
+        result.push(item);
+        if (idStr) seenIds.add(idStr);
+        if (fbStr && seenFallbacks) seenFallbacks.add(fbStr);
+      }
+    }
+    return result;
+  };
+
+  // Helper to compare and smart-merge candidate records so no campaigns, SMTP accounts, or leads are ever dropped
   const considerCandidate = (candidate: any, source: 'supabase-auth' | 'supabase-table' | 'backend-db') => {
     if (!candidate || typeof candidate !== 'object') return;
     const ts = candidate.updatedAt ? new Date(candidate.updatedAt).getTime() : 1;
-    // Check if candidate has meaningful arrays (leads, campaigns, etc.)
-    const hasContent = Array.isArray(candidate.leads) || Array.isArray(candidate.campaigns);
-    if (!bestData || (ts > bestTimestamp && hasContent) || (!bestData.leads && candidate.leads)) {
-      bestData = candidate;
+
+    if (!bestData) {
+      bestData = {
+        ...candidate,
+        leads: mergeArraysById(candidate.leads, [], 'email'),
+        campaigns: mergeArraysById(candidate.campaigns, [], 'name'),
+        smtpAccounts: mergeArraysById(candidate.smtpAccounts, [], 'username'),
+        threads: mergeArraysById(candidate.threads, []),
+        sentEmails: mergeArraysById(candidate.sentEmails, [])
+      };
+      bestSource = source;
+      bestTimestamp = ts;
+      return;
+    }
+
+    const isNewer = ts >= bestTimestamp;
+    const primary = isNewer ? candidate : bestData;
+    const secondary = isNewer ? bestData : candidate;
+
+    bestData = {
+      ...secondary,
+      ...primary,
+      leads: mergeArraysById(primary.leads, secondary.leads, 'email'),
+      leadTags: mergeArraysById(primary.leadTags, secondary.leadTags, 'name'),
+      campaigns: mergeArraysById(primary.campaigns, secondary.campaigns, 'name'),
+      smtpAccounts: mergeArraysById(primary.smtpAccounts, secondary.smtpAccounts, 'username'),
+      emailTemplates: mergeArraysById(primary.emailTemplates, secondary.emailTemplates, 'title'),
+      templateCategories: mergeArraysById(primary.templateCategories, secondary.templateCategories, 'name'),
+      threads: mergeArraysById(primary.threads, secondary.threads),
+      sentEmails: mergeArraysById(primary.sentEmails, secondary.sentEmails),
+      minedLeads: mergeArraysById(primary.minedLeads, secondary.minedLeads, 'email'),
+      userProfile: {
+        ...(secondary.userProfile || {}),
+        ...(primary.userProfile || {})
+      }
+    };
+
+    if (isNewer) {
       bestSource = source;
       bestTimestamp = ts;
     }

@@ -3019,30 +3019,30 @@ function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null
       }
     }
 
-    // If workspace is missing, or has 0 campaigns and 0 leads (or only stubbed test leads), seed with rich starter data
-    const isMasterUser = uniqueCandidates.some(c => 
-      c === 'rafiqulvisualsky@gmail.com' || 
-      c === 'user-agency-1' || 
-      c === 'sojibdaridro123@gmail.com' ||
-      c.includes('agency') ||
-      c.includes('admin@visualsky')
-    );
-    const hasMeaningfulWork = mergedWorkspace && (
-      (Array.isArray(mergedWorkspace.campaigns) && mergedWorkspace.campaigns.length > 0) ||
-      (Array.isArray(mergedWorkspace.smtpAccounts) && mergedWorkspace.smtpAccounts.length > 0) ||
-      (Array.isArray(mergedWorkspace.leads) && mergedWorkspace.leads.length > 2)
-    );
+    // Strip legacy demo IDs if present so they never clobber real user collections
+    const DEMO_IDS = new Set([
+      'lead-saas-101', 'lead-saas-102', 'lead-saas-103', 'lead-saas-104', 'lead-saas-105',
+      'camp-b2b-saas-growth', 'camp-enterprise-partners',
+      'smtp-primary-google', 'smtp-secondary-relay',
+      'thread-liam-103', 'sent-init-1', 'sent-init-2'
+    ]);
 
-    if (isMasterUser && !hasMeaningfulWork) {
-      const targetEmail = uniqueCandidates.find(c => c.includes('@')) || 'rafiqulvisualsky@gmail.com';
-      const targetId = uniqueCandidates.find(c => !c.includes('@')) || 'user-agency-1';
-      const seeded = getDefaultWorkspaceForUser(targetEmail, targetId);
-      if (mergedWorkspace) {
-        mergedWorkspace = smartMergeWorkspaces(seeded, mergedWorkspace);
-      } else {
-        mergedWorkspace = seeded;
+    if (mergedWorkspace && typeof mergedWorkspace === 'object') {
+      if (Array.isArray(mergedWorkspace.leads)) {
+        mergedWorkspace.leads = mergedWorkspace.leads.filter((i: any) => i && !DEMO_IDS.has(i.id));
       }
-      writeUserWorkspace(targetEmail, mergedWorkspace, targetId);
+      if (Array.isArray(mergedWorkspace.campaigns)) {
+        mergedWorkspace.campaigns = mergedWorkspace.campaigns.filter((i: any) => i && !DEMO_IDS.has(i.id));
+      }
+      if (Array.isArray(mergedWorkspace.smtpAccounts)) {
+        mergedWorkspace.smtpAccounts = mergedWorkspace.smtpAccounts.filter((i: any) => i && !DEMO_IDS.has(i.id));
+      }
+      if (Array.isArray(mergedWorkspace.threads)) {
+        mergedWorkspace.threads = mergedWorkspace.threads.filter((i: any) => i && !DEMO_IDS.has(i.id));
+      }
+      if (Array.isArray(mergedWorkspace.sentEmails)) {
+        mergedWorkspace.sentEmails = mergedWorkspace.sentEmails.filter((i: any) => i && !DEMO_IDS.has(i.id));
+      }
     }
 
     return mergedWorkspace;

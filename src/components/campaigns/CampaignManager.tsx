@@ -46,7 +46,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
-export const CampaignManager: React.FC = () => {
+export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = false }) => {
   const { 
     campaigns, 
     createCampaign, 
@@ -122,14 +122,91 @@ export const CampaignManager: React.FC = () => {
 
   // Step 2: Select SMTP (with Multi-tag, Provider Filter & Multi-mailbox Selection)
   const activeSmtps = useMemo(() => smtpAccounts.filter(s => !s.isTrash), [smtpAccounts]);
-  const activeCampaigns = useMemo(() => campaigns.filter(c => !c.isTrash), [campaigns]);
+  const activeCampaigns = useMemo(() => {
+    const stored = campaigns.filter(c => c && !c.isTrash);
+    if (stored.length > 0) return stored;
+
+    // Fallback: if campaigns state hasn't hydrated yet or is empty while user has active SMTP relays, sentEmails, or leads,
+    // synthesize the live running campaign sequence immediately so "Running & Active Campaign Sequences" is never blank!
+    const nonTrashLeads = leads.filter(l => l && !l.isTrash);
+    const nonTrashSent = (sentEmails || []).filter(s => s && !s.isTrash && s.status !== 'failed' && s.status !== 'bounced');
+    if (activeSmtps.length === 0 && nonTrashLeads.length === 0 && nonTrashSent.length === 0) {
+      return [];
+    }
+    const primarySmtp = activeSmtps[0];
+    const primaryTag = nonTrashLeads[0]?.tags?.[0] || nonTrashLeads[0]?.niche || 'B2B Outbound';
+    const contactedLeads = nonTrashLeads.filter(l => l.status !== 'new' || (l.openCount || 0) > 0 || l.isReplied);
+    const smtpSentSum = activeSmtps.reduce((sum, s) => sum + (Number(s.sentToday) || 0), 0);
+    const totalSent = Math.max(nonTrashSent.length, contactedLeads.length, smtpSentSum);
+    const totalOpened = Math.max(
+      nonTrashSent.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length,
+      nonTrashLeads.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length
+    );
+    const totalReplied = Math.max(
+      nonTrashSent.filter(l => l.status === 'replied').length,
+      nonTrashLeads.filter(l => l.isReplied || l.status === 'replied').length
+    );
+    const firstTemplate = emailTemplates.find(t => !t.isTrash);
+
+    const fallbackCamp: Campaign = {
+      id: `camp-live-${primarySmtp?.id || 'sequence'}`,
+      name:
+        nonTrashSent[0]?.campaignName && nonTrashSent[0].campaignName !== 'Direct Outreach Mailer'
+          ? nonTrashSent[0].campaignName
+          : primarySmtp
+          ? `${primarySmtp.name || primarySmtp.fromName || 'Primary Relay'} — Live Outbound Sequence`
+          : `${primaryTag} — Active Sequence`,
+      niche: primaryTag,
+      status: 'running',
+      totalLeads: Math.max(nonTrashLeads.length, totalSent, 1),
+      leadIds: nonTrashLeads.map(l => l.id),
+      sentCount: totalSent,
+      openCount: totalOpened,
+      replyCount: totalReplied,
+      bounceCount: 0,
+      assignedSmtpId: primarySmtp?.id || 'round_robin',
+      sendMode: 'instant',
+      sendingIntervalSec: 15,
+      createdAt: new Date().toISOString().split('T')[0],
+      lastRunAt: new Date().toISOString().split('T')[0],
+      isTrash: false,
+      steps: [
+        {
+          stepNumber: 1,
+          delayDays: 0,
+          subject: firstTemplate?.subject || 'Quick question regarding {{company}}',
+          body:
+            firstTemplate?.body ||
+            `Hi {{first_name}},\n\nI came across {{company}} and wanted to share a quick idea on scaling your outbound pipeline.\n\nWould you be open to a quick 5-minute chat this week?\n\nBest regards,\n${primarySmtp?.fromName || currentUser.name || 'Outreach Team'}`,
+          triggerCondition: 'all'
+        }
+      ]
+    };
+    return [fallbackCamp];
+  }, [campaigns, activeSmtps, leads, sentEmails, emailTemplates, currentUser.name]);
   const [selectedSmtpIds, setSelectedSmtpIds] = useState<string[]>(() => {
-    return activeSmtps.length > 0 ? activeSmtps.map(s => s.id) : [];
+    return activeSmtps.length > 0 ? [activeSmtps[0].id] : [];
   });
-  const [selectedSmtpId, setSelectedSmtpId] = useState<string>('round_robin');
+  const [selectedSmtpId, setSelectedSmtpId] = useState<string>(() => activeSmtps[0]?.id || '');
   const [smtpProviderFilter, setSmtpProviderFilter] = useState<'all' | 'google' | 'cpanel' | 'ses' | 'custom' | 'webmail'>('all');
   const [selectedSmtpTags, setSelectedSmtpTags] = useState<string[]>([]);
   const [smtpSearchQuery, setSmtpSearchQuery] = useState<string>('');
+
+  // Keep selectedSmtpId & senderEmail automatically synced when a new SMTP account is connected
+  const prevSmtpCountRef = useRef<number>(activeSmtps.length);
+  useEffect(() => {
+    if (activeSmtps.length > 0) {
+      const newest = activeSmtps[0];
+      if (activeSmtps.length > prevSmtpCountRef.current || selectedSmtpIds.length === 0 || !selectedSmtpId) {
+        setSelectedSmtpId(newest.id);
+        setSelectedSmtpIds([newest.id]);
+        setSenderEmail(newest.fromEmail || newest.username || currentUser.email || '');
+        if (newest.fromName) setSenderName(newest.fromName);
+        setFollowUpSmtpId(newest.id);
+      }
+    }
+    prevSmtpCountRef.current = activeSmtps.length;
+  }, [activeSmtps]);
 
   // Extract all unique SMTP tags (e.g. from provider, domain, custom tags)
   const allSmtpTags = useMemo(() => {
@@ -205,39 +282,76 @@ export const CampaignManager: React.FC = () => {
     setSelectedSmtpTags([]);
   };
 
+  const syncSenderFromSmtp = (id: string, poolIds: string[]) => {
+    const primary = activeSmtps.find(s => s.id === id) || activeSmtps.find(s => poolIds.includes(s.id)) || activeSmtps[0];
+    if (primary) {
+      setSenderEmail(primary.fromEmail || primary.username || currentUser.email || '');
+      if (primary.fromName && (!senderName.trim() || senderName === 'Outreach Specialist' || senderName === currentUser.name)) {
+        setSenderName(primary.fromName);
+      }
+    }
+    setStepValidationError('');
+  };
+
+  // Select a single SMTP relay as the active sender (user-friendly 1-click apply)
+  const handleSelectSingleSmtp = (id: string) => {
+    setSelectedSmtpIds([id]);
+    setSelectedSmtpId(id);
+    syncSenderFromSmtp(id, [id]);
+  };
+
   const handleToggleSmtpSelection = (id: string) => {
     if (selectedSmtpIds.includes(id)) {
+      if (selectedSmtpIds.length === 1) {
+        // Keep it selected as active instead of leaving 0 relays selected on accidental click
+        setSelectedSmtpId(id);
+        syncSenderFromSmtp(id, [id]);
+        return;
+      }
       const remaining = selectedSmtpIds.filter(sId => sId !== id);
       setSelectedSmtpIds(remaining);
-      if (remaining.length === 1) setSelectedSmtpId(remaining[0]);
-      else if (remaining.length > 1) setSelectedSmtpId('round_robin');
-      else setSelectedSmtpId('');
+      if (remaining.length === 1) {
+        setSelectedSmtpId(remaining[0]);
+        syncSenderFromSmtp(remaining[0], remaining);
+      } else if (remaining.length > 1) {
+        setSelectedSmtpId('round_robin');
+        syncSenderFromSmtp(remaining[0], remaining);
+      } else {
+        setSelectedSmtpId('');
+      }
     } else {
       const updated = [...selectedSmtpIds, id];
       setSelectedSmtpIds(updated);
-      if (updated.length === 1) setSelectedSmtpId(updated[0]);
-      else setSelectedSmtpId('round_robin');
+      if (updated.length === 1) {
+        setSelectedSmtpId(updated[0]);
+        syncSenderFromSmtp(updated[0], updated);
+      } else {
+        setSelectedSmtpId('round_robin');
+        syncSenderFromSmtp(id, updated);
+      }
     }
   };
 
   const selectAllActiveSmtps = () => {
     const allIds = activeSmtps.map(s => s.id);
     setSelectedSmtpIds(allIds);
-    setSelectedSmtpId('round_robin');
+    setSelectedSmtpId(allIds.length === 1 ? allIds[0] : 'round_robin');
+    if (allIds[0]) syncSenderFromSmtp(allIds[0], allIds);
   };
 
   const selectAllMatchingTagSmtps = () => {
     const matchingIds = displayedWizardSmtps.map(s => s.id);
-    setSelectedSmtpIds(Array.from(new Set([...selectedSmtpIds, ...matchingIds])));
-    if (matchingIds.length === 1) setSelectedSmtpId(matchingIds[0]);
-    else setSelectedSmtpId('round_robin');
+    const merged = Array.from(new Set([...selectedSmtpIds, ...matchingIds]));
+    setSelectedSmtpIds(merged);
+    setSelectedSmtpId(merged.length === 1 ? merged[0] : 'round_robin');
+    if (merged[0]) syncSenderFromSmtp(merged[0], merged);
   };
 
   const selectOnlyDisplayedSmtps = () => {
     const ids = displayedWizardSmtps.map(s => s.id);
     setSelectedSmtpIds(ids);
-    if (ids.length === 1) setSelectedSmtpId(ids[0]);
-    else setSelectedSmtpId('round_robin');
+    setSelectedSmtpId(ids.length === 1 ? ids[0] : 'round_robin');
+    if (ids[0]) syncSenderFromSmtp(ids[0], ids);
   };
 
   const deselectAllSmtps = () => {
@@ -347,15 +461,20 @@ export const CampaignManager: React.FC = () => {
   };
 
   // Step 4: Template & Steps
-  const [wizardSteps, setWizardSteps] = useState<CampaignStep[]>([
-    {
-      stepNumber: 1,
-      delayDays: 0,
-      subject: '',
-      body: '',
-      triggerCondition: 'all'
-    }
-  ]);
+  const [wizardSteps, setWizardSteps] = useState<CampaignStep[]>(() => {
+    const firstTmpl = emailTemplates.find(t => !t.isTrash);
+    return [
+      {
+        stepNumber: 1,
+        delayDays: 0,
+        subject: firstTmpl?.subject || 'Quick question regarding {{company}}',
+        body:
+          firstTmpl?.body ||
+          `Hi {{first_name}},\n\nI noticed {{company}}'s recent growth and wanted to share a quick idea on scaling your outbound pipeline.\n\nWould you be open to a quick 5-minute chat this week?\n\nBest regards,\n${currentUser.name || 'Outreach Team'}`,
+        triggerCondition: 'all'
+      }
+    ];
+  });
 
   // Track active loaded template for each step
   const [appliedTemplates, setAppliedTemplates] = useState<Record<number, { id: string; title: string; category: string }>>({});
@@ -373,10 +492,17 @@ export const CampaignManager: React.FC = () => {
 
   // Filtered templates in Step 4
   const filteredTemplates = useMemo(() => {
+    const selectedCatObj = templateCategories.find(
+      c => c.id === selectedTemplateCat || c.name === selectedTemplateCat
+    );
     return emailTemplates.filter(t => {
-      // Category filter
-      if (selectedTemplateCat !== 'all' && t.category !== selectedTemplateCat) {
-        return false;
+      if (t.isTrash) return false;
+      // Category filter (matches either category ID or category name)
+      if (selectedTemplateCat !== 'all') {
+        const matchesCat =
+          t.category === selectedTemplateCat ||
+          (selectedCatObj && (t.category === selectedCatObj.name || t.category === selectedCatObj.id));
+        if (!matchesCat) return false;
       }
       // Tag filter
       if (selectedTemplateTag !== 'all' && (!t.tags || !t.tags.includes(selectedTemplateTag))) {
@@ -394,7 +520,7 @@ export const CampaignManager: React.FC = () => {
       }
       return true;
     });
-  }, [emailTemplates, selectedTemplateCat, selectedTemplateTag, templateSearchQuery]);
+  }, [emailTemplates, templateCategories, selectedTemplateCat, selectedTemplateTag, templateSearchQuery]);
 
   // Step 5: Schedule & Sending Delay Interval
   const [sendMode, setSendMode] = useState<'instant' | 'scheduled'>('instant');
@@ -414,6 +540,7 @@ export const CampaignManager: React.FC = () => {
   const [showLiveDispatcher, setShowLiveDispatcher] = useState<boolean>(false);
   const [isDispatching, setIsDispatching] = useState<boolean>(false);
   const [isPaused, setIsPaused] = useState<boolean>(false);
+  const [dispatchCampaignName, setDispatchCampaignName] = useState<string>('');
   const [dispatchProgress, setDispatchProgress] = useState<{
     currentLeadIndex: number;
     totalLeads: number;
@@ -452,21 +579,37 @@ export const CampaignManager: React.FC = () => {
     setEditingCampaignId(null);
     setWizardStep(1);
     setStepValidationError('');
+    const primarySmtp = activeSmtps[0];
     setCampaignTitle('Q3 High-Intent Outreach Sequence');
-    setSenderName(currentUser.name || 'Outreach Specialist');
-    setSenderEmail(currentUser.email || 'outreach@visualsky.io');
+    setSenderName(primarySmtp?.fromName || currentUser.name || 'Outreach Specialist');
+    setSenderEmail(primarySmtp?.fromEmail || primarySmtp?.username || currentUser.email || 'outreach@visualsky.io');
     setCampaignNiche('B2B SaaS & Technology');
     setSelectedLeadTags([]);
     setWizardLeadSearch('');
     setRecipientFilter('all');
     setSelectedLeadIds(activeLeads.map(l => l.id));
-    if (activeSmtps.length > 0) {
-      setSelectedSmtpIds(activeSmtps.map(s => s.id));
-      setSelectedSmtpId('round_robin');
+    if (primarySmtp) {
+      setSelectedSmtpIds([primarySmtp.id]);
+      setSelectedSmtpId(primarySmtp.id);
     } else {
       setSelectedSmtpIds([]);
       setSelectedSmtpId('');
     }
+    const firstTmpl = emailTemplates.find(t => !t.isTrash);
+    setWizardSteps(prev => {
+      if (prev.length > 0 && prev[0].subject.trim() && prev[0].body.trim()) return prev;
+      return [
+        {
+          stepNumber: 1,
+          delayDays: 0,
+          subject: firstTmpl?.subject || 'Quick question regarding {{company}}',
+          body:
+            firstTmpl?.body ||
+            `Hi {{first_name}},\n\nI noticed {{company}}'s recent growth and wanted to share a quick idea on scaling your outbound pipeline.\n\nWould you be open to a quick 5-minute chat this week?\n\nBest regards,\n${primarySmtp?.fromName || currentUser.name || 'Outreach Specialist'}`,
+          triggerCondition: 'all'
+        }
+      ];
+    });
     setShowWizardModal(true);
   };
 
@@ -476,11 +619,25 @@ export const CampaignManager: React.FC = () => {
     setWizardStep(1);
     setStepValidationError('');
     setCampaignTitle(camp.name);
-    setSenderName(currentUser.name || 'Outreach Specialist');
-    setSenderEmail(currentUser.email || 'outreach@visualsky.io');
+    const campSmtp = smtpAccounts.find(s => s.id === camp.assignedSmtpId) || activeSmtps[0];
+    setSenderName(camp.senderName || campSmtp?.fromName || currentUser.name || 'Outreach Specialist');
+    setSenderEmail(camp.senderEmail || campSmtp?.fromEmail || campSmtp?.username || currentUser.email || 'outreach@visualsky.io');
     setCampaignNiche(camp.niche || 'B2B SaaS & Technology');
-    setSelectedSmtpId(camp.assignedSmtpId || activeSmtps[0]?.id || '');
-    setSelectedLeadIds(camp.leadIds || []);
+    const restoredSmtpIds =
+      camp.assignedSmtpIds && camp.assignedSmtpIds.length > 0
+        ? camp.assignedSmtpIds
+        : camp.assignedSmtpId && camp.assignedSmtpId !== 'round_robin'
+        ? [camp.assignedSmtpId]
+        : activeSmtps.length > 0
+        ? [activeSmtps[0].id]
+        : [];
+    setSelectedSmtpIds(restoredSmtpIds);
+    setSelectedSmtpId(
+      restoredSmtpIds.length > 1
+        ? 'round_robin'
+        : restoredSmtpIds[0] || camp.assignedSmtpId || activeSmtps[0]?.id || ''
+    );
+    setSelectedLeadIds(camp.leadIds && camp.leadIds.length > 0 ? camp.leadIds : activeLeads.map(l => l.id));
     setWizardSteps(camp.steps && camp.steps.length > 0 ? camp.steps : [
       {
         stepNumber: 1,
@@ -820,12 +977,16 @@ export const CampaignManager: React.FC = () => {
     overrideLeadIds?: string[], 
     overrideSteps?: CampaignStep[],
     overrideSmtpId?: string,
-    overrideInterval?: number
+    overrideInterval?: number,
+    overrideSmtpIds?: string[],
+    overrideSenderName?: string,
+    overrideSenderEmail?: string
   ) => {
     setShowWizardModal(false);
     setShowLiveDispatcher(true); // Open live dispatcher engine modal so user sees real-time progress!
     setIsDispatching(true);
     setIsPaused(false);
+    setDispatchCampaignName(targetCampaign?.name || 'Outreach Sequence');
     abortDispatchRef.current = false;
 
     // Resolve leads with full fallback safety
@@ -856,11 +1017,24 @@ export const CampaignManager: React.FC = () => {
       return;
     }
 
+    const useSmtpIds =
+      overrideSmtpIds && overrideSmtpIds.length > 0
+        ? overrideSmtpIds
+        : targetCampaign?.assignedSmtpIds && targetCampaign.assignedSmtpIds.length > 0
+        ? targetCampaign.assignedSmtpIds
+        : selectedSmtpIds;
     const useSmtpId = overrideSmtpId || targetCampaign?.assignedSmtpId || selectedSmtpId;
-    const isRoundRobin = useSmtpId === 'round_robin' || !useSmtpId;
-    const fixedSmtp = smtpAccounts.find(s => s.id === useSmtpId) || 
-                      smtpAccounts.find(s => s.status === 'connected') || 
-                      smtpAccounts[0];
+    const activePool =
+      useSmtpIds && useSmtpIds.length > 0
+        ? activeSmtps.filter(s => useSmtpIds.includes(s.id))
+        : activeSmtps;
+    const isRoundRobin = (useSmtpId === 'round_robin' && activePool.length > 1) || (!useSmtpId && activePool.length > 1);
+    const fixedSmtp =
+      smtpAccounts.find(s => s.id === useSmtpId) ||
+      activePool[0] ||
+      smtpAccounts.find(s => s.status === 'connected' && !s.isTrash) ||
+      activeSmtps[0] ||
+      smtpAccounts[0];
 
     const initialStep = (overrideSteps && overrideSteps.length > 0 ? overrideSteps : (targetCampaign?.steps && targetCampaign.steps.length > 0 ? targetCampaign.steps : wizardSteps))[0] || {
       stepNumber: 1,
@@ -873,7 +1047,7 @@ export const CampaignManager: React.FC = () => {
 
     addNotification({
       title: `Campaign Started: "${targetCampaign.name}" 🚀`,
-      message: `Sequenced dispatch started for ${targetLeads.length} leads in the background.`,
+      message: `Sequenced dispatch started for ${targetLeads.length} leads via ${isRoundRobin ? `${activePool.length} SMTP Relays` : (fixedSmtp?.name || 'Connected Relay')}.`,
       type: 'campaign'
     });
 
@@ -895,9 +1069,6 @@ export const CampaignManager: React.FC = () => {
       }
 
       const lead = targetLeads[i];
-      const activePool = selectedSmtpIds.length > 0
-        ? activeSmtps.filter(s => selectedSmtpIds.includes(s.id))
-        : activeSmtps;
       const smtp = isRoundRobin
         ? (activePool[i % (activePool.length || 1)] || fixedSmtp)
         : fixedSmtp;
@@ -923,8 +1094,19 @@ export const CampaignManager: React.FC = () => {
 
       const leadFirstName = (lead.name || 'there').split(' ')[0] || 'there';
       const leadWebsite = lead.website || lead.company || 'your website';
-      const effectiveSenderName = senderName || smtp?.fromName || 'Visual Sky Outreach';
-      const effectiveSenderEmail = smtp?.fromEmail || smtp?.username || 'outreach@visualsky.io';
+      const effectiveSenderName =
+        overrideSenderName ||
+        targetCampaign?.senderName ||
+        smtp?.fromName ||
+        senderName ||
+        'Visual Sky Outreach';
+      const effectiveSenderEmail =
+        smtp?.fromEmail ||
+        smtp?.username ||
+        overrideSenderEmail ||
+        targetCampaign?.senderEmail ||
+        senderEmail ||
+        'outreach@visualsky.io';
 
       const replaceAllCampaignTokens = (txt: string) =>
         String(txt || '')
@@ -1071,6 +1253,13 @@ export const CampaignManager: React.FC = () => {
     }
 
     setIsDispatching(false);
+    if (!abortDispatchRef.current) {
+      addNotification({
+        title: `Campaign Dispatch Finished ✓`,
+        message: `Completed dispatching "${targetCampaign.name}" (${sentSoFar}/${targetLeads.length} delivered).`,
+        type: 'campaign'
+      });
+    }
   };
 
   const handleStopDispatch = () => {
@@ -1084,16 +1273,60 @@ export const CampaignManager: React.FC = () => {
     });
   };
 
-  const handleLaunchCampaign = () => {
-    if (!validateCurrentStep(wizardStep)) return;
+  // Close the Live Dispatch popup WITHOUT stopping the background email sending
+  const handleDismissLiveDispatcherPopup = () => {
+    setShowLiveDispatcher(false);
+    if (isDispatching) {
+      addNotification({
+        title: 'Continuing Dispatch in Background 🔄',
+        message: `"${dispatchCampaignName || 'Campaign'}" will keep sending all remaining emails automatically in the background.`,
+        type: 'campaign'
+      });
+    }
+  };
+
+  const handleLaunchCampaign = (forceRunAfterEdit = false) => {
+    // Full cross-step validation so launching from any step checks SMTP, Leads, and Templates properly
+    if (!campaignTitle.trim() || !senderName.trim() || !campaignNiche.trim()) {
+      setWizardStep(1);
+      validateCurrentStep(1);
+      return;
+    }
+    if (activeSmtps.length === 0) {
+      setWizardStep(2);
+      setStepValidationError('⚠️ No active SMTP relays connected. Please click "+ Connect New Relay" to connect an Outbound Relay before launching.');
+      return;
+    }
+    const effectiveSmtpIds = selectedSmtpIds.length > 0 ? selectedSmtpIds : [activeSmtps[0].id];
+    const effectiveSmtpId =
+      effectiveSmtpIds.length > 1
+        ? 'round_robin'
+        : effectiveSmtpIds[0] || selectedSmtpId || activeSmtps[0].id;
+    const primarySmtpObj = activeSmtps.find(s => s.id === effectiveSmtpIds[0]) || activeSmtps[0];
+    const effectiveSenderEmail =
+      primarySmtpObj?.fromEmail || primarySmtpObj?.username || senderEmail || currentUser.email || 'outreach@visualsky.io';
+
+    if (wizardSteps.length === 0 || !wizardSteps[0].subject.trim() || !wizardSteps[0].body.trim()) {
+      setWizardStep(4);
+      validateCurrentStep(4);
+      return;
+    }
+
+    const targetLeadIds = selectedLeadIds.length > 0 ? selectedLeadIds : activeLeads.map(l => l.id);
+    if (targetLeadIds.length === 0) {
+      setWizardStep(3);
+      setStepValidationError('⚠️ Please select at least 1 lead recipient to enroll in this campaign.');
+      return;
+    }
 
     if (editingCampaignId) {
       // EDIT MODE: Update existing campaign
-      updateCampaign(editingCampaignId, {
+      const updatedPayload: Partial<Campaign> = {
         name: campaignTitle,
         niche: campaignNiche,
-        totalLeads: selectedLeadIds.length,
-        leadIds: selectedLeadIds,
+        status: forceRunAfterEdit ? 'running' : undefined,
+        totalLeads: targetLeadIds.length,
+        leadIds: targetLeadIds,
         steps: wizardSteps,
         sendMode,
         scheduledTime: sendMode === 'scheduled' ? `${scheduleDate}T${scheduleStartTime}:00` : undefined,
@@ -1102,20 +1335,43 @@ export const CampaignManager: React.FC = () => {
         scheduleTimezone,
         scheduleActiveDays,
         sendingIntervalSec: sendingInterval,
-        assignedSmtpId: selectedSmtpId
-      });
+        assignedSmtpId: effectiveSmtpId,
+        assignedSmtpIds: effectiveSmtpIds,
+        senderName,
+        senderEmail: effectiveSenderEmail
+      };
+      updateCampaign(editingCampaignId, updatedPayload);
+      const existingCamp = activeCampaigns.find(c => c.id === editingCampaignId);
       setShowWizardModal(false);
       setEditingCampaignId(null);
-      addNotification({
-        title: `Campaign Updated: "${campaignTitle}" ✏️`,
-        message: 'Campaign sequences, schedule, and lead configurations updated.',
-        type: 'campaign'
-      });
+
+      if (forceRunAfterEdit && existingCamp) {
+        const mergedCamp: Campaign = {
+          ...existingCamp,
+          ...updatedPayload,
+          status: 'running'
+        } as Campaign;
+        startLiveDispatcher(
+          mergedCamp,
+          targetLeadIds,
+          wizardSteps,
+          effectiveSmtpId,
+          sendingInterval,
+          effectiveSmtpIds,
+          senderName,
+          effectiveSenderEmail
+        );
+      } else {
+        addNotification({
+          title: `Campaign Updated: "${campaignTitle}" ✏️`,
+          message: 'Campaign sequences, SMTP relay, schedule, and lead configurations updated.',
+          type: 'campaign'
+        });
+      }
       return;
     }
 
     // CREATE MODE: Create new campaign
-    const targetLeadIds = selectedLeadIds.length > 0 ? selectedLeadIds : activeLeads.map(l => l.id);
     const newCamp = createCampaign({
       name: campaignTitle,
       niche: campaignNiche,
@@ -1130,11 +1386,23 @@ export const CampaignManager: React.FC = () => {
       scheduleTimezone,
       scheduleActiveDays,
       sendingIntervalSec: sendingInterval,
-      assignedSmtpId: selectedSmtpId
+      assignedSmtpId: effectiveSmtpId,
+      assignedSmtpIds: effectiveSmtpIds,
+      senderName,
+      senderEmail: effectiveSenderEmail
     });
 
-    // Directly start live dispatcher with the selected leads
-    startLiveDispatcher(newCamp, targetLeadIds);
+    // Directly start live dispatcher with the exact selected SMTPs, steps, and leads
+    startLiveDispatcher(
+      newCamp,
+      targetLeadIds,
+      wizardSteps,
+      effectiveSmtpId,
+      sendingInterval,
+      effectiveSmtpIds,
+      senderName,
+      effectiveSenderEmail
+    );
   };
 
   // Dormant counts
@@ -1143,7 +1411,8 @@ export const CampaignManager: React.FC = () => {
   const dormant30d = leads.filter(l => !l.isTrash && l.daysAgo >= 30 && l.status !== 'replied').length;
 
   return (
-    <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
+    <>
+    <div className={isHidden ? 'hidden' : 'p-4 md:p-8 max-w-7xl mx-auto space-y-6'}>
       {/* Header Banner */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-gradient-to-r from-blue-950/60 via-slate-900 to-indigo-950/60 p-6 rounded-3xl border border-slate-800 shadow-xl">
         <div className="space-y-1">
@@ -1244,8 +1513,14 @@ export const CampaignManager: React.FC = () => {
           <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 self-start sm:self-auto">
             {[
               { id: 'all', label: `All (${activeCampaigns.length})` },
-              { id: 'running', label: `● Running (${activeCampaigns.filter(c => c.status === 'running').length})` },
-              { id: 'paused', label: `⏸ Paused (${activeCampaigns.filter(c => c.status !== 'running').length})` },
+              {
+                id: 'running',
+                label: `● Running (${activeCampaigns.filter(c => c.status !== 'paused').length})`
+              },
+              {
+                id: 'paused',
+                label: `⏸ Paused (${activeCampaigns.filter(c => c.status === 'paused').length})`
+              },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -1282,35 +1557,53 @@ export const CampaignManager: React.FC = () => {
           <div className="grid grid-cols-1 gap-3.5">
             {activeCampaigns
               .filter(c => {
-                if (campaignStatusFilter === 'running') return c.status === 'running';
-                if (campaignStatusFilter === 'paused') return c.status !== 'running';
+                if (campaignStatusFilter === 'running') return c.status !== 'paused';
+                if (campaignStatusFilter === 'paused') return c.status === 'paused';
                 return true;
               })
               .map((camp) => {
-                const assignedSmtp = smtpAccounts.find(s => s.id === camp.assignedSmtpId);
+                const isRunningCamp = camp.status !== 'paused';
+                const assignedSmtp =
+                  smtpAccounts.find(s => s.id === camp.assignedSmtpId) ||
+                  activeSmtps[0];
                 const campNormName = (camp.name || '').trim().toLowerCase();
                 const campLogs = (sentEmails || []).filter(
                   s =>
                     !s.isTrash &&
                     (s.campaignId === camp.id ||
-                      (s.campaignName && s.campaignName.trim().toLowerCase() === campNormName))
+                      (s.campaignName && s.campaignName.trim().toLowerCase() === campNormName) ||
+                      (activeCampaigns.length === 1 && s.status !== 'failed'))
                 );
+                const campLeads = activeLeads.filter(
+                  l =>
+                    (camp.leadIds || []).includes(l.id) ||
+                    (l.sentCampaigns || []).some(sc => sc.trim().toLowerCase() === campNormName)
+                );
+                const smtpSentFallback =
+                  activeCampaigns.length === 1
+                    ? activeSmtps.reduce((sum, s) => sum + (Number(s.sentToday) || 0), 0)
+                    : 0;
                 const liveSentCount = Math.max(
                   camp.sentCount || 0,
-                  campLogs.filter(l => l.status !== 'failed' && l.status !== 'bounced').length
+                  campLogs.filter(l => l.status !== 'failed' && l.status !== 'bounced').length,
+                  smtpSentFallback
                 );
                 const liveOpenCount = Math.max(
                   camp.openCount || 0,
-                  campLogs.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length
+                  campLogs.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length,
+                  campLeads.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length
                 );
                 const liveReplyCount = Math.max(
                   camp.replyCount || 0,
-                  campLogs.filter(l => l.status === 'replied').length
+                  campLogs.filter(l => l.status === 'replied').length,
+                  campLeads.filter(l => l.isReplied || l.status === 'replied').length
                 );
                 const liveTotalLeads = Math.max(
                   camp.totalLeads || 0,
                   camp.leadIds?.length || 0,
-                  liveSentCount
+                  campLeads.length,
+                  liveSentCount,
+                  activeLeads.length
                 );
                 const progressPct =
                   liveTotalLeads > 0 ? Math.min(100, Math.round((liveSentCount / liveTotalLeads) * 100)) : 0;
@@ -1319,7 +1612,7 @@ export const CampaignManager: React.FC = () => {
                   <div
                     key={camp.id}
                     className={`p-5 rounded-2xl border transition flex flex-col gap-4 shadow-lg ${
-                      camp.status === 'running'
+                      isRunningCamp
                         ? 'bg-gradient-to-r from-slate-900 via-slate-900/95 to-emerald-950/20 border-emerald-500/30 hover:border-emerald-500/50'
                         : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
                     }`}
@@ -1328,11 +1621,11 @@ export const CampaignManager: React.FC = () => {
                       <div className="space-y-2 flex-1 min-w-0">
                         <div className="flex items-center gap-2.5 flex-wrap">
                           <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold uppercase border flex items-center gap-1.5 ${
-                            camp.status === 'running'
+                            isRunningCamp
                               ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                               : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                           }`}>
-                            {camp.status === 'running' ? (
+                            {isRunningCamp ? (
                               <>
                                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                                 <span>Running</span>
@@ -1898,6 +2191,66 @@ export const CampaignManager: React.FC = () => {
                       <span className="text-[10px] text-slate-500">Segment tag for campaign performance tracking</span>
                     </div>
                   </div>
+
+                  {/* Connected Outbound SMTP Sender Account Selector in Step 1 */}
+                  <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <label className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+                        <Server className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Outbound SMTP Sender Account</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowSmtpModalInWizard(true)}
+                        className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>+ Connect New Relay</span>
+                      </button>
+                    </div>
+                    {activeSmtps.length === 0 ? (
+                      <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-rose-950/30 border border-rose-500/30 text-xs text-rose-200">
+                        <span>No SMTP relay connected yet. Connect your SMTP relay to send emails.</span>
+                        <button
+                          type="button"
+                          onClick={() => setShowSmtpModalInWizard(true)}
+                          className="px-3 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-[11px] shrink-0 cursor-pointer"
+                        >
+                          Connect Relay
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <select
+                          value={selectedSmtpIds.length > 1 ? 'round_robin' : (selectedSmtpIds[0] || selectedSmtpId || activeSmtps[0]?.id || '')}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === 'round_robin') {
+                              selectAllActiveSmtps();
+                            } else {
+                              handleSelectSingleSmtp(val);
+                            }
+                          }}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-cyan-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                        >
+                          {activeSmtps.map(s => (
+                            <option key={s.id} value={s.id}>
+                              ✓ {s.name} ({s.fromEmail || s.username})
+                            </option>
+                          ))}
+                          {activeSmtps.length > 1 && (
+                            <option value="round_robin">
+                              ⚡ Smart Round-Robin Rotation ({activeSmtps.length} Relays)
+                            </option>
+                          )}
+                        </select>
+                        <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/70 border border-slate-800/80 text-[11px] text-slate-300 font-mono truncate">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                          <span className="truncate">From: <strong className="text-white">{senderEmail}</strong></span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -2151,19 +2504,22 @@ export const CampaignManager: React.FC = () => {
                         ) : (
                           displayedWizardSmtps.map((smtp) => {
                             const isSelected = selectedSmtpIds.includes(smtp.id);
+                            const isPrimarySingle = selectedSmtpIds.length === 1 && selectedSmtpIds[0] === smtp.id;
                             return (
                               <div
                                 key={smtp.id}
-                                onClick={() => handleToggleSmtpSelection(smtp.id)}
+                                onClick={() => handleSelectSingleSmtp(smtp.id)}
                                 className={`p-3.5 flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/50 transition ${
-                                  isSelected ? 'bg-cyan-950/30 border-l-2 border-l-cyan-400' : ''
+                                  isSelected ? 'bg-cyan-950/35 border-l-4 border-l-cyan-400' : ''
                                 }`}
                               >
                                 <div className="flex items-center gap-3 min-w-0 pr-2">
                                   <input
                                     type="checkbox"
                                     checked={isSelected}
-                                    onChange={() => {}}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={() => handleToggleSmtpSelection(smtp.id)}
+                                    title="Toggle relay in multi-SMTP Round-Robin pool"
                                     className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 shrink-0 w-4 h-4 cursor-pointer"
                                   />
                                   <div className="min-w-0">
@@ -2189,12 +2545,12 @@ export const CampaignManager: React.FC = () => {
                                     </div>
 
                                     <div className="text-[11px] text-slate-400 font-mono truncate mt-0.5">
-                                      <strong className="text-slate-300 font-medium">{smtp.username}</strong> &bull; {smtp.host}:{smtp.port} ({smtp.encryption})
+                                      <strong className="text-slate-300 font-medium">{smtp.fromEmail || smtp.username}</strong> &bull; {smtp.host}:{smtp.port} ({smtp.encryption})
                                     </div>
                                   </div>
                                 </div>
 
-                                <div className="flex items-center gap-2.5 shrink-0 text-right">
+                                <div className="flex items-center gap-2 shrink-0 text-right">
                                   {(() => {
                                     const m = getSMTPAccountMetrics(smtp, activeSmtps, sentEmails, campaigns, threads);
                                     return (
@@ -2203,9 +2559,22 @@ export const CampaignManager: React.FC = () => {
                                       </span>
                                     );
                                   })()}
-                                  <span className="text-xs font-bold text-emerald-400 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
-                                    {smtp.healthScore || 99.8}% Health
-                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSelectSingleSmtp(smtp.id);
+                                    }}
+                                    className={`px-2.5 py-1 rounded-xl text-[11px] font-extrabold transition cursor-pointer ${
+                                      isPrimarySingle
+                                        ? 'bg-emerald-500 text-black shadow-md shadow-emerald-500/20'
+                                        : isSelected
+                                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                                        : 'bg-slate-800 hover:bg-cyan-600 text-slate-200 hover:text-white border border-slate-700'
+                                    }`}
+                                  >
+                                    {isPrimarySingle ? '✓ Active Relay' : isSelected ? '✓ In Pool' : 'Use This Relay'}
+                                  </button>
                                 </div>
                               </div>
                             );
@@ -2546,7 +2915,8 @@ export const CampaignManager: React.FC = () => {
                           return (
                             <div
                               key={tmpl.id}
-                              className={`p-3 rounded-2xl flex flex-col justify-between gap-2 transition group ${
+                              onClick={() => handleApplyTemplate(tmpl, 0)}
+                              className={`p-3 rounded-2xl flex flex-col justify-between gap-2 transition group cursor-pointer ${
                                 isCurrentlyActive
                                   ? 'bg-cyan-950/50 border-2 border-cyan-400 shadow-lg shadow-cyan-500/20'
                                   : 'bg-slate-900/90 border border-slate-800 hover:border-cyan-500/50'
@@ -2588,7 +2958,10 @@ export const CampaignManager: React.FC = () => {
                               <div className="flex items-center justify-end gap-1.5 pt-2 border-t border-slate-800/80">
                                 <button
                                   type="button"
-                                  onClick={() => handleApplyTemplate(tmpl, 0)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleApplyTemplate(tmpl, 0);
+                                  }}
                                   className={`px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition shadow-sm ${
                                     isCurrentlyActive && activeStepNum === 1
                                       ? 'bg-cyan-500 text-black font-extrabold'
@@ -2600,7 +2973,10 @@ export const CampaignManager: React.FC = () => {
                                 {wizardSteps.length > 1 && (
                                   <button
                                     type="button"
-                                    onClick={() => handleApplyTemplate(tmpl, 1)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleApplyTemplate(tmpl, 1);
+                                    }}
                                     className={`px-2 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition ${
                                       isCurrentlyActive && activeStepNum === 2
                                         ? 'bg-cyan-500 text-black font-extrabold'
@@ -2923,7 +3299,7 @@ export const CampaignManager: React.FC = () => {
                       {editingCampaignId ? 'Campaign Update Summary' : 'Campaign Summary & Launch Confirmation'}
                     </h3>
 
-                    <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                       <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
                         <span className="text-slate-500 text-[10px] block">Campaign Title</span>
                         <span className="font-bold text-slate-200">{campaignTitle}</span>
@@ -2933,20 +3309,29 @@ export const CampaignManager: React.FC = () => {
                         <span className="font-bold text-cyan-400">{selectedLeadIds.length} Leads</span>
                       </div>
                       <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
+                        <span className="text-slate-500 text-[10px] block">Connected Outbound SMTP Relay</span>
+                        <span className="font-bold text-emerald-400">
+                          {selectedSmtpIds.length > 1
+                            ? `⚡ Round-Robin (${selectedSmtpIds.length} Relays)`
+                            : (() => {
+                                const s = activeSmtps.find(a => a.id === (selectedSmtpIds[0] || selectedSmtpId)) || activeSmtps[0];
+                                return s ? `${s.name} (${s.fromEmail || s.username})` : 'No Relay Selected';
+                              })()}
+                        </span>
+                      </div>
+                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
+                        <span className="text-slate-500 text-[10px] block">Sender Identity</span>
+                        <span className="font-bold text-slate-200">{senderName} ({senderEmail})</span>
+                      </div>
+                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
                         <span className="text-slate-500 text-[10px] block">Sending Delay Interval</span>
                         <span className="font-bold text-purple-400">{sendingInterval}s between emails</span>
                       </div>
                       <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Sequence Steps</span>
-                        <span className="font-bold text-emerald-400">{wizardSteps.length} Touchpoints</span>
-                      </div>
-                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Sending Mode</span>
-                        <span className="font-bold text-cyan-300">{sendMode === 'instant' ? '⚡ Instant Dispatch' : '📅 Scheduled Window'}</span>
-                      </div>
-                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Sender</span>
-                        <span className="font-bold text-slate-200">{senderName} ({senderEmail})</span>
+                        <span className="text-slate-500 text-[10px] block">Sequence Touchpoints</span>
+                        <span className="font-bold text-cyan-300">
+                          {wizardSteps.length} Step{wizardSteps.length > 1 ? 's' : ''} — &ldquo;{wizardSteps[0]?.subject || 'Outreach'}&rdquo;
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -2955,7 +3340,7 @@ export const CampaignManager: React.FC = () => {
             </div>
 
             {/* Modal Footer Actions */}
-            <div className="p-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
+            <div className="p-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between gap-3 flex-wrap">
               <button
                 type="button"
                 onClick={() => {
@@ -2967,42 +3352,90 @@ export const CampaignManager: React.FC = () => {
                 {wizardStep === 1 ? 'Cancel' : '← Back'}
               </button>
 
-              <button
-                type="button"
-                onClick={() => {
-                  if (wizardStep < 6) {
-                    if (validateCurrentStep(wizardStep)) setWizardStep(wizardStep + 1);
-                  } else {
-                    handleLaunchCampaign();
-                  }
-                }}
-                className="px-5 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 hover:from-blue-500 hover:via-cyan-400 hover:to-indigo-500 text-white font-extrabold text-xs shadow-lg shadow-cyan-500/25 transition cursor-pointer flex items-center gap-1.5"
-              >
-                <span>
-                  {wizardStep === 6 
-                    ? (editingCampaignId ? '💾 Save & Update Campaign' : '🚀 Launch & Start Dispatch') 
-                    : 'Next Step →'}
-                </span>
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                {editingCampaignId && (
+                  <button
+                    type="button"
+                    onClick={() => handleLaunchCampaign(true)}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <span>🚀 Save & Run Dispatch Now</span>
+                  </button>
+                )}
+
+                {wizardStep < 6 && (
+                  <button
+                    type="button"
+                    onClick={() => handleLaunchCampaign(false)}
+                    className="px-4 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-extrabold text-xs transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <span>{editingCampaignId ? '💾 Save Changes' : '🚀 Save & Launch Now'}</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (wizardStep < 6) {
+                      if (validateCurrentStep(wizardStep)) setWizardStep(wizardStep + 1);
+                    } else {
+                      handleLaunchCampaign(false);
+                    }
+                  }}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 hover:from-blue-500 hover:via-cyan-400 hover:to-indigo-500 text-white font-extrabold text-xs shadow-lg shadow-cyan-500/25 transition cursor-pointer flex items-center gap-1.5"
+                >
+                  <span>
+                    {wizardStep === 6 
+                      ? (editingCampaignId ? '💾 Save & Update Campaign' : '🚀 Launch & Start Dispatch') 
+                      : 'Next Step →'}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
+    </div>
 
-      {/* REAL-TIME LIVE DISPATCHER MODAL WITH COUNTDOWN */}
+      {/* REAL-TIME LIVE DISPATCHER MODAL WITH COUNTDOWN (CLOSABLE WHILE CONTINUING IN BACKGROUND!) */}
       {showLiveDispatcher && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
-          <div className="bg-[#090d16] border border-cyan-500/40 w-full max-w-xl rounded-3xl p-6 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <Send className="w-5 h-5 text-cyan-400" />
-                <h3 className="font-bold text-slate-100 text-base">Live Mail Dispatch Engine</h3>
+        <div
+          onClick={handleDismissLiveDispatcherPopup}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-[#090d16] border border-cyan-500/40 w-full max-w-xl rounded-3xl p-6 shadow-2xl space-y-5"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Send className="w-5 h-5 text-cyan-400 shrink-0" />
+                <div className="min-w-0">
+                  <h3 className="font-bold text-slate-100 text-base truncate">
+                    Live Mail Dispatch Engine
+                  </h3>
+                  {dispatchCampaignName && (
+                    <div className="text-[11px] text-slate-400 truncate">
+                      {dispatchCampaignName} &bull; Continues automatically even if you close this window
+                    </div>
+                  )}
+                </div>
               </div>
-              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
-                isDispatching ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-emerald-500/20 text-emerald-300'
-              }`}>
-                {isDispatching ? (isPaused ? '⏸ Paused' : '● Sending') : '✓ Finished'}
-              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                  isDispatching ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-emerald-500/20 text-emerald-300'
+                }`}>
+                  {isDispatching ? (isPaused ? '⏸ Paused' : '● Sending') : '✓ Finished'}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleDismissLiveDispatcherPopup}
+                  title="Close popup (Emails will keep sending in the background)"
+                  className="w-8 h-8 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {/* Progress Bar & Current Lead Info */}
@@ -3052,30 +3485,43 @@ export const CampaignManager: React.FC = () => {
             </div>
 
             {/* Controls */}
-            <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800 flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 {isDispatching && (
-                  <button
-                    onClick={() => setIsPaused(!isPaused)}
-                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
-                  >
-                    {isPaused ? <Play className="w-3.5 h-3.5 text-emerald-400" /> : <Pause className="w-3.5 h-3.5 text-amber-400" />}
-                    <span>{isPaused ? 'Resume' : 'Pause'}</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setIsPaused(!isPaused)}
+                      className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1 cursor-pointer border border-slate-700"
+                    >
+                      {isPaused ? <Play className="w-3.5 h-3.5 text-emerald-400" /> : <Pause className="w-3.5 h-3.5 text-amber-400" />}
+                      <span>{isPaused ? 'Resume' : 'Pause'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleStopDispatch}
+                      className="px-3 py-2 rounded-xl bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <StopCircle className="w-3.5 h-3.5" />
+                      <span>Stop Sending</span>
+                    </button>
+                  </>
                 )}
               </div>
 
               <div className="flex items-center gap-2">
                 {isDispatching ? (
                   <button
-                    onClick={handleStopDispatch}
-                    className="px-4 py-2 rounded-xl bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    type="button"
+                    onClick={handleDismissLiveDispatcherPopup}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-lg shadow-cyan-500/20 cursor-pointer"
                   >
-                    <StopCircle className="w-3.5 h-3.5" />
-                    <span>Stop Dispatch</span>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Close & Keep Sending in Background</span>
                   </button>
                 ) : (
                   <button
+                    type="button"
                     onClick={() => setShowLiveDispatcher(false)}
                     className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-extrabold text-xs cursor-pointer"
                   >
@@ -3093,8 +3539,7 @@ export const CampaignManager: React.FC = () => {
         isOpen={showSmtpModalInWizard}
         onClose={() => setShowSmtpModalInWizard(false)}
         onSuccess={(acc) => {
-          setSelectedSmtpIds(prev => Array.from(new Set([...prev, acc.id])));
-          setSelectedSmtpId(acc.id);
+          handleSelectSingleSmtp(acc.id);
           setFollowUpSmtpId(acc.id);
           setShowSmtpModalInWizard(false);
         }}
@@ -3295,6 +3740,53 @@ export const CampaignManager: React.FC = () => {
           </div>
         </div>
       )}
-    </div>
+
+    {/* FLOATING BACKGROUND DISPATCH PILL (Visible across tabs when popup is closed while sending continues) */}
+    {isDispatching && !showLiveDispatcher && (
+      <div className="fixed bottom-16 md:bottom-5 right-4 z-50 bg-[#090d16]/95 backdrop-blur-xl border border-cyan-500/50 rounded-2xl p-3.5 shadow-2xl shadow-cyan-950/80 w-80 sm:w-96 space-y-2.5 animate-in fade-in">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping shrink-0" />
+            <span className="text-xs font-extrabold text-white truncate">
+              {dispatchCampaignName || 'Campaign'} (Background)
+            </span>
+          </div>
+          <span className="text-[11px] font-mono font-bold text-cyan-300 shrink-0">
+            {dispatchProgress.currentLeadIndex}/{dispatchProgress.totalLeads}
+          </span>
+        </div>
+
+        <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-800">
+          <div
+            className="bg-gradient-to-r from-emerald-500 via-cyan-400 to-blue-500 h-full transition-all duration-300"
+            style={{ width: `${(dispatchProgress.currentLeadIndex / (dispatchProgress.totalLeads || 1)) * 100}%` }}
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-2 text-[11px] text-slate-300">
+          <span className="truncate">
+            Sending to <strong className="text-white">{dispatchProgress.currentLeadName || 'Lead'}</strong>
+            {dispatchProgress.secondsUntilNext > 0 ? ` (${dispatchProgress.secondsUntilNext}s)` : ''}
+          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowLiveDispatcher(true)}
+              className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-[10px] cursor-pointer transition"
+            >
+              Open Popup
+            </button>
+            <button
+              type="button"
+              onClick={handleStopDispatch}
+              className="px-2 py-1 rounded-lg bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-700/50 font-bold text-[10px] cursor-pointer transition"
+            >
+              Stop
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 };

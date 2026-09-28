@@ -221,7 +221,7 @@ const MainContent: React.FC = () => {
       case 'outbox':
         return <SentMailsTracker onOpenSendMail={(lead) => handleOpenSendMail(lead)} />;
       case 'campaigns':
-        return <CampaignManager />;
+        return null;
       case 'templates':
         return <TemplateManager />;
       case 'analytics':
@@ -239,6 +239,9 @@ const MainContent: React.FC = () => {
     }
   };
 
+  const isCampaignsRestricted =
+    currentUser.role !== 'owner' && currentUser.permissions?.campaignsEnabled === false;
+
   return (
     <div className="h-screen w-full bg-[#080c14] text-slate-100 flex flex-col overflow-hidden selection:bg-cyan-500/30 selection:text-cyan-200">
       {/* Top Navbar */}
@@ -255,6 +258,7 @@ const MainContent: React.FC = () => {
         <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 pb-20 md:pb-6 relative">
           <div className="min-h-full">
             {renderActiveView()}
+            <CampaignManager isHidden={activeTab !== 'campaigns' || isCampaignsRestricted} />
           </div>
         </main>
       </div>
