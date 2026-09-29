@@ -15,7 +15,10 @@ import {
   Globe, 
   ShieldCheck, 
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  HardDrive,
+  FolderOpen,
+  ExternalLink
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -43,10 +46,21 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
     changeUserPassword, 
     logout, 
     requestLogout,
-    addNotification 
+    addNotification,
+    driveStorageSettings,
+    updateDriveStorageSettings
   } = useApp();
 
-  const [activeSubTab, setActiveSubTab] = useState<'profile' | 'avatar' | 'security'>('profile');
+  const [activeSubTab, setActiveSubTab] = useState<'profile' | 'avatar' | 'security' | 'drive'>('profile');
+  const [driveFolderUrl, setDriveFolderUrl] = useState(driveStorageSettings.folderUrl || '');
+  const [driveFolderName, setDriveFolderName] = useState(driveStorageSettings.folderName || 'Visual Sky Email Attachments');
+  const [driveAppsScriptUrl, setDriveAppsScriptUrl] = useState(driveStorageSettings.appsScriptWebAppUrl || '');
+
+  useEffect(() => {
+    setDriveFolderUrl(driveStorageSettings.folderUrl || '');
+    setDriveFolderName(driveStorageSettings.folderName || 'Visual Sky Email Attachments');
+    setDriveAppsScriptUrl(driveStorageSettings.appsScriptWebAppUrl || '');
+  }, [driveStorageSettings.folderUrl, driveStorageSettings.folderName, driveStorageSettings.appsScriptWebAppUrl]);
 
   // Form Fields
   const [name, setName] = useState(currentUser.name || '');
@@ -213,6 +227,19 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
           >
             <Lock className="w-3.5 h-3.5" />
             <span>Password &amp; Security</span>
+          </button>
+
+          <button 
+            type="button" 
+            onClick={() => setActiveSubTab('drive')}
+            className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
+              activeSubTab === 'drive'
+                ? 'border-emerald-400 text-emerald-300 font-black'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
+            <span>☁️ Google Drive Folder</span>
           </button>
         </div>
 
@@ -512,6 +539,108 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
 
               <div className="p-3 bg-amber-950/40 border border-amber-500/30 rounded-xl text-amber-300 text-[11px]">
                 💡 Tip: Never share your master password or app passwords. Keep 2FA enabled on Google Workspace.
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: Google Drive Attachment Storage */}
+          {activeSubTab === 'drive' && (
+            <div className="space-y-4">
+              <div className="p-3.5 bg-emerald-950/25 border border-emerald-500/30 rounded-2xl space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-emerald-300 font-extrabold text-xs">
+                    <HardDrive className="w-4 h-4 text-emerald-400" />
+                    <span>Google Drive Attachment Cloud (0 KB Hosting Disk)</span>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
+                    driveStorageSettings.folderUrl
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  }`}>
+                    {driveStorageSettings.folderUrl ? '✓ Linked' : 'Not Set'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  ইনবক্স বা মেইলে যেকোনো ফাইল Attach করলে সেটি আপনার হোস্টিং সার্ভারে জায়গা না নিয়ে সরাসরি আপনার Google Drive ফোল্ডারের সাথে যুক্ত থাকবে। আপনি যেকোনো সময় নিচের লিংক পরিবর্তন করতে পারবেন।
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                  Google Drive Shared Folder Link <span className="text-emerald-400">*</span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={driveFolderUrl}
+                    onChange={(e) => setDriveFolderUrl(e.target.value)}
+                    placeholder="https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz?usp=sharing"
+                    className="flex-1 px-3 py-2 bg-slate-900 border border-slate-800 focus:border-emerald-400 rounded-xl text-slate-100 text-xs focus:outline-none font-mono"
+                  />
+                  {driveFolderUrl.trim() && (
+                    <a
+                      href={driveFolderUrl.trim()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-300 rounded-xl border border-slate-700 flex items-center gap-1 font-bold text-[11px] shrink-0"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" /> Open
+                    </a>
+                  )}
+                </div>
+                {driveStorageSettings.folderId && (
+                  <p className="text-[10px] text-emerald-400 font-mono mt-1">
+                    ✓ Detected Folder ID: {driveStorageSettings.folderId}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                  Folder Display Name
+                </label>
+                <input
+                  type="text"
+                  value={driveFolderName}
+                  onChange={(e) => setDriveFolderName(e.target.value)}
+                  placeholder="Visual Sky Email Attachments"
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-emerald-400 rounded-xl text-slate-100 text-xs focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                  Google Apps Script Auto-Upload Bridge URL (Optional)
+                </label>
+                <input
+                  type="url"
+                  value={driveAppsScriptUrl}
+                  onChange={(e) => setDriveAppsScriptUrl(e.target.value)}
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-cyan-400 rounded-xl text-slate-100 text-xs focus:outline-none font-mono"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Smart Inbox-এর Google Drive সেকশন থেকে ১-ক্লিকে স্ক্রিপ্ট কপি করে দিলে ফাইল অটোমেটিক আপনার ফোল্ডারে তৈরি হবে।
+                </p>
+              </div>
+
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateDriveStorageSettings({
+                      folderUrl: driveFolderUrl.trim(),
+                      folderName: driveFolderName.trim() || 'Visual Sky Email Attachments',
+                      appsScriptWebAppUrl: driveAppsScriptUrl.trim(),
+                      autoAttachDriveLinkInEmail: true,
+                    });
+                    confetti({ particleCount: 35, spread: 60, origin: { y: 0.7 } });
+                  }}
+                  className="flex-1 py-2.5 px-4 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-black rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <FolderOpen className="w-4 h-4" />
+                  <span>Save / Change Google Drive Folder Link</span>
+                </button>
               </div>
             </div>
           )}

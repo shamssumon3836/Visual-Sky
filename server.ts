@@ -78,7 +78,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '15mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 // Prevent raw HTML SyntaxErrors from broken or malformed client JSON
 app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -117,6 +117,7 @@ const USERS_LIST_FILE = path.join(DATA_DIR, 'users_registry.json');
 const PAYMENT_SETTINGS_FILE = path.join(DATA_DIR, 'payment_settings.json');
 const SUBSCRIPTIONS_FILE = path.join(DATA_DIR, 'subscriptions_registry.json');
 const TRACKING_EVENTS_FILE = path.join(DATA_DIR, 'tracking_events.json');
+const DRIVE_STORAGE_SETTINGS_FILE = path.join(DATA_DIR, 'drive_storage_settings.json');
 const TRANSPARENT_GIF_BUFFER = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 
 const DEFAULT_PAYMENT_SETTINGS = {
@@ -4650,6 +4651,65 @@ app.post('/api/smtp/test', async (req, res) => {
   }
 });
 
+// Endpoint: Zero-Hosting Google Drive Attachment Bridge (0 KB stored on local server disk)
+app.post('/api/drive/upload', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const {
+      fileName,
+      mimeType,
+      size,
+      contentBase64,
+      folderUrl,
+      folderId,
+      appsScriptWebAppUrl
+    } = req.body || {};
+
+    const cleanFolderUrl = String(folderUrl || '').trim();
+    const cleanFolderId = String(folderId || '').trim();
+    const cleanScriptUrl = String(appsScriptWebAppUrl || '').trim();
+
+    if (cleanScriptUrl && cleanScriptUrl.startsWith('https://script.google.com/') && contentBase64) {
+      const rawBase64 = String(contentBase64).replace(/^data:[^;]+;base64,/, '');
+      try {
+        const scriptRes = await fetch(cleanScriptUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileName: fileName || 'attachment',
+            mimeType: mimeType || 'application/octet-stream',
+            size: size || 0,
+            base64: rawBase64,
+            folderId: cleanFolderId,
+            folderUrl: cleanFolderUrl
+          })
+        });
+        const scriptJson: any = await scriptRes.json().catch(() => ({}));
+        if (scriptJson && (scriptJson.fileUrl || scriptJson.url || scriptJson.webViewLink)) {
+          return res.json({
+            success: true,
+            driveFileUrl: scriptJson.fileUrl || scriptJson.url || scriptJson.webViewLink,
+            driveFolderUrl: cleanFolderUrl,
+            storedOnHosting: false
+          });
+        }
+      } catch (_bridgeErr) {}
+    }
+
+    return res.json({
+      success: true,
+      driveFileUrl: cleanFolderUrl || undefined,
+      driveFolderUrl: cleanFolderUrl || undefined,
+      storedOnHosting: false
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Google Drive routing error'
+    });
+  }
+});
+
 // Endpoint: Send Real Outbound Email via Direct HTTPS API or Nodemailer SMTP (100% Primary Inbox Optimized)
 app.post('/api/smtp/send', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
@@ -4668,7 +4728,8 @@ app.post('/api/smtp/send', async (req, res) => {
       text,
       html,
       smtpConfig,
-      trackingPixelId
+      trackingPixelId,
+      attachments
     } = req.body;
 
     if (!to || !subject) {
@@ -4801,6 +4862,40 @@ app.post('/api/smtp/send', async (req, res) => {
       ? `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`
       : `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`;
 
+    // Prepare in-memory attachments (0 KB saved on server disk) + Google Drive attachment links
+    const incomingAttachments: any[] = Array.isArray(attachments) ? attachments : [];
+    const validBinaryAttachments = incomingAttachments.filter(
+      (a: any) => a && a.name && a.contentBase64
+    );
+    const driveLinkedAttachments = incomingAttachments.filter(
+      (a: any) => a && a.name && (a.driveFileUrl || a.driveFolderUrl)
+    );
+
+    let driveLinksTextFooter = '';
+    let driveLinksHtmlFooter = '';
+    if (!isWeek1Warmup && driveLinkedAttachments.length > 0) {
+      const textItems = driveLinkedAttachments.map((a: any) => {
+        const url = a.driveFileUrl || a.driveFolderUrl;
+        return `📎 ${a.name} (Google Drive): ${url}`;
+      });
+      driveLinksTextFooter = `\n\n---\n☁️ Attached via Google Drive:\n${textItems.join('\n')}`;
+
+      const htmlItems = driveLinkedAttachments
+        .map((a: any) => {
+          const url = String(a.driveFileUrl || a.driveFolderUrl || '').replace(/"/g, '&quot;');
+          const safeName = String(a.name || 'Attachment')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+          const kb = a.size ? ` (${Math.max(1, Math.round(Number(a.size) / 1024))} KB)` : '';
+          return `<div style="margin:6px 0;padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;display:inline-block;margin-right:8px;"><a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0284c7;text-decoration:none;font-weight:600;font-size:13px;">📎 ${safeName}${kb} &bull; View on Google Drive ↗</a></div>`;
+        })
+        .join('');
+      driveLinksHtmlFooter = `<div style="margin-top:14px;padding-top:10px;border-top:1px solid #e2e8f0;">${htmlItems}</div>`;
+    }
+
+    const finalCleanTextWithDrive = `${cleanTextBody}${driveLinksTextFooter}`;
+
     // Build natural 1-to-1 human email HTML structure (matches Gmail web client native <div dir="ltr"> markup)
     let finalHtml = html ? resolveMailTokens(html) : '';
     if (!finalHtml && cleanTextBody) {
@@ -4819,12 +4914,12 @@ app.post('/api/smtp/send', async (req, res) => {
           return `<div style="margin:0 0 12px 0;">${escapedLines}</div>`;
         })
         .join('');
-      finalHtml = `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#222222;">${paragraphs}${pixelHtml}</div>`;
+      finalHtml = `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#222222;">${paragraphs}${driveLinksHtmlFooter}${pixelHtml}</div>`;
     } else if (finalHtml) {
       if (finalHtml.includes('</body>')) {
-        finalHtml = finalHtml.replace('</body>', `${pixelHtml}</body>`);
+        finalHtml = finalHtml.replace('</body>', `${driveLinksHtmlFooter}${pixelHtml}</body>`);
       } else {
-        finalHtml = `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#222222;">${finalHtml}${pixelHtml}</div>`;
+        finalHtml = `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#222222;">${finalHtml}${driveLinksHtmlFooter}${pixelHtml}</div>`;
       }
     }
 
@@ -4838,6 +4933,10 @@ app.post('/api/smtp/send', async (req, res) => {
         const resendHeaders: Record<string, string> = {};
         if (inReplyTo) resendHeaders['In-Reply-To'] = String(inReplyTo);
         if (references) resendHeaders['References'] = String(references);
+        const resendAttachments = validBinaryAttachments.map((a: any) => ({
+          filename: String(a.name),
+          content: String(a.contentBase64).replace(/^data:[^;]+;base64,/, '')
+        }));
 
         const resendRes = await fetch('https://api.resend.com/emails', {
           method: 'POST',
@@ -4849,9 +4948,10 @@ app.post('/api/smtp/send', async (req, res) => {
             from: `${senderDisplayName} <${senderEmail}>`,
             to: [derivedRecipientName ? `${derivedRecipientName} <${cleanRecipientEmail}>` : cleanRecipientEmail],
             subject: cleanSubject,
-            text: cleanTextBody,
+            text: finalCleanTextWithDrive,
             html: finalHtml || undefined,
             reply_to: effectiveReplyTo,
+            attachments: resendAttachments.length > 0 ? resendAttachments : undefined,
             headers: Object.keys(resendHeaders).length > 0 ? resendHeaders : undefined
           })
         });
@@ -4896,6 +4996,11 @@ app.post('/api/smtp/send', async (req, res) => {
         if (inReplyTo) brevoHeaders['In-Reply-To'] = String(inReplyTo);
         if (references) brevoHeaders['References'] = String(references);
 
+        const brevoAttachments = validBinaryAttachments.map((a: any) => ({
+          name: String(a.name),
+          content: String(a.contentBase64).replace(/^data:[^;]+;base64,/, '')
+        }));
+
         const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
           method: 'POST',
           headers: {
@@ -4906,9 +5011,10 @@ app.post('/api/smtp/send', async (req, res) => {
             sender: { name: senderDisplayName, email: senderEmail },
             to: [{ email: cleanRecipientEmail, name: derivedRecipientName || undefined }],
             subject: cleanSubject,
-            textContent: cleanTextBody,
+            textContent: finalCleanTextWithDrive,
             htmlContent: finalHtml || undefined,
             replyTo: { email: effectiveReplyTo, name: senderDisplayName },
+            attachment: brevoAttachments.length > 0 ? brevoAttachments : undefined,
             headers: Object.keys(brevoHeaders).length > 0 ? brevoHeaders : undefined
           })
         });
@@ -4984,14 +5090,22 @@ app.post('/api/smtp/send', async (req, res) => {
     if (inReplyTo) cleanHeaders['In-Reply-To'] = String(inReplyTo);
     if (references) cleanHeaders['References'] = String(references);
 
+    const nodemailerAttachments = validBinaryAttachments.map((a: any) => ({
+      filename: String(a.name),
+      content: String(a.contentBase64).replace(/^data:[^;]+;base64,/, ''),
+      encoding: 'base64',
+      contentType: a.mimeType || undefined
+    }));
+
     const mailOptions: any = {
       messageId: customMessageId,
       from: `"${senderDisplayName}" <${senderEmail}>`,
       to: derivedRecipientName ? `"${derivedRecipientName}" <${cleanRecipientEmail}>` : cleanRecipientEmail,
       replyTo: `"${senderDisplayName}" <${effectiveReplyTo}>`,
       subject: cleanSubject,
-      text: cleanTextBody,
+      text: finalCleanTextWithDrive,
       html: finalHtml || undefined,
+      attachments: nodemailerAttachments.length > 0 ? nodemailerAttachments : undefined,
       inReplyTo: inReplyTo || undefined,
       references: references || undefined,
       envelope: {
@@ -5377,7 +5491,15 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
                     fullText: cleanReplyText,
                     html: parsed.html || parsed.textAsHtml || '',
                     inReplyTo: parsed.inReplyTo || message.envelope?.inReplyTo || '',
-                    references: refs
+                    references: refs,
+                    attachments: Array.isArray(parsed.attachments)
+                      ? parsed.attachments.map((att: any, attIdx: number) => ({
+                          id: `imap-att-${message.uid}-${attIdx}`,
+                          name: att.filename || `attachment-${attIdx + 1}`,
+                          size: att.size || 0,
+                          mimeType: att.contentType || 'application/octet-stream'
+                        }))
+                      : []
                   };
 
                   imapUidMessageCache.set(`${userLower}::${message.uid}`, msgObj);
@@ -5427,6 +5549,153 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
     return res.status(400).json({
       success: false,
       error: `IMAP Connection Error: ${err?.message || 'Failed to authenticate with IMAP server'}`
+    });
+  }
+});
+
+// Helper: Read & Write Google Drive Attachment Folder Settings
+const getSavedDriveStorageSettings = () => {
+  const defaults = {
+    folderUrl: '',
+    folderId: '',
+    folderName: 'My Google Drive Email Attachments',
+    appsScriptWebAppUrl: '',
+    autoIncludeDriveLinkInEmail: true,
+    updatedAt: ''
+  };
+  try {
+    if (fs.existsSync(DRIVE_STORAGE_SETTINGS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(DRIVE_STORAGE_SETTINGS_FILE, 'utf-8'));
+      if (parsed && typeof parsed === 'object') {
+        return { ...defaults, ...parsed };
+      }
+    }
+  } catch {}
+  return defaults;
+};
+
+app.get('/api/drive-storage/settings', (_req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  return res.json({
+    success: true,
+    settings: getSavedDriveStorageSettings()
+  });
+});
+
+app.post('/api/drive-storage/settings', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const current = getSavedDriveStorageSettings();
+    const rawUrl = req.body?.folderUrl !== undefined ? String(req.body.folderUrl).trim() : current.folderUrl;
+    const matchFolder = rawUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    const matchIdParam = rawUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    const extractedFolderId =
+      matchFolder?.[1] ||
+      matchIdParam?.[1] ||
+      (req.body?.folderId ? String(req.body.folderId).trim() : '') ||
+      (rawUrl ? 'drive-folder-linked' : '');
+
+    const updated = {
+      ...current,
+      folderUrl: rawUrl,
+      folderId: extractedFolderId,
+      folderName:
+        req.body?.folderName !== undefined
+          ? String(req.body.folderName).trim() || 'My Google Drive Email Attachments'
+          : current.folderName,
+      appsScriptWebAppUrl:
+        req.body?.appsScriptWebAppUrl !== undefined
+          ? String(req.body.appsScriptWebAppUrl).trim()
+          : current.appsScriptWebAppUrl,
+      autoIncludeDriveLinkInEmail:
+        req.body?.autoIncludeDriveLinkInEmail !== undefined
+          ? Boolean(req.body.autoIncludeDriveLinkInEmail)
+          : current.autoIncludeDriveLinkInEmail,
+      updatedAt: new Date().toISOString()
+    };
+
+    try {
+      fs.writeFileSync(DRIVE_STORAGE_SETTINGS_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+    } catch {}
+
+    return res.json({
+      success: true,
+      settings: updated
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to save Google Drive storage settings'
+    });
+  }
+});
+
+// Zero-Hosting-Disk Google Drive Attachment Bridge
+// Never writes attached files to local hosting disk; routes to user's Google Drive folder and streams in-memory via SMTP
+app.post('/api/drive-storage/upload', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const { fileName, mimeType, size, contentBase64, folderUrl, folderId, appsScriptWebAppUrl } = req.body || {};
+    const saved = getSavedDriveStorageSettings();
+    const effectiveFolderUrl = String(folderUrl || saved.folderUrl || '').trim();
+    const matchFolder = effectiveFolderUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    const matchIdParam = effectiveFolderUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    const effectiveFolderId =
+      String(folderId || '').trim() ||
+      matchFolder?.[1] ||
+      matchIdParam?.[1] ||
+      saved.folderId ||
+      '';
+    const effectiveScriptUrl = String(appsScriptWebAppUrl || saved.appsScriptWebAppUrl || '').trim();
+
+    const canonicalFolderLink = effectiveFolderId && effectiveFolderId !== 'drive-folder-linked'
+      ? `https://drive.google.com/drive/folders/${effectiveFolderId}`
+      : effectiveFolderUrl || 'https://drive.google.com/drive/my-drive';
+
+    let driveFileUrl = canonicalFolderLink;
+    let uploadedViaBridge = false;
+
+    // If user configured an optional Google Apps Script Web App bridge, upload the binary directly into their Drive folder
+    if (effectiveScriptUrl && effectiveScriptUrl.startsWith('https://script.google.com/') && contentBase64) {
+      try {
+        const cleanBase64 = String(contentBase64).replace(/^data:[^;]+;base64,/, '');
+        const bridgeRes = await fetch(effectiveScriptUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileName: fileName || 'attachment',
+            mimeType: mimeType || 'application/octet-stream',
+            size: Number(size) || 0,
+            folderId: effectiveFolderId,
+            base64: cleanBase64
+          })
+        });
+        const rawText = await bridgeRes.text();
+        const bridgeData = rawText ? JSON.parse(rawText) : {};
+        if (bridgeData && (bridgeData.fileUrl || bridgeData.url || bridgeData.id)) {
+          driveFileUrl =
+            bridgeData.fileUrl ||
+            bridgeData.url ||
+            `https://drive.google.com/file/d/${bridgeData.id}/view?usp=sharing`;
+          uploadedViaBridge = true;
+        }
+      } catch {}
+    }
+
+    return res.json({
+      success: true,
+      fileName: fileName || 'attachment',
+      size: Number(size) || 0,
+      mimeType: mimeType || 'application/octet-stream',
+      driveFolderUrl: canonicalFolderLink,
+      driveFileUrl,
+      uploadedViaBridge,
+      zeroHostingStorage: true
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to prepare Google Drive attachment'
     });
   }
 });

@@ -14,7 +14,9 @@ import {
   SentEmailLog, 
   SimulatedReplyPayload,
   DirectSendMailPayload,
-  NotificationSettings
+  NotificationSettings,
+  EmailAttachment,
+  GoogleDriveStorageSettings
 } from '../types';
 import confetti from 'canvas-confetti';
 import { audioEngine } from '../utils/audioPlayer';
@@ -305,7 +307,9 @@ interface AppContextType {
   setThreads: React.Dispatch<React.SetStateAction<EmailThread[]>>;
   activeThreadId: string | null;
   setActiveThreadId: (id: string | null) => void;
-  sendReply: (threadId: string, replyBody: string, smtpAccountId?: string) => void;
+  sendReply: (threadId: string, replyBody: string, smtpAccountId?: string, attachments?: EmailAttachment[]) => void;
+  driveStorageSettings: GoogleDriveStorageSettings;
+  updateDriveStorageSettings: (updates: Partial<GoogleDriveStorageSettings>) => void;
   markThreadRead: (threadId: string) => void;
   toggleThreadStar: (threadId: string) => void;
   addThreadLabel: (threadId: string, label: string) => void;
@@ -1093,6 +1097,78 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
+  const [driveStorageSettings, setDriveStorageSettings] = useState<GoogleDriveStorageSettings>(() => {
+    try {
+      const saved = localStorage.getItem('visualsky_drive_storage_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch {}
+    return {
+      folderUrl: '',
+      folderId: '',
+      folderName: 'My Google Drive Attachments',
+      appsScriptWebAppUrl: '',
+      autoIncludeDriveLinkInEmail: true,
+      updatedAt: ''
+    };
+  });
+
+  useEffect(() => {
+    fetch('/api/drive-storage/settings')
+      .then(r => safeParseResponse(r, 'Drive settings fetch failed'))
+      .then(parsed => {
+        const remote = parsed.data?.settings;
+        if (parsed.ok && remote && remote.folderUrl) {
+          setDriveStorageSettings(prev => {
+            if (prev.folderUrl && prev.updatedAt && remote.updatedAt && prev.updatedAt > remote.updatedAt) {
+              return prev;
+            }
+            try {
+              localStorage.setItem('visualsky_drive_storage_settings', JSON.stringify(remote));
+            } catch {}
+            return remote;
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const updateDriveStorageSettings = (updates: Partial<GoogleDriveStorageSettings>) => {
+    setDriveStorageSettings(prev => {
+      const nextUrl = updates.folderUrl !== undefined ? updates.folderUrl.trim() : prev.folderUrl;
+      let extractedId = updates.folderId !== undefined ? updates.folderId.trim() : prev.folderId;
+      if (updates.folderUrl !== undefined) {
+        const matchFolder = nextUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+        const matchIdParam = nextUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+        extractedId = matchFolder?.[1] || matchIdParam?.[1] || (nextUrl ? 'drive-folder-linked' : '');
+      }
+      const next: GoogleDriveStorageSettings = {
+        ...prev,
+        ...updates,
+        folderUrl: nextUrl,
+        folderId: extractedId,
+        updatedAt: new Date().toISOString()
+      };
+      try {
+        localStorage.setItem('visualsky_drive_storage_settings', JSON.stringify(next));
+      } catch {}
+      if (latestWorkspaceRef.current) {
+        (latestWorkspaceRef.current as any).driveStorageSettings = next;
+      }
+      fetch('/api/drive-storage/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(next)
+      }).catch(() => {});
+      setTimeout(() => {
+        saveWorkspaceToDatabase().catch(() => {});
+      }, 150);
+      return next;
+    });
+  };
+
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const loadedWorkspaceEmailRef = useRef<string | null>(null);
   const loadedWorkspaceUserIdRef = useRef<string | null>(null);
@@ -1383,10 +1459,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (latestWorkspaceRef.current as any).columnSettings = data.columnSettings;
         }
         
-        // 11. Notification Settings Hydration
+        // 11. Notification Settings & Google Drive Storage Settings Hydration
         if (data.notificationSettings && typeof data.notificationSettings === 'object') {
           setNotificationSettings(data.notificationSettings);
           (latestWorkspaceRef.current as any).notificationSettings = data.notificationSettings;
+        }
+        if (data.driveStorageSettings && typeof data.driveStorageSettings === 'object') {
+          setDriveStorageSettings(data.driveStorageSettings);
+          try {
+            localStorage.setItem('visualsky_drive_storage_settings', JSON.stringify(data.driveStorageSettings));
+          } catch {}
+          (latestWorkspaceRef.current as any).driveStorageSettings = data.driveStorageSettings;
         }
         
         // 12. User Profile Hydration
@@ -1932,10 +2015,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Inbox Actions - Live SMTP reply dispatch + exact multi-SMTP auto-detection + thread persistence
-  const sendReply = (threadId: string, replyBody: string, explicitSmtpId?: string) => {
+  // Inbox Actions - Live SMTP reply dispatch + exact multi-SMTP auto-detection + thread persistence + Google Drive attachments
+  const sendReply = (threadId: string, replyBody: string, explicitSmtpId?: string, attachments?: EmailAttachment[]) => {
     const thread = threads.find(t => t.id === threadId);
-    if (!thread || !replyBody.trim()) return;
+    if (!thread || (!replyBody.trim() && (!attachments || attachments.length === 0))) return;
 
     const validSmtpPool = smtpAccounts.filter(s => !s.isTrash);
     const matchSmtpByEmailOrId = (idOrNull?: string, emailOrNull?: string, nameOrNull?: string) => {
@@ -2032,6 +2115,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const trackingPixelId = `px-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
+    // Strip heavy base64 from persisted message metadata so 0 KB of hosting disk space is ever consumed
+    const metadataOnlyAttachments: EmailAttachment[] | undefined =
+      Array.isArray(attachments) && attachments.length > 0
+        ? attachments.map(a => ({
+            id: a.id,
+            name: a.name,
+            size: a.size,
+            mimeType: a.mimeType,
+            driveFolderUrl: a.driveFolderUrl || driveStorageSettings.folderUrl || undefined,
+            driveFileUrl: a.driveFileUrl || driveStorageSettings.folderUrl || undefined
+          }))
+        : undefined;
+
     const newMsg: EmailMessage = {
       id: `msg-${Date.now()}`,
       threadId,
@@ -2045,6 +2141,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       subject: replySubject,
       body: resolvedBody,
       signatureHtml: undefined,
+      attachments: metadataOnlyAttachments,
       isRead: true,
       status: 'sent',
     };
@@ -2057,7 +2154,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         unreadCount: 0,
         smtpAccountId: activeSmtp?.id || target.smtpAccountId,
         smtpEmail: senderFromEmail || target.smtpEmail,
-        lastMessage: resolvedBody.slice(0, 100),
+        lastMessage: (resolvedBody || `📎 Sent ${metadataOnlyAttachments?.length || 1} attachment(s)`).slice(0, 100),
         lastMessageDate: 'Just now',
         messages: [...target.messages.map(m => ({ ...m, isRead: true })), newMsg]
       };
@@ -2080,7 +2177,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           subject: replySubject,
           text: resolvedBody,
           smtpConfig: activeSmtp,
-          trackingPixelId
+          trackingPixelId,
+          attachments: Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined
         })
       })
         .then(res => safeParseResponse(res, 'Reply send failed'))
@@ -3074,7 +3172,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             delayDays: 3,
             subject: 'Re: Quick question regarding {{company}}',
             body: `Hi {{first_name}},\n\nJust floating this to the top of your inbox in case you missed my previous note regarding {{company}}.\n\nBest,\n${primarySmtp?.fromName || currentUser.name || 'Outreach Team'}`,
-            triggerCondition: 'no_reply'
+            triggerCondition: 'no_reply_7d'
           }
         ]
       });
@@ -3766,6 +3864,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             timestamp: msgTimeFormatted,
             subject: msgSubject,
             body: replyText,
+            attachments: Array.isArray(msg.attachments) && msg.attachments.length > 0 ? msg.attachments : undefined,
             isRead: false,
             status: 'replied'
           };
@@ -4077,7 +4176,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           subject: cleanSubject,
           text: cleanBody,
           smtpConfig: smtp,
-          trackingPixelId
+          trackingPixelId,
+          attachments: Array.isArray(payload.attachments) && payload.attachments.length > 0 ? payload.attachments : undefined
         })
       });
 
@@ -4098,6 +4198,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const senderFromEmail = smtp?.fromEmail || smtp?.username || currentUser.email || 'outreach@visualsky.pro';
       const cleanedSentBody = cleanEmailBodyText(cleanBody, matchedLead?.website || resolvedCompany, resolvedCompany, resolvedName);
 
+      const metadataOnlyComposeAttachments: EmailAttachment[] | undefined =
+        Array.isArray(payload.attachments) && payload.attachments.length > 0
+          ? payload.attachments.map(a => ({
+              id: a.id,
+              name: a.name,
+              size: a.size,
+              mimeType: a.mimeType,
+              driveFolderUrl: a.driveFolderUrl || driveStorageSettings.folderUrl || undefined,
+              driveFileUrl: a.driveFileUrl || driveStorageSettings.folderUrl || undefined
+            }))
+          : undefined;
+
       // Add sent log with status strictly 'sent', openCount strictly 0, and exact smtpAccountId + senderEmail
       addSentEmailLog({
         campaignName: 'Direct Outreach Mailer',
@@ -4106,6 +4218,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recipientCompany: resolvedCompany,
         subject: cleanSubject,
         body: cleanedSentBody,
+        attachments: metadataOnlyComposeAttachments,
         smtpAccountId: smtp?.id,
         senderEmail: senderFromEmail,
         smtpAccountName: smtp?.name || 'Primary SMTP Relay',
@@ -4132,6 +4245,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           timestamp: nowFormatted,
           subject: cleanSubject,
           body: cleanedSentBody,
+          attachments: metadataOnlyComposeAttachments,
           isRead: true,
           status: 'sent'
         };
@@ -4556,6 +4670,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeThreadId,
         setActiveThreadId,
         sendReply,
+        driveStorageSettings,
+        updateDriveStorageSettings,
         markThreadRead,
         toggleThreadStar,
         addThreadLabel,

@@ -55,6 +55,28 @@ export interface Lead {
   deletedAt?: string;
 }
 
+export interface EmailAttachment {
+  id: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  driveFolderUrl?: string;
+  driveFileUrl?: string;
+  uploadedAt?: string;
+  storageProvider?: 'google_drive' | 'memory';
+  contentBase64?: string; // Used transiently in memory when sending via SMTP; never persisted to server disk
+}
+
+export interface GoogleDriveStorageSettings {
+  folderUrl: string;
+  folderId: string;
+  folderName: string;
+  appsScriptWebAppUrl?: string;
+  autoIncludeDriveLinkInEmail?: boolean;
+  autoAttachDriveLinkInEmail?: boolean;
+  updatedAt: string;
+}
+
 export interface EmailMessage {
   id: string;
   threadId: string;
@@ -68,6 +90,7 @@ export interface EmailMessage {
   subject: string;
   body: string; // Clean body without '>' prefixes
   signatureHtml?: string;
+  attachments?: EmailAttachment[];
   isRead: boolean;
   status: 'sent' | 'delivered' | 'opened' | 'replied';
 }
@@ -285,10 +308,11 @@ export interface DirectSendMailPayload {
   subject: string;
   body: string;
   senderSmtpId: string;
-  sendMode: 'instant' | 'scheduled';
+  sendMode?: 'instant' | 'scheduled';
   scheduledTime?: string;
   sendIntervalSeconds?: number;
   signatureHtml?: string;
+  attachments?: EmailAttachment[];
 }
 
 export interface SentEmailLog {
@@ -300,6 +324,7 @@ export interface SentEmailLog {
   recipientCompany: string;
   subject: string;
   body: string;
+  attachments?: EmailAttachment[];
   smtpAccountId?: string;
   senderEmail?: string;
   smtpAccountName: string;

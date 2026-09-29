@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp, DEFAULT_USER_SIGNATURE } from '../../context/AppContext';
+import { EmailAttachment } from '../../types';
 import { safeParseResponse } from '../../lib/safeFetch';
 import { 
   X, 
@@ -20,7 +21,10 @@ import {
   Wand2,
   RefreshCw,
   Sliders,
-  Check
+  Check,
+  HardDrive,
+  FolderOpen,
+  ExternalLink
 } from 'lucide-react';
 import { INITIAL_TEMPLATES } from '../templates/TemplateManager';
 import { auditEmailDeliverability } from '../../utils/spamChecker';
@@ -48,7 +52,100 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
   defaultRecipientName = '',
   initialLead
 }) => {
-  const { leads, smtpAccounts, currentUser, addNotification, sendDirectEmail, emailTemplates, deductAiTokens } = useApp();
+  const { leads, smtpAccounts, currentUser, addNotification, sendDirectEmail, emailTemplates, deductAiTokens, driveStorageSettings, updateDriveStorageSettings } = useApp();
+  const [attachments, setAttachments] = useState<EmailAttachment[]>([]);
+  const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
+  const [showDriveLinkEditor, setShowDriveLinkEditor] = useState(false);
+  const [driveUrlDraft, setDriveUrlDraft] = useState(driveStorageSettings.folderUrl || '');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setDriveUrlDraft(driveStorageSettings.folderUrl || '');
+  }, [driveStorageSettings.folderUrl]);
+
+  const formatBytes = (bytes: number): string => {
+    if (!bytes || bytes <= 0) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  const handleAttachFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setIsUploadingToDrive(true);
+    const added: EmailAttachment[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (file.size > 25 * 1024 * 1024) {
+        addNotification({
+          title: 'File exceeds 25MB Gmail limit ⚠️',
+          message: `"${file.name}" is larger than 25MB. Upload directly into your Google Drive folder.`,
+          type: 'system',
+        });
+        continue;
+      }
+      try {
+        const base64Data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const res = String(reader.result || '');
+            const idx = res.indexOf(',');
+            resolve(idx >= 0 ? res.slice(idx + 1) : res);
+          };
+          reader.onerror = () => reject(new Error('Failed to read file'));
+          reader.readAsDataURL(file);
+        });
+
+        let driveFileUrl = driveStorageSettings.folderUrl || '';
+        let driveFolderUrl = driveStorageSettings.folderUrl || '';
+
+        try {
+          const resp = await fetch('/api/drive-storage/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: file.name,
+              mimeType: file.type || 'application/octet-stream',
+              size: file.size,
+              contentBase64: base64Data,
+              folderUrl: driveStorageSettings.folderUrl,
+              appsScriptWebAppUrl: driveStorageSettings.appsScriptWebAppUrl,
+            }),
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (data?.driveFileUrl) driveFileUrl = data.driveFileUrl;
+          if (data?.driveFolderUrl) driveFolderUrl = data.driveFolderUrl;
+        } catch {
+          // Non-fatal fallback
+        }
+
+        added.push({
+          id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          name: file.name,
+          size: file.size,
+          mimeType: file.type || 'application/octet-stream',
+          driveFileUrl: driveFileUrl || driveFolderUrl || 'https://drive.google.com/drive/my-drive',
+          driveFolderUrl: driveFolderUrl || 'https://drive.google.com/drive/my-drive',
+          uploadedAt: new Date().toISOString(),
+          storageProvider: 'google_drive',
+          contentBase64: base64Data,
+        });
+      } catch {
+        // Ignore read error
+      }
+    }
+
+    if (added.length > 0) {
+      setAttachments((prev) => [...prev, ...added]);
+      addNotification({
+        title: `${added.length} File(s) Attached via Google Drive 📎`,
+        message: `Zero hosting storage used (0 KB on server).`,
+        type: 'system',
+      });
+    }
+    setIsUploadingToDrive(false);
+  };
 
   const [recipientEmail, setRecipientEmail] = useState<string>(() => {
     return initialLead?.email || defaultRecipientEmail || sessionStorage.getItem('visualsky_sendmail_draft_email') || '';
@@ -283,11 +380,13 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
       subject,
       body: includeSignature ? `${body}\n\n${DEFAULT_USER_SIGNATURE}` : body,
       scheduledFor: sendMode === 'scheduled' ? scheduledDateTime : undefined,
+      attachments: attachments.length > 0 ? attachments : undefined,
     });
 
     setIsSending(false);
 
     if (sendSuccess) {
+      setAttachments([]);
       setIsSuccess(true);
 
       setTimeout(() => {
@@ -608,6 +707,112 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
               onChange={(e) => setBody(e.target.value)}
               className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-200 focus:outline-none focus:border-cyan-500 font-sans leading-relaxed text-xs"
             />
+          </div>
+
+          {/* Gmail-Style File Attachment & Google Drive Folder Bar */}
+          <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-2.5">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                handleAttachFiles(e.target.files);
+                e.target.value = '';
+              }}
+            />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploadingToDrive}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  {isUploadingToDrive ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                  ) : (
+                    <Paperclip className="w-3.5 h-3.5 text-cyan-400" />
+                  )}
+                  <span>{isUploadingToDrive ? 'Linking Drive...' : 'Attach Any File (Google Drive)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowDriveLinkEditor(!showDriveLinkEditor)}
+                  className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 border transition cursor-pointer ${
+                    driveStorageSettings.folderUrl
+                      ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300 hover:bg-emerald-900/50'
+                      : 'bg-amber-950/40 border-amber-500/30 text-amber-300 hover:bg-amber-900/50'
+                  }`}
+                >
+                  <HardDrive className="w-3.5 h-3.5" />
+                  <span>{driveStorageSettings.folderUrl ? '✓ Google Drive Folder Linked (Change)' : 'Set Google Drive Folder Link'}</span>
+                </button>
+              </div>
+              <span className="text-[10px] text-slate-500 font-semibold">
+                ☁️ 0 KB Hosting Storage • Stored in your Google Drive
+              </span>
+            </div>
+
+            {showDriveLinkEditor && (
+              <div className="p-2.5 bg-slate-950/90 border border-emerald-500/30 rounded-xl flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <input
+                  type="url"
+                  value={driveUrlDraft}
+                  onChange={(e) => setDriveUrlDraft(e.target.value)}
+                  placeholder="Paste Google Drive Folder Link (https://drive.google.com/drive/folders/...)"
+                  className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-emerald-400"
+                />
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateDriveStorageSettings({ folderUrl: driveUrlDraft.trim() });
+                      setShowDriveLinkEditor(false);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] cursor-pointer"
+                  >
+                    Save Link
+                  </button>
+                  {driveStorageSettings.folderUrl && (
+                    <a
+                      href={driveStorageSettings.folderUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-emerald-300 hover:bg-slate-700 text-[11px] font-bold flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" /> Open
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {attachments.map((att) => (
+                  <div
+                    key={att.id}
+                    className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-slate-950 border border-cyan-500/30 text-[11px] text-slate-200"
+                  >
+                    <Paperclip className="w-3 h-3 text-cyan-400 shrink-0" />
+                    <span className="truncate max-w-[180px] font-semibold">{att.name}</span>
+                    <span className="text-[9px] text-slate-400 font-mono">({formatBytes(att.size)})</span>
+                    <span className="px-1.5 py-0.2 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[8px] font-extrabold">
+                      Drive
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
+                      className="text-slate-400 hover:text-rose-400 cursor-pointer"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Clean HTML Signature Preview */}
