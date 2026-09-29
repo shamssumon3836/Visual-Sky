@@ -80,58 +80,107 @@ export async function queryUserWorkspace(identifiers: {
     return result;
   };
 
-  // Helper to compare and smart-merge candidate records so no campaigns, SMTP accounts, or leads are ever dropped
+  // Helper to compare and smart-merge candidate records while strictly respecting permanentlyDeletedIds tombstones
+  const getLocalTombstones = (): Set<string> => {
+    const set = new Set<string>();
+    try {
+      const localDel = localStorage.getItem('visualsky_deleted_imap_msgs');
+      if (localDel) {
+        for (const id of JSON.parse(localDel)) if (id) set.add(String(id));
+      }
+    } catch {}
+    try {
+      const localPerm = localStorage.getItem('visualsky_permanently_deleted_ids');
+      if (localPerm) {
+        for (const id of JSON.parse(localPerm)) if (id) set.add(String(id));
+      }
+    } catch {}
+    return set;
+  };
+
   const considerCandidate = (candidate: any, source: 'supabase-auth' | 'supabase-table' | 'backend-db') => {
     if (!candidate || typeof candidate !== 'object') return;
     const ts = candidate.updatedAt ? new Date(candidate.updatedAt).getTime() : 1;
 
+    const deletedSet = getLocalTombstones();
+    if (Array.isArray(candidate.deletedThreadIds)) {
+      for (const id of candidate.deletedThreadIds) if (id) deletedSet.add(String(id));
+    }
+    if (Array.isArray(candidate.permanentlyDeletedIds)) {
+      for (const id of candidate.permanentlyDeletedIds) if (id) deletedSet.add(String(id));
+    }
+    if (bestData) {
+      if (Array.isArray(bestData.deletedThreadIds)) {
+        for (const id of bestData.deletedThreadIds) if (id) deletedSet.add(String(id));
+      }
+      if (Array.isArray(bestData.permanentlyDeletedIds)) {
+        for (const id of bestData.permanentlyDeletedIds) if (id) deletedSet.add(String(id));
+      }
+    }
+
+    const isAlive = (item: any) => {
+      if (!item || !item.id) return false;
+      const idStr = String(item.id);
+      if (DEMO_IDS.has(idStr) || deletedSet.has(idStr) || deletedSet.has(`thread:${idStr}`)) return false;
+      if (item.name && deletedSet.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) return false;
+      return true;
+    };
+
+    const filterAlive = (arr?: any[]) => (Array.isArray(arr) ? arr.filter(isAlive) : []);
+
     if (!bestData) {
       bestData = {
         ...candidate,
-        leads: mergeArraysById(candidate.leads, [], 'email'),
-        campaigns: mergeArraysById(candidate.campaigns, [], 'name'),
-        smtpAccounts: mergeArraysById(candidate.smtpAccounts, [], 'username'),
-        threads: mergeArraysById(candidate.threads, []),
-        sentEmails: mergeArraysById(candidate.sentEmails, [])
+        leads: filterAlive(candidate.leads),
+        campaigns: filterAlive(candidate.campaigns),
+        smtpAccounts: filterAlive(candidate.smtpAccounts),
+        emailTemplates: Array.isArray(candidate.emailTemplates) ? filterAlive(candidate.emailTemplates) : undefined,
+        threads: filterAlive(candidate.threads).filter(
+          (t: any) => !deletedSet.has(`thread:${String(t.id).replace(/-split-\d+$/, '')}`)
+        ),
+        sentEmails: filterAlive(candidate.sentEmails),
+        deletedThreadIds: Array.from(deletedSet),
+        permanentlyDeletedIds: Array.from(deletedSet)
       };
       bestSource = source;
       bestTimestamp = ts;
       return;
     }
 
-    const isNewer = ts >= bestTimestamp;
+    // Always prefer backend-db or the newer timestamp as authoritative so deleted items in older cloud backups never resurrect
+    const isNewer = source === 'backend-db' ? ts >= bestTimestamp - 5000 : ts > bestTimestamp;
     const primary = isNewer ? candidate : bestData;
     const secondary = isNewer ? bestData : candidate;
 
-    const deletedSet = new Set<string>([
-      ...(Array.isArray(primary.deletedThreadIds) ? primary.deletedThreadIds : []),
-      ...(Array.isArray(secondary.deletedThreadIds) ? secondary.deletedThreadIds : [])
-    ]);
-    try {
-      const localDel = localStorage.getItem('visualsky_deleted_imap_msgs');
-      if (localDel) {
-        for (const id of JSON.parse(localDel)) deletedSet.add(String(id));
-      }
-    } catch {}
+    const pickAuthoritative = (primArr?: any[], secArr?: any[]) => {
+      if (Array.isArray(primArr)) return filterAlive(primArr);
+      if (Array.isArray(secArr)) return filterAlive(secArr);
+      return [];
+    };
 
-    const rawThreads = Array.isArray(primary.threads) ? primary.threads : (Array.isArray(secondary.threads) ? secondary.threads : []);
-    const cleanThreads = rawThreads.filter(
-      (t: any) => t && t.id && !deletedSet.has(String(t.id)) && !deletedSet.has(`thread:${t.id}`) && !DEMO_IDS.has(String(t.id))
+    const cleanThreads = pickAuthoritative(primary.threads, secondary.threads).filter(
+      (t: any) => !deletedSet.has(`thread:${String(t.id).replace(/-split-\d+$/, '')}`)
     );
 
     bestData = {
       ...secondary,
       ...primary,
-      leads: Array.isArray(primary.leads) ? primary.leads.filter((x: any) => x && !DEMO_IDS.has(x.id)) : mergeArraysById(primary.leads, secondary.leads, 'email'),
+      leads: pickAuthoritative(primary.leads, secondary.leads),
       leadTags: mergeArraysById(primary.leadTags, secondary.leadTags, 'name'),
-      campaigns: Array.isArray(primary.campaigns) ? primary.campaigns.filter((x: any) => x && !DEMO_IDS.has(x.id)) : mergeArraysById(primary.campaigns, secondary.campaigns, 'name'),
-      smtpAccounts: mergeArraysById(primary.smtpAccounts, secondary.smtpAccounts, 'username'),
-      emailTemplates: mergeArraysById(primary.emailTemplates, secondary.emailTemplates, 'title'),
+      campaigns: pickAuthoritative(primary.campaigns, secondary.campaigns),
+      smtpAccounts: pickAuthoritative(primary.smtpAccounts, secondary.smtpAccounts),
+      emailTemplates: Array.isArray(primary.emailTemplates)
+        ? filterAlive(primary.emailTemplates)
+        : Array.isArray(secondary.emailTemplates)
+        ? filterAlive(secondary.emailTemplates)
+        : undefined,
       templateCategories: mergeArraysById(primary.templateCategories, secondary.templateCategories, 'name'),
       threads: cleanThreads,
       deletedThreadIds: Array.from(deletedSet),
-      sentEmails: Array.isArray(primary.sentEmails) ? primary.sentEmails.filter((x: any) => x && !DEMO_IDS.has(x.id)) : mergeArraysById(primary.sentEmails, secondary.sentEmails),
-      minedLeads: mergeArraysById(primary.minedLeads, secondary.minedLeads, 'email'),
+      permanentlyDeletedIds: Array.from(deletedSet),
+      userDeletedCampaigns: Boolean(primary.userDeletedCampaigns || secondary.userDeletedCampaigns),
+      sentEmails: pickAuthoritative(primary.sentEmails, secondary.sentEmails),
+      minedLeads: mergeArraysById(primary.minedLeads, secondary.minedLeads, 'email').filter(isAlive),
       userProfile: {
         ...(secondary.userProfile || {}),
         ...(primary.userProfile || {})

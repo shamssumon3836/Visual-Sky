@@ -170,12 +170,20 @@ export const TrashManager: React.FC = () => {
                     Deleted Leads ({trashLeads.length})
                   </h3>
                 </div>
-                <button
-                  onClick={handleRestoreAllLeads}
-                  className="flex items-center gap-1 text-xs font-bold text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" /> Restore All Leads
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleRestoreAllLeads}
+                    className="flex items-center gap-1 text-xs font-bold text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Restore All Leads
+                  </button>
+                  <button
+                    onClick={() => bulkPermanentDeleteLeads(trashLeads.map(l => l.id))}
+                    className="flex items-center gap-1 text-xs font-bold text-rose-400 hover:text-rose-300 transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Delete All Permanently
+                  </button>
+                </div>
               </div>
 
               <div className="divide-y divide-slate-800/60">

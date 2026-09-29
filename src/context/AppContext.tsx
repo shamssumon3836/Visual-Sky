@@ -531,14 +531,35 @@ const normalizeThreadSubjectKey = (sub: string) =>
     .toLowerCase();
 
 const getPermanentlyDeletedSet = (): Set<string> => {
+  const combined = new Set<string>();
   try {
     const raw = localStorage.getItem('visualsky_deleted_imap_msgs');
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return new Set<string>(parsed);
+      if (Array.isArray(parsed)) for (const id of parsed) if (id) combined.add(String(id));
     }
   } catch {}
-  return new Set<string>();
+  try {
+    const rawPerm = localStorage.getItem('visualsky_permanently_deleted_ids');
+    if (rawPerm) {
+      const parsedPerm = JSON.parse(rawPerm);
+      if (Array.isArray(parsedPerm)) for (const id of parsedPerm) if (id) combined.add(String(id));
+    }
+  } catch {}
+  return combined;
+};
+
+const recordPermanentlyDeletedIds = (ids: string[]) => {
+  if (!Array.isArray(ids) || ids.length === 0) return;
+  try {
+    const set = getPermanentlyDeletedSet();
+    for (const id of ids) {
+      if (id) set.add(String(id));
+    }
+    const serialized = JSON.stringify(Array.from(set).slice(-5000));
+    localStorage.setItem('visualsky_permanently_deleted_ids', serialized);
+    localStorage.setItem('visualsky_deleted_imap_msgs', serialized);
+  } catch {}
 };
 
 const sanitizeThreadsArray = (list: EmailThread[]): EmailThread[] => {
@@ -932,12 +953,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  // Leads (Filter out legacy demo IDs)
+  // Leads (Filter out legacy demo IDs and permanently deleted IDs)
   const [leads, setLeads] = useState<Lead[]>(() => {
     try {
+      const permDeleted = getPermanentlyDeletedSet();
       const saved = localStorage.getItem('visualsky_leads');
       const loaded: Lead[] = saved ? JSON.parse(saved) : INITIAL_LEADS;
-      const liveLoaded = loaded.filter((l) => l && !DEMO_LEAD_IDS.has(l.id));
+      const liveLoaded = loaded.filter((l) => l && !DEMO_LEAD_IDS.has(l.id) && !permDeleted.has(String(l.id)));
       const seen = new Set<string>();
       return liveLoaded.map((l, idx) => {
         let finalId = l.id;
@@ -982,13 +1004,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
 
-  // Campaigns (Filter out legacy demo IDs)
+  // Campaigns (Filter out legacy demo IDs and permanently deleted IDs)
   const [campaigns, setCampaigns] = useState<Campaign[]>(() => {
     try {
+      const permDeleted = getPermanentlyDeletedSet();
       const saved = localStorage.getItem('visualsky_campaigns');
       if (saved) {
         const parsed: Campaign[] = JSON.parse(saved);
-        return Array.isArray(parsed) ? parsed.filter((c) => c && !DEMO_CAMPAIGN_IDS.has(c.id)) : [];
+        return Array.isArray(parsed)
+          ? parsed.filter(
+              (c) =>
+                c &&
+                !DEMO_CAMPAIGN_IDS.has(c.id) &&
+                !permDeleted.has(String(c.id)) &&
+                !permDeleted.has(`camp-name:${String(c.name || '').trim().toLowerCase()}`)
+            )
+          : [];
       }
       return INITIAL_CAMPAIGNS;
     } catch {
@@ -1008,30 +1039,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [emailTemplates, setEmailTemplates] = useState<EmailTemplate[]>(() => {
     try {
+      const permDeleted = getPermanentlyDeletedSet();
       const saved = localStorage.getItem('visualsky_templates');
-      return saved ? JSON.parse(saved) : INITIAL_TEMPLATES;
+      const base: EmailTemplate[] = saved ? JSON.parse(saved) : INITIAL_TEMPLATES;
+      return Array.isArray(base) ? base.filter((t) => t && !permDeleted.has(String(t.id))) : [];
     } catch {
       return INITIAL_TEMPLATES;
     }
   });
 
-  // SMTP Relays (Filter out legacy demo IDs)
+  // SMTP Relays (Filter out legacy demo IDs and permanently deleted IDs)
   const [smtpAccounts, setSmtpAccounts] = useState<SMTPAccount[]>(() => {
     try {
+      const permDeleted = getPermanentlyDeletedSet();
       const saved = localStorage.getItem('visualsky_smtp');
       const parsed: SMTPAccount[] = saved ? JSON.parse(saved) : INITIAL_SMTP;
-      return Array.isArray(parsed) ? parsed.filter((s) => s && !DEMO_SMTP_IDS.has(s.id)) : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((s) => s && !DEMO_SMTP_IDS.has(s.id) && !permDeleted.has(String(s.id)))
+        : [];
     } catch {
       return INITIAL_SMTP;
     }
   });
 
-  // Sent Emails (Filter out legacy demo IDs)
+  // Sent Emails (Filter out legacy demo IDs and permanently deleted IDs)
   const [sentEmails, setSentEmails] = useState<SentEmailLog[]>(() => {
     try {
+      const permDeleted = getPermanentlyDeletedSet();
       const saved = localStorage.getItem('visualsky_sent_emails');
       const parsed: SentEmailLog[] = saved ? JSON.parse(saved) : INITIAL_SENT_LOGS;
-      return Array.isArray(parsed) ? parsed.filter((s) => s && !DEMO_SENT_IDS.has(s.id)) : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((s) => s && !DEMO_SENT_IDS.has(s.id) && !permDeleted.has(String(s.id)))
+        : [];
     } catch {
       return INITIAL_SENT_LOGS;
     }
@@ -1255,14 +1294,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cleanUserId = (currentUser.id || currentUser.supabaseId || '').trim();
 
     try {
-      const finalLeads = Array.isArray(latestWorkspaceRef.current.leads) ? latestWorkspaceRef.current.leads : leads;
-      const finalCampaigns = Array.isArray(latestWorkspaceRef.current.campaigns) ? latestWorkspaceRef.current.campaigns : campaigns;
-      const finalSmtp = Array.isArray(latestWorkspaceRef.current.smtpAccounts) ? latestWorkspaceRef.current.smtpAccounts : smtpAccounts;
-      const finalTemplates = Array.isArray(latestWorkspaceRef.current.emailTemplates) ? latestWorkspaceRef.current.emailTemplates : emailTemplates;
+      const permDeleted = getPermanentlyDeletedSet();
+      const filterNotDeleted = (arr: any[]) =>
+        (Array.isArray(arr) ? arr : []).filter(
+          (item: any) =>
+            item &&
+            item.id &&
+            !permDeleted.has(String(item.id)) &&
+            !(item.name && permDeleted.has(`camp-name:${String(item.name).trim().toLowerCase()}`))
+        );
+
+      const finalLeads = filterNotDeleted(Array.isArray(latestWorkspaceRef.current.leads) ? latestWorkspaceRef.current.leads : leads);
+      const finalCampaigns = filterNotDeleted(Array.isArray(latestWorkspaceRef.current.campaigns) ? latestWorkspaceRef.current.campaigns : campaigns);
+      const finalSmtp = filterNotDeleted(Array.isArray(latestWorkspaceRef.current.smtpAccounts) ? latestWorkspaceRef.current.smtpAccounts : smtpAccounts);
+      const finalTemplates = filterNotDeleted(Array.isArray(latestWorkspaceRef.current.emailTemplates) ? latestWorkspaceRef.current.emailTemplates : emailTemplates);
       const finalTags = Array.isArray(latestWorkspaceRef.current.leadTags) ? latestWorkspaceRef.current.leadTags : leadTags;
       const finalThreads = sanitizeThreadsArray(Array.isArray(latestWorkspaceRef.current.threads) ? latestWorkspaceRef.current.threads : threads);
-      const finalSent = Array.isArray(latestWorkspaceRef.current.sentEmails) ? latestWorkspaceRef.current.sentEmails : sentEmails;
-      const deletedThreadIds = Array.from(getPermanentlyDeletedSet());
+      const finalSent = filterNotDeleted(Array.isArray(latestWorkspaceRef.current.sentEmails) ? latestWorkspaceRef.current.sentEmails : sentEmails);
+      const deletedThreadIds = Array.from(permDeleted);
 
       const payload: any = {
         ...latestWorkspaceRef.current,
@@ -1273,6 +1322,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         leadTags: finalTags,
         threads: finalThreads,
         deletedThreadIds,
+        permanentlyDeletedIds: deletedThreadIds,
+        userDeletedCampaigns: userDeletedCampaignsRef.current,
         sentEmails: finalSent,
         userProfile: {
           quotaUsed: currentUser.quotaUsed,
@@ -1304,19 +1355,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Direct Central Database resource persistence helper (Silent & Zero-Reload)
+  // Direct Central Database resource persistence helper (Silent, Synchronous LocalStorage + Zero-Reload)
   const persistResourceDirectly = async (resource: string, items: any[]) => {
+    // 1. Immediately update in ref and localStorage synchronously so even an instant Hard Reload (Ctrl+Shift+R) sees the exact state
+    (latestWorkspaceRef.current as any)[resource] = items;
+    const storageKeyMap: Record<string, string> = {
+      leads: 'visualsky_leads',
+      leadTags: 'visualsky_tags',
+      campaigns: 'visualsky_campaigns',
+      smtpAccounts: 'visualsky_smtp',
+      emailTemplates: 'visualsky_templates',
+      templateCategories: 'visualsky_tmpl_categories',
+      threads: 'visualsky_threads',
+      sentEmails: 'visualsky_sent_emails',
+      minedLeads: 'visualsky_mined_leads'
+    };
+    const targetStorageKey = storageKeyMap[resource];
+    if (targetStorageKey) {
+      try {
+        localStorage.setItem(targetStorageKey, JSON.stringify(items));
+      } catch {}
+    }
+
     if (!isAuthenticated || !currentUser?.email) return;
     const cleanEmail = currentUser.email.trim().toLowerCase();
     const cleanUserId = (currentUser.id || currentUser.supabaseId || '').trim();
-
-    // Immediately update in ref so any subsequent read has the latest created items
-    (latestWorkspaceRef.current as any)[resource] = items;
-    if (resource === 'threads') {
-      try {
-        localStorage.setItem('visualsky_threads', JSON.stringify(items));
-      } catch {}
-    }
+    const allDeletedIds = Array.from(getPermanentlyDeletedSet());
 
     try {
       await fetch(`/api/user-data/${encodeURIComponent(cleanEmail)}/resource/${encodeURIComponent(resource)}`, {
@@ -1325,16 +1389,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache, no-store'
         },
-        body: JSON.stringify({ items })
+        body: JSON.stringify({
+          items,
+          permanentlyDeletedIds: allDeletedIds,
+          deletedThreadIds: allDeletedIds,
+          userDeletedCampaigns: userDeletedCampaignsRef.current
+        })
       });
 
-      // Also persist to full workspace record with the new items included
+      // Also persist to full workspace record with the new items and tombstones included
       await persistUserWorkspace({
         userId: cleanUserId,
         email: cleanEmail,
         data: {
           ...latestWorkspaceRef.current,
-          deletedThreadIds: Array.from(getPermanentlyDeletedSet()),
+          deletedThreadIds: allDeletedIds,
+          permanentlyDeletedIds: allDeletedIds,
+          userDeletedCampaigns: userDeletedCampaignsRef.current,
           [resource]: items
         }
       });
@@ -1343,7 +1414,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Load user workspace once on login/initial mount without resetting active tab or interrupting edits
+  // Load user workspace once on login/initial mount without resetting active tab or resurrecting deleted items
   const loadUserWorkspace = async (userEmail?: string, userId?: string, seedWorkspaceData?: any): Promise<boolean> => {
     const cleanEmail = (userEmail || currentUser?.email || '').trim().toLowerCase();
     const cleanUserId = (userId || currentUser?.id || currentUser?.supabaseId || '').trim();
@@ -1361,25 +1432,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (result.success && result.data && typeof result.data === 'object') {
         const data = result.data;
-        const mergeById = <T extends { id?: string }>(remoteArr: T[], localArr: T[], demoSet: Set<string>): T[] => {
-          const cleanRemote = (Array.isArray(remoteArr) ? remoteArr : []).filter((item: any) => item && !demoSet.has(String(item.id)));
-          const cleanLocal = (Array.isArray(localArr) ? localArr : []).filter((item: any) => item && !demoSet.has(String(item.id)));
+
+        // 0. Sync all permanent deletion tombstones FIRST before hydrating any collection
+        const incomingTombstones: string[] = [
+          ...(Array.isArray(data.permanentlyDeletedIds) ? data.permanentlyDeletedIds.map(String) : []),
+          ...(Array.isArray(data.deletedThreadIds) ? data.deletedThreadIds.map(String) : [])
+        ];
+        if (incomingTombstones.length > 0) {
+          recordPermanentlyDeletedIds(incomingTombstones);
+        }
+        if (data.userDeletedCampaigns) {
+          userDeletedCampaignsRef.current = true;
+          try {
+            localStorage.setItem('visualsky_user_deleted_campaigns', 'true');
+          } catch {}
+        }
+
+        const permDeletedSet = getPermanentlyDeletedSet();
+
+        const mergeById = <T extends { id?: string; name?: string }>(remoteArr: T[], localArr: T[], demoSet: Set<string>): T[] => {
+          const isAllowed = (item: any) => {
+            if (!item || !item.id) return false;
+            const idStr = String(item.id);
+            if (demoSet.has(idStr) || permDeletedSet.has(idStr) || permDeletedSet.has(`thread:${idStr}`)) return false;
+            if (item.name && permDeletedSet.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) return false;
+            return true;
+          };
+          const cleanRemote = (Array.isArray(remoteArr) ? remoteArr : []).filter(isAllowed);
+          const cleanLocal = (Array.isArray(localArr) ? localArr : []).filter(isAllowed);
+          if (cleanRemote.length === 0 && cleanLocal.length === 0) return [];
           if (cleanRemote.length === 0) return cleanLocal;
           if (cleanLocal.length === 0) return cleanRemote;
           const map = new Map<string, T>();
-          for (const item of cleanLocal) {
+          for (const item of cleanRemote) {
             if (item && item.id) map.set(String(item.id), item);
           }
-          for (const item of cleanRemote) {
+          for (const item of cleanLocal) {
             if (item && item.id) {
               const existing = map.get(String(item.id));
+              // Prefer local item state (e.g. if local moved item to trash or edited it)
               map.set(String(item.id), existing ? { ...existing, ...item } : item);
             }
           }
           return Array.from(map.values());
         };
 
-        // 1. Leads Hydration with LocalStorage smart merge (strip legacy demo IDs)
+        // 1. Leads Hydration with LocalStorage smart merge (strip legacy demo IDs & permanently deleted IDs)
         if (Array.isArray(data.leads)) {
           const liveLeads = mergeById(data.leads, latestWorkspaceRef.current.leads || [], DEMO_LEAD_IDS);
           setLeads(liveLeads);
@@ -1387,14 +1485,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (latestWorkspaceRef.current as any).leads = liveLeads;
         }
         
-        // 2. Lead Tags Hydration
-        if (Array.isArray(data.leadTags) && data.leadTags.length > 0) {
-          setLeadTags(data.leadTags);
-          try { localStorage.setItem('visualsky_tags', JSON.stringify(data.leadTags)); } catch {}
-          (latestWorkspaceRef.current as any).leadTags = data.leadTags;
+        // 2. Lead Tags Hydration (strip permanently deleted tags)
+        if (Array.isArray(data.leadTags)) {
+          const cleanTags = data.leadTags.filter(
+            (t: any) =>
+              t &&
+              !permDeletedSet.has(String(t.id)) &&
+              !(t.name && permDeletedSet.has(`tag-name:${String(t.name).trim().toLowerCase()}`))
+          );
+          setLeadTags(cleanTags);
+          try { localStorage.setItem('visualsky_tags', JSON.stringify(cleanTags)); } catch {}
+          (latestWorkspaceRef.current as any).leadTags = cleanTags;
         }
         
-        // 3. SMTP Accounts Hydration (strip legacy demo IDs & merge with local)
+        // 3. SMTP Accounts Hydration (strip legacy demo IDs & permanently deleted IDs)
         if (Array.isArray(data.smtpAccounts)) {
           const liveSmtp = mergeById(data.smtpAccounts, latestWorkspaceRef.current.smtpAccounts || [], DEMO_SMTP_IDS);
           setSmtpAccounts(liveSmtp);
@@ -1402,7 +1506,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (latestWorkspaceRef.current as any).smtpAccounts = liveSmtp;
         }
         
-        // 4. Campaigns Hydration (strip legacy demo IDs & merge with local so active campaigns are never lost)
+        // 4. Campaigns Hydration (strip legacy demo IDs & permanently deleted IDs)
         if (Array.isArray(data.campaigns)) {
           const liveCampaigns = mergeById(data.campaigns, latestWorkspaceRef.current.campaigns || [], DEMO_CAMPAIGN_IDS);
           setCampaigns(liveCampaigns);
@@ -1410,29 +1514,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (latestWorkspaceRef.current as any).campaigns = liveCampaigns;
         }
         
-        // 5. Email Templates Hydration
-        if (Array.isArray(data.emailTemplates) && data.emailTemplates.length > 0) {
-          setEmailTemplates(data.emailTemplates);
-          try { localStorage.setItem('visualsky_templates', JSON.stringify(data.emailTemplates)); } catch {}
-          (latestWorkspaceRef.current as any).emailTemplates = data.emailTemplates;
+        // 5. Email Templates Hydration (respect empty array and permanently deleted templates)
+        if (Array.isArray(data.emailTemplates)) {
+          const liveTemplates = mergeById(data.emailTemplates, latestWorkspaceRef.current.emailTemplates || [], new Set());
+          setEmailTemplates(liveTemplates);
+          try { localStorage.setItem('visualsky_templates', JSON.stringify(liveTemplates)); } catch {}
+          (latestWorkspaceRef.current as any).emailTemplates = liveTemplates;
         }
         
-        // 6. Template Categories Hydration
-        if (Array.isArray(data.templateCategories) && data.templateCategories.length > 0) {
-          setTemplateCategories(data.templateCategories);
-          (latestWorkspaceRef.current as any).templateCategories = data.templateCategories;
+        // 6. Template Categories Hydration (strip permanently deleted categories)
+        if (Array.isArray(data.templateCategories)) {
+          const cleanCats = data.templateCategories.filter((c: any) => c && !permDeletedSet.has(String(c.id)));
+          if (cleanCats.length > 0) {
+            setTemplateCategories(cleanCats);
+            try { localStorage.setItem('visualsky_tmpl_categories', JSON.stringify(cleanCats)); } catch {}
+            (latestWorkspaceRef.current as any).templateCategories = cleanCats;
+          }
         }
         
-        // 7. Threads Hydration (strip legacy demo IDs and clean '>' quotes / tokens)
-        if (Array.isArray(data.deletedThreadIds) && data.deletedThreadIds.length > 0) {
-          try {
-            const existingDel = getPermanentlyDeletedSet();
-            for (const delId of data.deletedThreadIds) {
-              if (delId) existingDel.add(String(delId));
-            }
-            localStorage.setItem('visualsky_deleted_imap_msgs', JSON.stringify(Array.from(existingDel).slice(-3000)));
-          } catch {}
-        }
+        // 7. Threads Hydration (strip legacy demo IDs and permanently deleted threads)
         if (Array.isArray(data.threads)) {
           const mergedThreads = mergeById(data.threads, latestWorkspaceRef.current.threads || [], DEMO_THREAD_IDS);
           const liveThreads = sanitizeThreadsArray(mergedThreads);
@@ -1441,7 +1541,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (latestWorkspaceRef.current as any).threads = liveThreads;
         }
         
-        // 8. Sent Emails Hydration (strip legacy demo IDs & merge with local)
+        // 8. Sent Emails Hydration (strip legacy demo IDs & permanently deleted logs)
         if (Array.isArray(data.sentEmails)) {
           const liveSent = mergeById(data.sentEmails, latestWorkspaceRef.current.sentEmails || [], DEMO_SENT_IDS);
           setSentEmails(liveSent);
@@ -1451,9 +1551,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         
         // 9. Mined Leads Hydration
         if (Array.isArray(data.minedLeads) && data.minedLeads.length > 0) {
-          setMinedLeads(data.minedLeads);
-          try { localStorage.setItem('visualsky_mined_leads', JSON.stringify(data.minedLeads)); } catch {}
-          (latestWorkspaceRef.current as any).minedLeads = data.minedLeads;
+          const cleanMined = data.minedLeads.filter((m: any) => m && !permDeletedSet.has(String(m.id)));
+          setMinedLeads(cleanMined);
+          try { localStorage.setItem('visualsky_mined_leads', JSON.stringify(cleanMined)); } catch {}
+          (latestWorkspaceRef.current as any).minedLeads = cleanMined;
         }
         
         // 10. Column Settings Hydration
@@ -1482,6 +1583,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         loadedWorkspaceEmailRef.current = cleanEmail;
         loadedWorkspaceUserIdRef.current = cleanUserId;
+
+        // If local browser has permanent deletion tombstones not yet stored on server, persist immediately
+        const remotePermCount = Array.isArray(data.permanentlyDeletedIds) ? data.permanentlyDeletedIds.length : 0;
+        if (permDeletedSet.size > remotePermCount) {
+          setTimeout(() => {
+            saveWorkspaceToDatabase().catch(() => {});
+          }, 300);
+        }
+
         return true;
       } else {
         // If remote has no record yet, only persist if local has genuine content
@@ -1512,7 +1622,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const [hydrationTick, setHydrationTick] = useState(0);
-  const userDeletedCampaignsRef = useRef<boolean>(false);
+  const userDeletedCampaignsRef = useRef<boolean>((() => {
+    try {
+      return localStorage.getItem('visualsky_user_deleted_campaigns') === 'true';
+    } catch {
+      return false;
+    }
+  })());
 
   // Sync all users and initial workspace on mount
   const registryLoadedRef = useRef<boolean>(false);
@@ -1830,6 +1946,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteLeadTag = (id: string) => {
     const tagToDelete = leadTags.find(t => t.id === id);
     if (!tagToDelete) return;
+    recordPermanentlyDeletedIds([
+      id,
+      tagToDelete.name ? `tag-name:${tagToDelete.name.trim().toLowerCase()}` : ''
+    ].filter(Boolean));
     const updatedTags = leadTags.filter(t => t.id !== id);
     setLeadTags(updatedTags);
     persistResourceDirectly('leadTags', updatedTags);
@@ -1953,9 +2073,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteLeadToTrash = (id: string) => {
-    const updatedLeads = leads.map(l => l.id === id ? { ...l, isTrash: true, deletedAt: new Date().toISOString() } : l);
-    setLeads(updatedLeads);
-    persistResourceDirectly('leads', updatedLeads);
+    setLeads(prev => {
+      const updatedLeads = prev.map(l => l.id === id ? { ...l, isTrash: true, deletedAt: new Date().toISOString() } : l);
+      persistResourceDirectly('leads', updatedLeads);
+      return updatedLeads;
+    });
     addNotification({
       title: 'Lead moved to Trash 🗑️',
       message: 'You can restore this lead anytime from the Trash section.',
@@ -1965,21 +2087,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const restoreLead = (id: string) => {
-    const updatedLeads = leads.map(l => l.id === id ? { ...l, isTrash: false, deletedAt: undefined } : l);
-    setLeads(updatedLeads);
-    persistResourceDirectly('leads', updatedLeads);
+    setLeads(prev => {
+      const updatedLeads = prev.map(l => l.id === id ? { ...l, isTrash: false, deletedAt: undefined } : l);
+      persistResourceDirectly('leads', updatedLeads);
+      return updatedLeads;
+    });
   };
 
   const permanentDeleteLead = (id: string) => {
-    const updatedLeads = leads.filter(l => l.id !== id);
-    setLeads(updatedLeads);
-    persistResourceDirectly('leads', updatedLeads);
+    recordPermanentlyDeletedIds([id]);
+    setLeads(prev => {
+      const updatedLeads = prev.filter(l => l.id !== id);
+      persistResourceDirectly('leads', updatedLeads);
+      return updatedLeads;
+    });
   };
 
   const bulkDeleteLeads = (ids: string[]) => {
-    const updatedLeads = leads.map(l => ids.includes(l.id) ? { ...l, isTrash: true, deletedAt: new Date().toISOString() } : l);
-    setLeads(updatedLeads);
-    persistResourceDirectly('leads', updatedLeads);
+    setLeads(prev => {
+      const updatedLeads = prev.map(l => ids.includes(l.id) ? { ...l, isTrash: true, deletedAt: new Date().toISOString() } : l);
+      persistResourceDirectly('leads', updatedLeads);
+      return updatedLeads;
+    });
     addNotification({
       title: `Moved ${ids.length} leads to Trash 🗑️`,
       message: 'Items can be restored from the Trash tab.',
@@ -1989,15 +2118,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const bulkRestoreLeads = (ids: string[]) => {
-    const updatedLeads = leads.map(l => ids.includes(l.id) ? { ...l, isTrash: false, deletedAt: undefined } : l);
-    setLeads(updatedLeads);
-    persistResourceDirectly('leads', updatedLeads);
+    setLeads(prev => {
+      const updatedLeads = prev.map(l => ids.includes(l.id) ? { ...l, isTrash: false, deletedAt: undefined } : l);
+      persistResourceDirectly('leads', updatedLeads);
+      return updatedLeads;
+    });
   };
 
   const bulkPermanentDeleteLeads = (ids: string[]) => {
-    const updatedLeads = leads.filter(l => !ids.includes(l.id));
-    setLeads(updatedLeads);
-    persistResourceDirectly('leads', updatedLeads);
+    recordPermanentlyDeletedIds(ids);
+    setLeads(prev => {
+      const updatedLeads = prev.filter(l => !ids.includes(l.id));
+      persistResourceDirectly('leads', updatedLeads);
+      return updatedLeads;
+    });
   };
 
   const verifyLeadWebsite = async (id: string) => {
@@ -2313,26 +2447,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Persistent registry of permanently deleted IMAP message IDs and thread keys so deleted Trash items never resurrect
   const recordPermanentlyDeletedThreads = (deletedThreads: EmailThread[]) => {
     if (!Array.isArray(deletedThreads) || deletedThreads.length === 0) return;
-    try {
-      const raw = localStorage.getItem('visualsky_deleted_imap_msgs');
-      const existing: string[] = raw ? JSON.parse(raw) : [];
-      const set = new Set<string>(existing);
-      for (const t of deletedThreads) {
-        if (!t) continue;
-        if (t.id) {
-          set.add(`thread:${t.id}`);
-          set.add(`thread:${String(t.id).replace(/-split-\d+$/, '')}`);
-          set.add(String(t.id));
-        }
-        if (Array.isArray(t.messages)) {
-          for (const m of t.messages) {
-            if (m?.id) set.add(m.id);
-          }
+    const idsToRecord: string[] = [];
+    for (const t of deletedThreads) {
+      if (!t) continue;
+      if (t.id) {
+        idsToRecord.push(`thread:${t.id}`);
+        idsToRecord.push(`thread:${String(t.id).replace(/-split-\d+$/, '')}`);
+        idsToRecord.push(String(t.id));
+      }
+      if (Array.isArray(t.messages)) {
+        for (const m of t.messages) {
+          if (m?.id) idsToRecord.push(String(m.id));
         }
       }
-      const nextArr = Array.from(set).slice(-3000);
-      localStorage.setItem('visualsky_deleted_imap_msgs', JSON.stringify(nextArr));
-    } catch {}
+    }
+    recordPermanentlyDeletedIds(idsToRecord);
   };
 
   const deleteThreadToTrash = (threadId: string) => {
@@ -2537,8 +2666,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const recordCampaignTombstones = (campsToDelete: Campaign[]) => {
+    userDeletedCampaignsRef.current = true;
+    try {
+      localStorage.setItem('visualsky_user_deleted_campaigns', 'true');
+    } catch {}
+    const tombstones: string[] = [];
+    const deletedNamesLower = new Set<string>();
+    for (const c of campsToDelete) {
+      if (!c) continue;
+      if (c.id) tombstones.push(String(c.id));
+      if (c.name) {
+        const cleanName = String(c.name).trim();
+        const slug = cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        tombstones.push(`camp-restored-${slug}`);
+        tombstones.push(`camp-name:${cleanName.toLowerCase()}`);
+        deletedNamesLower.add(cleanName.toLowerCase());
+      }
+      if (c.assignedSmtpId) {
+        tombstones.push(`camp-live-${c.assignedSmtpId}`);
+      }
+    }
+    tombstones.push('camp-live-sequence');
+    tombstones.push('camp-restored-live-outbound-sequence');
+    recordPermanentlyDeletedIds(tombstones);
+
+    // Also strip deleted campaign references from leads.sentCampaigns so they never auto-reconstruct
+    if (deletedNamesLower.size > 0) {
+      setLeads(lPrev => {
+        let changed = false;
+        const nextLeads = lPrev.map(l => {
+          if (Array.isArray(l.sentCampaigns) && l.sentCampaigns.some(sc => deletedNamesLower.has(String(sc).trim().toLowerCase()))) {
+            changed = true;
+            return {
+              ...l,
+              sentCampaigns: l.sentCampaigns.filter(sc => !deletedNamesLower.has(String(sc).trim().toLowerCase()))
+            };
+          }
+          return l;
+        });
+        if (changed) {
+          (latestWorkspaceRef.current as any).leads = nextLeads;
+          try { localStorage.setItem('visualsky_leads', JSON.stringify(nextLeads)); } catch {}
+        }
+        return nextLeads;
+      });
+    }
+  };
+
   const deleteCampaign = (id: string) => {
     userDeletedCampaignsRef.current = true;
+    try {
+      localStorage.setItem('visualsky_user_deleted_campaigns', 'true');
+    } catch {}
     setCampaigns(prev => {
       const refList = latestWorkspaceRef.current.campaigns || [];
       const base = prev.length >= refList.length ? prev : refList;
@@ -2576,6 +2756,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCampaigns(prev => {
       const refList = latestWorkspaceRef.current.campaigns || [];
       const base = prev.length >= refList.length ? prev : refList;
+      const toDelete = base.filter(c => c.id === id);
+      recordCampaignTombstones(toDelete.length > 0 ? toDelete : [{ id } as Campaign]);
       const updated = base.filter(c => c.id !== id);
       (latestWorkspaceRef.current as any).campaigns = updated;
       persistResourceDirectly('campaigns', updated);
@@ -2589,15 +2771,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const bulkRestoreCampaigns = (ids: string[]) => {
-    const updated = campaigns.map(c => ids.includes(c.id) ? { ...c, isTrash: false, deletedAt: undefined } : c);
-    setCampaigns(updated);
-    persistResourceDirectly('campaigns', updated);
+    setCampaigns(prev => {
+      const updated = prev.map(c => ids.includes(c.id) ? { ...c, isTrash: false, deletedAt: undefined } : c);
+      (latestWorkspaceRef.current as any).campaigns = updated;
+      persistResourceDirectly('campaigns', updated);
+      return updated;
+    });
   };
 
   const bulkPermanentDeleteCampaigns = (ids: string[]) => {
-    const updated = campaigns.filter(c => !ids.includes(c.id));
-    setCampaigns(updated);
-    persistResourceDirectly('campaigns', updated);
+    setCampaigns(prev => {
+      const toDelete = prev.filter(c => ids.includes(c.id));
+      recordCampaignTombstones(toDelete);
+      const updated = prev.filter(c => !ids.includes(c.id));
+      (latestWorkspaceRef.current as any).campaigns = updated;
+      persistResourceDirectly('campaigns', updated);
+      return updated;
+    });
   };
 
   const launchQuickFollowUp = (days: '7d' | '14d' | '30d') => {
@@ -2670,6 +2860,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteTemplateCategory = (id: string) => {
+    recordPermanentlyDeletedIds([id]);
     const updatedCats = templateCategories.filter(c => c.id !== id);
     setTemplateCategories(updatedCats);
     persistResourceDirectly('templateCategories', updatedCats);
@@ -2725,9 +2916,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const permanentDeleteEmailTemplate = (id: string) => {
-    const updatedTemplates = emailTemplates.filter(t => t.id !== id);
-    setEmailTemplates(updatedTemplates);
-    persistResourceDirectly('emailTemplates', updatedTemplates);
+    recordPermanentlyDeletedIds([id]);
+    setEmailTemplates(prev => {
+      const updatedTemplates = prev.filter(t => t.id !== id);
+      persistResourceDirectly('emailTemplates', updatedTemplates);
+      return updatedTemplates;
+    });
   };
 
   // SMTP Relay Actions
@@ -2797,9 +2991,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const permanentDeleteSMTPAccount = (id: string) => {
-    const updatedSmtp = smtpAccounts.filter(s => s.id !== id);
-    setSmtpAccounts(updatedSmtp);
-    persistResourceDirectly('smtpAccounts', updatedSmtp);
+    recordPermanentlyDeletedIds([id, `camp-live-${id}`]);
+    setSmtpAccounts(prev => {
+      const updatedSmtp = prev.filter(s => s.id !== id);
+      persistResourceDirectly('smtpAccounts', updatedSmtp);
+      return updatedSmtp;
+    });
   };
 
   const testSMTPConnection = async (id: string): Promise<boolean> => {
@@ -3024,40 +3221,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 2. Reconstruct any running campaign from sentEmails, leads.sentCampaigns, or connected SMTP relays
+    // 2. Reconstruct any running campaign from sentEmails, leads.sentCampaigns, or connected SMTP relays (strictly skipping deleted/trashed campaigns!)
+    const permDeletedSet = getPermanentlyDeletedSet();
     const existingCampIds = new Set(campaigns.filter(Boolean).map(c => c.id));
+    // Include ALL campaigns (active and trashed) so moving a campaign to Trash never causes a duplicate active campaign to be recreated
     const existingCampNames = new Set(
-      campaigns.filter(c => c && !c.isTrash).map(c => (c.name || '').trim().toLowerCase())
+      campaigns.filter(Boolean).map(c => (c.name || '').trim().toLowerCase())
     );
     const logsByCamp = new Map<string, { name: string; logs: SentEmailLog[]; leadList: Lead[] }>();
 
-    for (const log of activeSent) {
-      const rawName = (log.campaignName || '').trim();
-      const cName =
-        !rawName || rawName === 'Direct Outreach Mailer' || rawName === 'Smart Inbox Reply'
-          ? 'Live Outbound Sequence'
-          : rawName;
-      const cId = log.campaignId || `camp-restored-${cName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-      if (existingCampIds.has(cId) || existingCampNames.has(cName.toLowerCase())) {
-        continue;
+    if (!userDeletedCampaignsRef.current) {
+      for (const log of activeSent) {
+        const rawName = (log.campaignName || '').trim();
+        const cName =
+          !rawName || rawName === 'Direct Outreach Mailer' || rawName === 'Smart Inbox Reply'
+            ? 'Live Outbound Sequence'
+            : rawName;
+        const cId = log.campaignId || `camp-restored-${cName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+        if (
+          existingCampIds.has(cId) ||
+          existingCampNames.has(cName.toLowerCase()) ||
+          permDeletedSet.has(cId) ||
+          permDeletedSet.has(`camp-name:${cName.toLowerCase()}`)
+        ) {
+          continue;
+        }
+        const entry = logsByCamp.get(cId) || { name: cName, logs: [], leadList: [] };
+        entry.logs.push(log);
+        logsByCamp.set(cId, entry);
       }
-      const entry = logsByCamp.get(cId) || { name: cName, logs: [], leadList: [] };
-      entry.logs.push(log);
-      logsByCamp.set(cId, entry);
-    }
 
-    for (const lead of activeLeads) {
-      if (Array.isArray(lead.sentCampaigns)) {
-        for (const rawCampName of lead.sentCampaigns) {
-          const cName = (rawCampName || '').trim();
-          if (!cName) continue;
-          const cId = `camp-restored-${cName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-          if (existingCampIds.has(cId) || existingCampNames.has(cName.toLowerCase())) {
-            continue;
+      for (const lead of activeLeads) {
+        if (Array.isArray(lead.sentCampaigns)) {
+          for (const rawCampName of lead.sentCampaigns) {
+            const cName = (rawCampName || '').trim();
+            if (!cName) continue;
+            const cId = `camp-restored-${cName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+            if (
+              existingCampIds.has(cId) ||
+              existingCampNames.has(cName.toLowerCase()) ||
+              permDeletedSet.has(cId) ||
+              permDeletedSet.has(`camp-name:${cName.toLowerCase()}`)
+            ) {
+              continue;
+            }
+            const entry = logsByCamp.get(cId) || { name: cName, logs: [], leadList: [] };
+            entry.leadList.push(lead);
+            logsByCamp.set(cId, entry);
           }
-          const entry = logsByCamp.get(cId) || { name: cName, logs: [], leadList: [] };
-          entry.leadList.push(lead);
-          logsByCamp.set(cId, entry);
         }
       }
     }
@@ -3118,16 +3329,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
-    // 3. If there are still 0 active campaigns in state (and the user hasn't manually deleted them this session)
+    // 3. If there are 0 campaigns in state (including Trash) and the user has NOT manually deleted campaigns,
     // and the user has connected SMTP relays or active leads, automatically provision their active running sequence!
     const activeExistingCampaigns = campaigns.filter(c => c && !c.isTrash);
+    const primarySmtp = activeSmtps[0];
+    const candidateLiveId = `camp-live-${primarySmtp?.id || 'sequence'}`;
     if (
-      activeExistingCampaigns.length === 0 &&
+      campaigns.length === 0 &&
       restoredCampaigns.length === 0 &&
       !userDeletedCampaignsRef.current &&
+      !permDeletedSet.has(candidateLiveId) &&
+      !permDeletedSet.has('camp-live-sequence') &&
       (activeSmtps.length > 0 || activeLeads.length > 0)
     ) {
-      const primarySmtp = activeSmtps[0];
       const primaryTag = activeLeads[0]?.tags?.[0] || activeLeads[0]?.niche || 'B2B Outbound';
       const contactedLeads = activeLeads.filter(l => l.status !== 'new' || (l.openCount || 0) > 0 || l.isReplied);
       const smtpSentSum = activeSmtps.reduce((sum, s) => sum + (Number(s.sentToday) || 0), 0);
@@ -3305,6 +3519,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const permanentDeleteSentEmail = (id: string) => {
+    recordPermanentlyDeletedIds([id]);
     setSentEmails(prev => {
       const next = prev.filter(s => s.id !== id);
       persistResourceDirectly('sentEmails', next);
@@ -4473,21 +4688,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     sentEmails.filter(s => s.isTrash).length;
 
   const emptyAllTrash = () => {
+    const trashedLeads = leads.filter(l => l.isTrash);
     const trashedThreads = threads.filter(t => t.isTrash);
+    const trashedSmtp = smtpAccounts.filter(s => s.isTrash);
+    const trashedCampaigns = campaigns.filter(c => c.isTrash);
+    const trashedTemplates = emailTemplates.filter(t => t.isTrash);
+    const trashedSent = sentEmails.filter(s => s.isTrash);
+
+    // 1. Record all tombstones so no deleted item can ever resurrect on reload or hard reload
     recordPermanentlyDeletedThreads(trashedThreads);
-    const cleanLeads = leads.filter(l => !l.isTrash);
+    if (trashedCampaigns.length > 0) {
+      recordCampaignTombstones(trashedCampaigns);
+    }
+    const allTrashedIds: string[] = [
+      ...trashedLeads.map(l => l.id),
+      ...trashedThreads.map(t => t.id),
+      ...trashedSmtp.map(s => s.id),
+      ...trashedSmtp.map(s => `camp-live-${s.id}`),
+      ...trashedCampaigns.map(c => c.id),
+      ...trashedTemplates.map(t => t.id),
+      ...trashedSent.map(s => s.id)
+    ].filter(Boolean);
+    recordPermanentlyDeletedIds(allTrashedIds);
+
+    const deletedCampNamesLower = new Set(
+      trashedCampaigns.map(c => String(c.name || '').trim().toLowerCase()).filter(Boolean)
+    );
+
+    const cleanLeads = leads
+      .filter(l => !l.isTrash)
+      .map(l =>
+        deletedCampNamesLower.size > 0 && Array.isArray(l.sentCampaigns)
+          ? {
+              ...l,
+              sentCampaigns: l.sentCampaigns.filter(
+                sc => !deletedCampNamesLower.has(String(sc || '').trim().toLowerCase())
+              )
+            }
+          : l
+      );
     const cleanThreads = threads.filter(t => !t.isTrash);
     const cleanSmtp = smtpAccounts.filter(s => !s.isTrash);
     const cleanCampaigns = campaigns.filter(c => !c.isTrash);
     const cleanTemplates = emailTemplates.filter(t => !t.isTrash);
     const cleanSent = sentEmails.filter(s => !s.isTrash);
 
+    // 2. Update ref and localStorage synchronously BEFORE network calls
     (latestWorkspaceRef.current as any).leads = cleanLeads;
     (latestWorkspaceRef.current as any).threads = cleanThreads;
     (latestWorkspaceRef.current as any).smtpAccounts = cleanSmtp;
     (latestWorkspaceRef.current as any).campaigns = cleanCampaigns;
     (latestWorkspaceRef.current as any).emailTemplates = cleanTemplates;
     (latestWorkspaceRef.current as any).sentEmails = cleanSent;
+
+    try {
+      localStorage.setItem('visualsky_leads', JSON.stringify(cleanLeads));
+      localStorage.setItem('visualsky_threads', JSON.stringify(cleanThreads));
+      localStorage.setItem('visualsky_smtp', JSON.stringify(cleanSmtp));
+      localStorage.setItem('visualsky_campaigns', JSON.stringify(cleanCampaigns));
+      localStorage.setItem('visualsky_templates', JSON.stringify(cleanTemplates));
+      localStorage.setItem('visualsky_sent_emails', JSON.stringify(cleanSent));
+    } catch {}
 
     setLeads(cleanLeads);
     setThreads(cleanThreads);
@@ -4496,16 +4757,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setEmailTemplates(cleanTemplates);
     setSentEmails(cleanSent);
 
-    persistResourceDirectly('leads', cleanLeads);
-    persistResourceDirectly('threads', cleanThreads);
-    persistResourceDirectly('smtpAccounts', cleanSmtp);
-    persistResourceDirectly('campaigns', cleanCampaigns);
-    persistResourceDirectly('emailTemplates', cleanTemplates);
-    persistResourceDirectly('sentEmails', cleanSent);
+    // 3. Perform a single atomic workspace save so concurrent requests never overwrite each other
+    saveWorkspaceToDatabase().catch(() => {});
 
     addNotification({
-      title: 'Trash Emptied 🗑️',
-      message: 'All trashed leads, threads, SMTP relays, campaigns, templates, and sent logs permanently erased.',
+      title: 'Trash Emptied Permanently 🗑️',
+      message: 'All trashed leads, threads, SMTP relays, campaigns, templates, and sent logs have been permanently erased.',
       type: 'system'
     });
   };

@@ -2640,13 +2640,30 @@ function mergeCollectionById(existingItems: any[], incomingItems: any[], key = '
 function smartMergeWorkspaces(existing: any, incoming: any): any {
   const e = existing && typeof existing === 'object' ? existing : {};
   const inc = incoming && typeof incoming === 'object' ? incoming : {};
-  const deletedThreadIds = new Set<string>(
-    Array.isArray(inc.deletedThreadIds)
-      ? inc.deletedThreadIds
-      : Array.isArray(e.deletedThreadIds)
-      ? e.deletedThreadIds
-      : []
-  );
+
+  // Cumulative union of all permanently deleted IDs and thread tombstones so deleted items never resurrect
+  const deletedThreadIds = new Set<string>([
+    ...(Array.isArray(e.deletedThreadIds) ? e.deletedThreadIds.map(String) : []),
+    ...(Array.isArray(inc.deletedThreadIds) ? inc.deletedThreadIds.map(String) : [])
+  ]);
+
+  const permanentlyDeletedIds = new Set<string>([
+    ...(Array.isArray(e.permanentlyDeletedIds) ? e.permanentlyDeletedIds.map(String) : []),
+    ...(Array.isArray(inc.permanentlyDeletedIds) ? inc.permanentlyDeletedIds.map(String) : []),
+    ...Array.from(deletedThreadIds)
+  ]);
+
+  const isNotDeleted = (item: any) => {
+    if (!item || !item.id) return false;
+    const idStr = String(item.id);
+    if (permanentlyDeletedIds.has(idStr) || deletedThreadIds.has(idStr) || deletedThreadIds.has(`thread:${idStr}`)) {
+      return false;
+    }
+    if (item.name && permanentlyDeletedIds.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) {
+      return false;
+    }
+    return true;
+  };
 
   const rawThreads = Array.isArray(inc.threads)
     ? inc.threads
@@ -2654,21 +2671,30 @@ function smartMergeWorkspaces(existing: any, incoming: any): any {
     ? e.threads
     : [];
   const cleanThreads = rawThreads.filter(
-    (t: any) => t && t.id && !deletedThreadIds.has(String(t.id)) && !deletedThreadIds.has(`thread:${t.id}`)
+    (t: any) =>
+      isNotDeleted(t) &&
+      !deletedThreadIds.has(`thread:${String(t.id).replace(/-split-\d+$/, '')}`)
   );
+
+  const pickCollection = (incArr: any, existingArr: any) => {
+    const chosen = Array.isArray(incArr) ? incArr : (Array.isArray(existingArr) ? existingArr : []);
+    return chosen.filter(isNotDeleted);
+  };
 
   return {
     ...e,
     ...inc,
-    leads: Array.isArray(inc.leads) ? inc.leads : (Array.isArray(e.leads) ? e.leads : []),
+    leads: pickCollection(inc.leads, e.leads),
     leadTags: Array.isArray(inc.leadTags) ? inc.leadTags : (Array.isArray(e.leadTags) ? e.leadTags : []),
-    campaigns: Array.isArray(inc.campaigns) ? inc.campaigns : (Array.isArray(e.campaigns) ? e.campaigns : []),
-    smtpAccounts: Array.isArray(inc.smtpAccounts) ? inc.smtpAccounts : (Array.isArray(e.smtpAccounts) ? e.smtpAccounts : []),
-    emailTemplates: Array.isArray(inc.emailTemplates) ? inc.emailTemplates : (Array.isArray(e.emailTemplates) ? e.emailTemplates : []),
+    campaigns: pickCollection(inc.campaigns, e.campaigns),
+    smtpAccounts: pickCollection(inc.smtpAccounts, e.smtpAccounts),
+    emailTemplates: pickCollection(inc.emailTemplates, e.emailTemplates),
     templateCategories: Array.isArray(inc.templateCategories) ? inc.templateCategories : (Array.isArray(e.templateCategories) ? e.templateCategories : []),
     threads: cleanThreads,
-    deletedThreadIds: Array.from(deletedThreadIds).slice(-2000),
-    sentEmails: Array.isArray(inc.sentEmails) ? inc.sentEmails : (Array.isArray(e.sentEmails) ? e.sentEmails : []),
+    deletedThreadIds: Array.from(deletedThreadIds).slice(-4000),
+    permanentlyDeletedIds: Array.from(permanentlyDeletedIds).slice(-5000),
+    userDeletedCampaigns: Boolean(inc.userDeletedCampaigns ?? e.userDeletedCampaigns),
+    sentEmails: pickCollection(inc.sentEmails, e.sentEmails),
     minedLeads: Array.isArray(inc.minedLeads) ? inc.minedLeads : (Array.isArray(e.minedLeads) ? e.minedLeads : []),
     columnSettings: Array.isArray(inc.columnSettings) && inc.columnSettings.length > 0 ? inc.columnSettings : (Array.isArray(e.columnSettings) && e.columnSettings.length > 0 ? e.columnSettings : []),
     notificationSettings: {
@@ -3088,20 +3114,35 @@ function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null
     ]);
 
     if (mergedWorkspace && typeof mergedWorkspace === 'object') {
+      const tombstones = new Set<string>([
+        ...Array.from(DEMO_IDS),
+        ...(Array.isArray(mergedWorkspace.permanentlyDeletedIds) ? mergedWorkspace.permanentlyDeletedIds.map(String) : []),
+        ...(Array.isArray(mergedWorkspace.deletedThreadIds) ? mergedWorkspace.deletedThreadIds.map(String) : [])
+      ]);
+      const keepAlive = (i: any) => {
+        if (!i || !i.id) return false;
+        const idStr = String(i.id);
+        if (tombstones.has(idStr) || tombstones.has(`thread:${idStr}`)) return false;
+        if (i.name && tombstones.has(`camp-name:${String(i.name).trim().toLowerCase()}`)) return false;
+        return true;
+      };
       if (Array.isArray(mergedWorkspace.leads)) {
-        mergedWorkspace.leads = mergedWorkspace.leads.filter((i: any) => i && !DEMO_IDS.has(i.id));
+        mergedWorkspace.leads = mergedWorkspace.leads.filter(keepAlive);
       }
       if (Array.isArray(mergedWorkspace.campaigns)) {
-        mergedWorkspace.campaigns = mergedWorkspace.campaigns.filter((i: any) => i && !DEMO_IDS.has(i.id));
+        mergedWorkspace.campaigns = mergedWorkspace.campaigns.filter(keepAlive);
       }
       if (Array.isArray(mergedWorkspace.smtpAccounts)) {
-        mergedWorkspace.smtpAccounts = mergedWorkspace.smtpAccounts.filter((i: any) => i && !DEMO_IDS.has(i.id));
+        mergedWorkspace.smtpAccounts = mergedWorkspace.smtpAccounts.filter(keepAlive);
+      }
+      if (Array.isArray(mergedWorkspace.emailTemplates)) {
+        mergedWorkspace.emailTemplates = mergedWorkspace.emailTemplates.filter(keepAlive);
       }
       if (Array.isArray(mergedWorkspace.threads)) {
-        mergedWorkspace.threads = mergedWorkspace.threads.filter((i: any) => i && !DEMO_IDS.has(i.id));
+        mergedWorkspace.threads = mergedWorkspace.threads.filter(keepAlive);
       }
       if (Array.isArray(mergedWorkspace.sentEmails)) {
-        mergedWorkspace.sentEmails = mergedWorkspace.sentEmails.filter((i: any) => i && !DEMO_IDS.has(i.id));
+        mergedWorkspace.sentEmails = mergedWorkspace.sentEmails.filter(keepAlive);
       }
     }
 
@@ -3309,7 +3350,7 @@ app.post('/api/user-data/:email/resource/:resource', (req, res) => {
     if (!email) return res.status(400).json({ success: false, error: 'Email is required' });
     if (!resource) return res.status(400).json({ success: false, error: 'Resource name is required' });
 
-    const { items } = req.body;
+    const { items, permanentlyDeletedIds, deletedThreadIds, userDeletedCampaigns } = req.body;
     if (!Array.isArray(items)) {
       return res.status(400).json({ success: false, error: `Payload 'items' must be an array for resource ${resource}` });
     }
@@ -3321,10 +3362,31 @@ app.post('/api/user-data/:email/resource/:resource', (req, res) => {
       emailTemplates: [],
       smtpAccounts: [],
       threads: [],
-      sentEmails: []
+      sentEmails: [],
+      permanentlyDeletedIds: [],
+      deletedThreadIds: []
     };
 
-    workspace[resource] = items;
+    const mergedPermDeleted = new Set<string>([
+      ...(Array.isArray(workspace.permanentlyDeletedIds) ? workspace.permanentlyDeletedIds.map(String) : []),
+      ...(Array.isArray(permanentlyDeletedIds) ? permanentlyDeletedIds.map(String) : [])
+    ]);
+    const mergedThreadDeleted = new Set<string>([
+      ...(Array.isArray(workspace.deletedThreadIds) ? workspace.deletedThreadIds.map(String) : []),
+      ...(Array.isArray(deletedThreadIds) ? deletedThreadIds.map(String) : [])
+    ]);
+
+    workspace.permanentlyDeletedIds = Array.from(mergedPermDeleted).slice(-5000);
+    workspace.deletedThreadIds = Array.from(mergedThreadDeleted).slice(-4000);
+    if (userDeletedCampaigns !== undefined) {
+      workspace.userDeletedCampaigns = Boolean(userDeletedCampaigns || workspace.userDeletedCampaigns);
+    }
+
+    workspace[resource] = items.filter((item: any) => {
+      if (!item || !item.id) return false;
+      const idStr = String(item.id);
+      return !mergedPermDeleted.has(idStr) && !mergedThreadDeleted.has(idStr) && !mergedThreadDeleted.has(`thread:${idStr}`);
+    });
     workspace.email = email;
     workspace.updatedAt = new Date().toISOString();
 
