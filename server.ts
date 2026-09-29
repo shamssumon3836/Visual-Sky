@@ -5453,13 +5453,33 @@ app.use('/api', (err: any, req: express.Request, res: express.Response, next: ex
 
 // Vite / Production handler
 async function startServer() {
+  const bootVersion = Date.now().toString(36);
   const prebuiltCandidate = path.join(process.cwd(), 'prebuilt');
+  const runtimeAppJsCandidate = path.join(DATA_DIR, 'runtime-app.js');
+
+  // Serve freshly compiled untracked runtime bundle (.data/runtime-app.js) first if present
+  app.get('/prebuilt/app.js', (_req, res) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    if (fs.existsSync(runtimeAppJsCandidate)) {
+      return res.sendFile(runtimeAppJsCandidate);
+    }
+    return res.sendFile(path.join(prebuiltCandidate, 'app.js'));
+  });
+
+  app.get('/prebuilt/app.css', (_req, res) => {
+    res.setHeader('Content-Type', 'text/css; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    return res.sendFile(path.join(prebuiltCandidate, 'app.css'));
+  });
+
   app.use('/prebuilt', express.static(prebuiltCandidate));
+  app.use('/assets', express.static(path.join(process.cwd(), 'dist', 'assets')));
   app.use('/assets', express.static(path.join(process.cwd(), 'assets')));
 
   const isProdServer =
     process.env.NODE_ENV === 'production' ||
-    Boolean(process.argv[1] && process.argv[1].includes('server.cjs'));
+    Boolean(process.argv[1] && (process.argv[1].includes('server.cjs') || process.argv[1].includes('server.runtime.cjs')));
 
   if (!isProdServer) {
     const { createServer: createViteServer } = await import('vite');
@@ -5474,13 +5494,14 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distCandidate = path.join(process.cwd(), 'dist');
-    const distPath = fs.existsSync(path.join(distCandidate, 'index.html'))
-      ? distCandidate
-      : fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
+    const distPath = fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
       ? prebuiltCandidate
-      : distCandidate;
+      : fs.existsSync(path.join(distCandidate, 'index.html'))
+      ? distCandidate
+      : prebuiltCandidate;
     app.use(
       express.static(distPath, {
+        index: false,
         setHeaders: (res, filePath) => {
           if (filePath.endsWith('.html') || filePath.endsWith('.js') || filePath.endsWith('.css')) {
             res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -5489,8 +5510,22 @@ async function startServer() {
       })
     );
     app.get('*', (_req, res) => {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.sendFile(path.join(distPath, 'index.html'));
+      const htmlPath = fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
+        ? path.join(prebuiltCandidate, 'index.html')
+        : fs.existsSync(path.join(distCandidate, 'index.html'))
+        ? path.join(distCandidate, 'index.html')
+        : path.join(process.cwd(), 'index.html');
+      try {
+        let html = fs.readFileSync(htmlPath, 'utf8');
+        html = html
+          .replace(/\/prebuilt\/app\.css(\?v=[^"']*)?/g, `/prebuilt/app.css?v=${bootVersion}`)
+          .replace(/\/prebuilt\/app\.js(\?v=[^"']*)?/g, `/prebuilt/app.js?v=${bootVersion}`);
+        return res.send(html);
+      } catch {
+        return res.sendFile(htmlPath);
+      }
     });
   }
 

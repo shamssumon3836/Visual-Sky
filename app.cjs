@@ -18,10 +18,10 @@ const dataDir = path.join(__dirname, '.data');
 const distServer = path.join(distDir, 'server.cjs');
 const prebuiltServer = path.join(prebuiltDir, 'server.cjs');
 const runtimeServer = path.join(dataDir, 'server.runtime.cjs');
-const prebuiltAppJs = path.join(prebuiltDir, 'app.js');
+const runtimeAppJs = path.join(dataDir, 'runtime-app.js');
 const prebuiltAppCss = path.join(prebuiltDir, 'app.css');
 
-// Auto-heal cPanel Git repository locks, HTTP/1.1 config, and dirty build artifacts so "Update from Remote" in cPanel never fails
+// Auto-heal cPanel Git repository locks and HTTP/1.1 config so "Update from Remote" in cPanel never fails
 function healCpanelGitRepo() {
   try {
     const gitDir = path.join(__dirname, '.git');
@@ -40,7 +40,6 @@ function healCpanelGitRepo() {
       if (fs.existsSync(lockFile)) {
         try {
           const stat = fs.statSync(lockFile);
-          // Remove lock file if older than 15 seconds
           if (Date.now() - stat.mtimeMs > 15000) {
             fs.unlinkSync(lockFile);
             console.log('[Git Auto-Heal] Removed stale lock file:', lockFile);
@@ -65,66 +64,57 @@ function healCpanelGitRepo() {
 
 function buildWithEsbuild() {
   const esbuild = require('esbuild');
-  fs.mkdirSync(distDir, { recursive: true });
-  fs.mkdirSync(prebuiltDir, { recursive: true });
   fs.mkdirSync(dataDir, { recursive: true });
 
-  // Only rebuild frontend into tracked files if dist/index.html is missing
-  const hasDistIndex = fs.existsSync(path.join(distDir, 'index.html'));
-  if (!hasDistIndex) {
-    const hasFullCss =
-      fs.existsSync(prebuiltAppCss) && fs.statSync(prebuiltAppCss).size > 50000;
-    if (!hasFullCss) {
-      const tailwindBackup = path.join(prebuiltDir, 'tailwind-bundle.css');
-      const rootAssetsDir = path.join(__dirname, 'assets');
-      if (fs.existsSync(tailwindBackup) && fs.statSync(tailwindBackup).size > 50000) {
-        fs.copyFileSync(tailwindBackup, prebuiltAppCss);
-      } else if (fs.existsSync(rootAssetsDir)) {
-        const cssCandidate = fs
-          .readdirSync(rootAssetsDir)
-          .find((f) => f.endsWith('.css') && fs.statSync(path.join(rootAssetsDir, f)).size > 50000);
-        if (cssCandidate) {
-          fs.copyFileSync(path.join(rootAssetsDir, cssCandidate), prebuiltAppCss);
-        }
+  // 1. Always compile latest src/main.tsx -> untracked .data/runtime-app.js so git pulls take effect immediately without dirtying tracked Git files
+  const mainEntry = path.join(__dirname, 'src', 'main.tsx');
+  if (fs.existsSync(mainEntry)) {
+    esbuild.buildSync({
+      entryPoints: [mainEntry],
+      bundle: true,
+      minify: true,
+      format: 'esm',
+      platform: 'browser',
+      target: ['es2020'],
+      outfile: runtimeAppJs,
+      loader: {
+        '.css': 'empty',
+        '.svg': 'dataurl',
+        '.png': 'dataurl',
+        '.jpg': 'dataurl',
+        '.jpeg': 'dataurl',
+        '.gif': 'dataurl',
+        '.woff': 'dataurl',
+        '.woff2': 'dataurl'
+      },
+      define: {
+        'process.env.NODE_ENV': '"production"',
+        'import.meta.env': JSON.stringify({
+          MODE: 'production',
+          PROD: true,
+          DEV: false,
+          SSR: false,
+          VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || '',
+          VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY || ''
+        })
       }
-    }
+    });
 
-    const mainEntry = path.join(__dirname, 'src', 'main.tsx');
-    if (fs.existsSync(mainEntry)) {
-      esbuild.buildSync({
-        entryPoints: [mainEntry],
-        bundle: true,
-        minify: true,
-        format: 'esm',
-        platform: 'browser',
-        target: ['es2020'],
-        outfile: prebuiltAppJs,
-        loader: {
-          '.css': 'empty',
-          '.svg': 'dataurl',
-          '.png': 'dataurl',
-          '.jpg': 'dataurl',
-          '.jpeg': 'dataurl',
-          '.gif': 'dataurl',
-          '.woff': 'dataurl',
-          '.woff2': 'dataurl'
-        },
-        define: {
-          'process.env.NODE_ENV': '"production"',
-          'import.meta.env': JSON.stringify({
-            MODE: 'production',
-            PROD: true,
-            DEV: false,
-            SSR: false,
-            VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || '',
-            VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY || ''
-          })
-        }
-      });
+    if (fs.existsSync(prebuiltAppCss) && fs.existsSync(runtimeAppJs)) {
+      const extraPopupCss =
+        '\n.vs-auth-popup-window{width:100%!important;max-width:420px!important;max-height:88vh!important;overflow-y:auto!important;margin:auto!important;border-radius:16px!important;}.vs-legal-popup-window{width:100%!important;max-width:460px!important;max-height:82vh!important;margin:auto!important;border-radius:16px!important;}\n';
+      const cssContent = fs.readFileSync(prebuiltAppCss, 'utf8') + extraPopupCss;
+      const jsContent = fs.readFileSync(runtimeAppJs, 'utf8');
+      if (!jsContent.includes('vs-tailwind-inline')) {
+        const styleInjector = `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-tailwind-inline')){var s=document.createElement('style');s.id='vs-tailwind-inline';s.textContent=${JSON.stringify(
+          cssContent
+        )};document.head.appendChild(s);}})();\n`;
+        fs.writeFileSync(runtimeAppJs, styleInjector + jsContent, 'utf8');
+      }
     }
   }
 
-  // Compile latest server.ts -> untracked .data/server.runtime.cjs so tracked Git files stay 100% clean
+  // 2. Always compile latest server.ts -> untracked .data/server.runtime.cjs so tracked Git files stay 100% clean
   const serverEntry = path.join(__dirname, 'server.ts');
   if (fs.existsSync(serverEntry)) {
     esbuild.buildSync({

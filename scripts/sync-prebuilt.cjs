@@ -10,7 +10,7 @@ const rootAssetsDir = path.join(__dirname, '..', 'assets');
 fs.mkdirSync(prebuiltDir, { recursive: true });
 fs.mkdirSync(rootAssetsDir, { recursive: true });
 
-// Clean up stale hashed files in prebuilt/, prebuilt/assets/, and assets/ so old builds never accumulate or cause git conflicts
+// Clean up stale hashed .js and .css files in prebuilt/, prebuilt/assets/, and assets/ so random-hash files never cause git conflicts on cPanel
 for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
@@ -23,6 +23,7 @@ for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
               f === 'app.css' ||
               f === 'tailwind-bundle.css' ||
               f === 'server.cjs' ||
+              f === 'index.html' ||
               f === 'favicon.svg' ||
               f === 'logo.svg' ||
               f === 'manifest.json' ||
@@ -36,7 +37,7 @@ for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
   }
 }
 
-// 1. Sync dist/server.cjs -> prebuilt/server.cjs so prebuilt server bundle is never stale
+// 1. Sync dist/server.cjs -> prebuilt/server.cjs so prebuilt bundle is never stale
 const distServer = path.join(distDir, 'server.cjs');
 const prebuiltServer = path.join(prebuiltDir, 'server.cjs');
 if (fs.existsSync(distServer)) {
@@ -46,7 +47,6 @@ if (fs.existsSync(distServer)) {
 
 if (fs.existsSync(distAssets)) {
   const files = fs.readdirSync(distAssets);
-  const jsFile = files.find((f) => f.startsWith('index-') && f.endsWith('.js'));
   const cssFile = files.find((f) => f.startsWith('index-') && f.endsWith('.css'));
 
   if (cssFile) {
@@ -60,17 +60,77 @@ if (fs.existsSync(distAssets)) {
     );
   }
 
-  if (jsFile) {
-    // Write a lightweight ES module entry for /prebuilt/app.js that loads the hashed Vite entry from /assets/
+  // Compile self-contained single-file bundle into prebuilt/app.js with fixed filename (no random hashes in git)
+  try {
+    const esbuild = require('esbuild');
+    const mainEntry = path.join(__dirname, '..', 'src', 'main.tsx');
     const prebuiltAppJs = path.join(prebuiltDir, 'app.js');
-    fs.writeFileSync(prebuiltAppJs, `import "/assets/${jsFile}";\n`, 'utf8');
-    console.log('[sync-prebuilt] Linked', jsFile, '-> prebuilt/app.js');
+    const prebuiltAppCss = path.join(prebuiltDir, 'app.css');
+    if (fs.existsSync(mainEntry)) {
+      esbuild.buildSync({
+        entryPoints: [mainEntry],
+        bundle: true,
+        minify: true,
+        format: 'esm',
+        platform: 'browser',
+        target: ['es2020'],
+        outfile: prebuiltAppJs,
+        loader: {
+          '.css': 'empty',
+          '.svg': 'dataurl',
+          '.png': 'dataurl',
+          '.jpg': 'dataurl',
+          '.jpeg': 'dataurl',
+          '.gif': 'dataurl',
+          '.woff': 'dataurl',
+          '.woff2': 'dataurl'
+        },
+        define: {
+          'process.env.NODE_ENV': '"production"',
+          'import.meta.env': JSON.stringify({
+            MODE: 'production',
+            PROD: true,
+            DEV: false,
+            SSR: false,
+            VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || '',
+            VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY || ''
+          })
+        }
+      });
+      if (fs.existsSync(prebuiltAppCss) && fs.existsSync(prebuiltAppJs)) {
+        const extraPopupCss =
+          '\n.vs-auth-popup-window{width:100%!important;max-width:420px!important;max-height:88vh!important;overflow-y:auto!important;margin:auto!important;border-radius:16px!important;}.vs-legal-popup-window{width:100%!important;max-width:460px!important;max-height:82vh!important;margin:auto!important;border-radius:16px!important;}\n';
+        const cssContent = fs.readFileSync(prebuiltAppCss, 'utf8') + extraPopupCss;
+        const jsContent = fs.readFileSync(prebuiltAppJs, 'utf8');
+        if (!jsContent.includes('vs-tailwind-inline')) {
+          const styleInjector = `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-tailwind-inline')){var s=document.createElement('style');s.id='vs-tailwind-inline';s.textContent=${JSON.stringify(
+            cssContent
+          )};document.head.appendChild(s);}})();\n`;
+          fs.writeFileSync(prebuiltAppJs, styleInjector + jsContent, 'utf8');
+        }
+      }
+      console.log('[sync-prebuilt] Built self-contained prebuilt/app.js');
+    }
+  } catch (err) {
+    console.warn('[sync-prebuilt] esbuild warning:', err && err.message);
   }
+}
 
-  // Copy current hashed assets to root /assets/
-  for (const file of files) {
-    fs.copyFileSync(path.join(distAssets, file), path.join(rootAssetsDir, file));
-  }
-  console.log('[sync-prebuilt] Synced dist/assets/* -> assets/*');
+// Write clean prebuilt/index.html that references fixed /prebuilt/app.css and /prebuilt/app.js
+const rootIndexHtml = path.join(__dirname, '..', 'index.html');
+const prebuiltIndexHtml = path.join(prebuiltDir, 'index.html');
+if (fs.existsSync(rootIndexHtml)) {
+  const rawHtml = fs.readFileSync(rootIndexHtml, 'utf8');
+  const prodHtml = rawHtml
+    .replace(
+      '</head>',
+      '    <link rel="stylesheet" href="/prebuilt/app.css" />\n  </head>'
+    )
+    .replace(
+      /<script type="module" src="\/src\/main\.tsx"[^>]*><\/script>/,
+      '<script type="module" src="/prebuilt/app.js"></script>'
+    );
+  fs.writeFileSync(prebuiltIndexHtml, prodHtml, 'utf8');
+  console.log('[sync-prebuilt] Wrote clean prebuilt/index.html');
 }
 
