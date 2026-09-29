@@ -61,64 +61,10 @@ if (fs.existsSync(distAssets)) {
   }
 
   if (jsFile) {
-    const jsPath = path.join(distAssets, jsFile);
-    fs.copyFileSync(jsPath, path.join(prebuiltDir, 'app.js'));
-    console.log('[sync-prebuilt] Synced', jsFile, '-> prebuilt/app.js');
-  }
-
-  // Also compile a self-contained single-file bundle into prebuilt/app.js so /prebuilt/app.js fallback works without needing relative chunks
-  try {
-    const esbuild = require('esbuild');
-    const mainEntry = path.join(__dirname, '..', 'src', 'main.tsx');
+    // Write a lightweight ES module entry for /prebuilt/app.js that loads the hashed Vite entry from /assets/
     const prebuiltAppJs = path.join(prebuiltDir, 'app.js');
-    const prebuiltAppCss = path.join(prebuiltDir, 'app.css');
-    if (fs.existsSync(mainEntry)) {
-      esbuild.buildSync({
-        entryPoints: [mainEntry],
-        bundle: true,
-        minify: true,
-        format: 'esm',
-        platform: 'browser',
-        target: ['es2020'],
-        outfile: prebuiltAppJs,
-        loader: {
-          '.css': 'empty',
-          '.svg': 'dataurl',
-          '.png': 'dataurl',
-          '.jpg': 'dataurl',
-          '.jpeg': 'dataurl',
-          '.gif': 'dataurl',
-          '.woff': 'dataurl',
-          '.woff2': 'dataurl'
-        },
-        define: {
-          'process.env.NODE_ENV': '"production"',
-          'import.meta.env': JSON.stringify({
-            MODE: 'production',
-            PROD: true,
-            DEV: false,
-            SSR: false,
-            VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || '',
-            VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY || ''
-          })
-        }
-      });
-      if (fs.existsSync(prebuiltAppCss) && fs.existsSync(prebuiltAppJs)) {
-        const extraPopupCss =
-          '\n.vs-auth-popup-window{width:100%!important;max-width:420px!important;max-height:88vh!important;overflow-y:auto!important;margin:auto!important;border-radius:16px!important;}.vs-legal-popup-window{width:100%!important;max-width:460px!important;max-height:82vh!important;margin:auto!important;border-radius:16px!important;}\n';
-        const cssContent = fs.readFileSync(prebuiltAppCss, 'utf8') + extraPopupCss;
-        const jsContent = fs.readFileSync(prebuiltAppJs, 'utf8');
-        if (!jsContent.includes('vs-tailwind-inline')) {
-          const styleInjector = `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-tailwind-inline')){var s=document.createElement('style');s.id='vs-tailwind-inline';s.textContent=${JSON.stringify(
-            cssContent
-          )};document.head.appendChild(s);}})();\n`;
-          fs.writeFileSync(prebuiltAppJs, styleInjector + jsContent, 'utf8');
-        }
-      }
-      console.log('[sync-prebuilt] Built self-contained prebuilt/app.js bundle');
-    }
-  } catch (err) {
-    console.warn('[sync-prebuilt] Fallback esbuild warning:', err && err.message);
+    fs.writeFileSync(prebuiltAppJs, `import "/assets/${jsFile}";\n`, 'utf8');
+    console.log('[sync-prebuilt] Linked', jsFile, '-> prebuilt/app.js');
   }
 
   // Copy current hashed assets to root /assets/
