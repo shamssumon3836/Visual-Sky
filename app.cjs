@@ -60,14 +60,6 @@ function healCpanelGitRepo() {
         console.log('[Git Auto-Heal] Configured HTTP/1.1 and buffer settings in .git/config');
       }
     }
-
-    // 3. Reset any locally modified build artifacts in dist/, prebuilt/, or assets/ so git pull never conflicts
-    const { execSync } = require('child_process');
-    execSync('git checkout -- dist prebuilt assets 2>/dev/null || true', {
-      cwd: __dirname,
-      stdio: 'ignore',
-      timeout: 5000
-    });
   } catch (_err) {}
 }
 
