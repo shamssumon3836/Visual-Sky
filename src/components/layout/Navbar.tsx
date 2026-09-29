@@ -31,7 +31,8 @@ import {
   Cloud,
   CloudOff,
   RefreshCw,
-  Zap
+  Zap,
+  FolderOpen
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -73,7 +74,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
     isWorkspaceLoading,
     syncStatus,
     loadUserWorkspace,
-    saveWorkspaceToDatabase
+    saveWorkspaceToDatabase,
+    driveStorageSettings
   } = useApp();
 
   const [showNotifs, setShowNotifs] = useState<boolean>(false);
@@ -490,6 +492,24 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
             <span className="whitespace-nowrap">Send Mail</span>
           </button>
         )}
+
+        {/* Google Drive Folder Link & Attachment Hub Quick Button */}
+        <button
+          onClick={() => setActiveTab('drive_storage')}
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border text-xs font-extrabold transition shrink-0 cursor-pointer ${
+            activeTab === 'drive_storage'
+              ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200 shadow-lg shadow-emerald-500/10'
+              : driveStorageSettings?.folderUrl
+              ? 'bg-emerald-950/70 hover:bg-emerald-900/80 border-emerald-500/40 text-emerald-300'
+              : 'bg-amber-950/70 hover:bg-amber-900/80 border-amber-500/40 text-amber-200'
+          }`}
+          title="Share or Change Your Google Drive Folder Link for Email File Attachments (0 KB Hosting)"
+        >
+          <FolderOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <span className="whitespace-nowrap hidden sm:inline">
+            {driveStorageSettings?.folderUrl ? '☁️ Drive Linked' : '☁️ Drive Link'}
+          </span>
+        </button>
 
         {/* Sent Mails & Outbox Tracker Button */}
         <button

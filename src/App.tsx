@@ -33,6 +33,7 @@ const SentMailsTracker = React.lazy(() => import('./components/sent/SentMailsTra
 const GeminiAssistant = React.lazy(() => import('./components/ai/GeminiAssistant').then(m => ({ default: m.GeminiAssistant })));
 const OwnerPanel = React.lazy(() => import('./components/owner/OwnerPanel').then(m => ({ default: m.OwnerPanel })));
 const TrashManager = React.lazy(() => import('./components/trash/TrashManager').then(m => ({ default: m.TrashManager })));
+const GoogleDriveStorageView = React.lazy(() => import('./components/drive/GoogleDriveStorageView').then(m => ({ default: m.GoogleDriveStorageView })));
 const MobileNavDrawer = React.lazy(() => import('./components/layout/MobileNavDrawer').then(m => ({ default: m.MobileNavDrawer })));
 const AuthModal = React.lazy(() => import('./components/auth/AuthModal').then(m => ({ default: m.AuthModal })));
 const LogoutConfirmModal = React.lazy(() => import('./components/auth/LogoutConfirmModal').then(m => ({ default: m.LogoutConfirmModal })));
@@ -252,6 +253,8 @@ const MainContent: React.FC = () => {
         return <GeminiAssistant />;
       case 'owner':
         return <OwnerPanel />;
+      case 'drive_storage':
+        return <GoogleDriveStorageView onOpenSendMail={() => handleOpenSendMail()} />;
       case 'trash':
         return <TrashManager />;
       default:

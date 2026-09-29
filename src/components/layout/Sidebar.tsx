@@ -12,7 +12,8 @@ import {
   Trash2, 
   Zap,
   BarChart3,
-  FileText
+  FileText,
+  FolderOpen
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -28,7 +29,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
     campaigns, 
     smtpAccounts,
     currentUser,
-    totalTrashCount
+    totalTrashCount,
+    driveStorageSettings
   } = useApp();
 
   const activeLeadsCount = leads.filter(l => !l.isTrash).length;
@@ -107,6 +109,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
       icon: Inbox,
       badge: isServiceDisabled('inbox') ? '🔒 Disabled' : (unreadThreadsCount > 0 ? unreadThreadsCount : undefined),
       badgeColor: isServiceDisabled('inbox') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+    },
+    {
+      id: 'drive_storage',
+      label: 'Google Drive Storage',
+      icon: FolderOpen,
+      badge: driveStorageSettings?.folderUrl ? '✓ Linked' : 'Set Link',
+      badgeColor: driveStorageSettings?.folderUrl
+        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+        : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
     },
     {
       id: 'sent',

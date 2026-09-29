@@ -20,7 +20,8 @@ import {
   LogOut,
   Mail,
   User as UserIcon,
-  Search
+  Search,
+  FolderOpen
 } from 'lucide-react';
 
 interface MobileNavDrawerProps {
@@ -48,7 +49,8 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
     campaigns, 
     smtpAccounts,
     currentUser,
-    totalTrashCount
+    totalTrashCount,
+    driveStorageSettings
   } = useApp();
 
   if (!isOpen) return null;
@@ -137,6 +139,16 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
       icon: Inbox,
       badge: isServiceDisabled('inbox') ? '🔒 Disabled' : (unreadThreadsCount > 0 ? `${unreadThreadsCount} Unread` : undefined),
       badgeColor: isServiceDisabled('inbox') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+    },
+    {
+      id: 'drive_storage',
+      label: 'Google Drive Storage',
+      description: 'Share/change Drive folder link & attach files',
+      icon: FolderOpen,
+      badge: driveStorageSettings?.folderUrl ? '✓ Linked' : 'Set Link',
+      badgeColor: driveStorageSettings?.folderUrl
+        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+        : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
     },
     {
       id: 'sent',
