@@ -582,11 +582,17 @@ const sanitizeThreadsArray = (list: EmailThread[]): EmailThread[] => {
         ? dedupedMessages[dedupedMessages.length - 1].body
         : cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName);
 
+    const isThreadUnread = (t.unreadCount || 0) > 0;
+    const normalizedMessages = isThreadUnread
+      ? dedupedMessages
+      : dedupedMessages.map(m => ({ ...m, isRead: true }));
+
     const normalizedThread: EmailThread = {
       ...t,
       id: baseThreadId || t.id,
+      unreadCount: isThreadUnread ? t.unreadCount : 0,
       lastMessage: (latestMsgBody || cleanEmailBodyText(t.lastMessage, t.leadCompany, t.leadCompany, t.leadName)).slice(0, 100),
-      messages: dedupedMessages
+      messages: normalizedMessages
     };
 
     const existingForLead = byLeadEmail.get(leadEmailKey);
@@ -2048,11 +2054,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!target) return prev;
       const updatedThread: EmailThread = {
         ...target,
+        unreadCount: 0,
         smtpAccountId: activeSmtp?.id || target.smtpAccountId,
         smtpEmail: senderFromEmail || target.smtpEmail,
         lastMessage: resolvedBody.slice(0, 100),
         lastMessageDate: 'Just now',
-        messages: [...target.messages, newMsg]
+        messages: [...target.messages.map(m => ({ ...m, isRead: true })), newMsg]
       };
       const nextThreads = [updatedThread, ...prev.filter(t => t.id !== threadId)];
       persistResourceDirectly('threads', nextThreads);

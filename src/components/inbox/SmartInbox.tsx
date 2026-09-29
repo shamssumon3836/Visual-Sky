@@ -1168,17 +1168,25 @@ export const SmartInbox: React.FC = () => {
                 const isChecked = selectedThreadIds.includes(t.id);
                 const waitingForUser = isThreadWaitingReply(t);
                 const msgCount = Array.isArray(t.messages) ? t.messages.length : 1;
+                const isUnread =
+                  (t.unreadCount || 0) > 0 ||
+                  (Array.isArray(t.messages) &&
+                    t.messages.some(m => m.sender === 'lead' && m.isRead === false));
+                const isReplyMail =
+                  msgCount > 1 ||
+                  (Array.isArray(t.labels) && t.labels.includes('Real Reply')) ||
+                  (Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead') && t.messages.some(m => m.sender === 'user'));
 
                 return (
                   <div
                     key={t.id}
                     onClick={() => handleSelectThread(t)}
-                    className={`p-3.5 transition cursor-pointer flex gap-3 relative group ${
-                      isSelected 
-                        ? 'bg-cyan-950/30 border-l-4 border-l-cyan-400' 
-                        : t.unreadCount > 0 
-                        ? 'bg-slate-900 font-bold' 
-                        : 'hover:bg-slate-850 opacity-90'
+                    className={`p-3.5 transition-all cursor-pointer flex gap-3 relative group ${
+                      isUnread
+                        ? 'bg-gradient-to-r from-emerald-500/25 via-cyan-500/15 to-slate-900 border-l-4 border-l-emerald-400 ring-1 ring-emerald-400/40 shadow-[inset_0_0_24px_rgba(16,185,129,0.18)]'
+                        : isSelected
+                        ? 'bg-slate-800/75 border-l-4 border-l-cyan-400'
+                        : 'hover:bg-slate-800/40 opacity-85'
                     }`}
                   >
                     {/* Checkbox + Star */}
@@ -1202,21 +1210,54 @@ export const SmartInbox: React.FC = () => {
                     <div className="min-w-0 flex-1 space-y-1">
                       <div className="flex items-center justify-between gap-1">
                         <div className="flex items-center gap-1.5 min-w-0">
-                          <span className={`text-xs truncate ${t.unreadCount > 0 ? 'font-black text-slate-100' : 'text-slate-300'}`}>
+                          {isUnread && (
+                            <span className="relative flex h-2.5 w-2.5 shrink-0" title="Unseen New Mail">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400" />
+                            </span>
+                          )}
+                          <span
+                            className={`truncate ${
+                              isUnread
+                                ? 'text-[13px] font-black text-white'
+                                : 'text-xs font-medium text-slate-300'
+                            }`}
+                          >
                             {t.leadName}
                           </span>
                           {msgCount > 1 && (
-                            <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-cyan-300 shrink-0">
+                            <span
+                              className={`text-[10px] font-mono px-1.5 py-0.2 rounded shrink-0 ${
+                                isUnread
+                                  ? 'bg-emerald-500/30 text-emerald-200 font-bold border border-emerald-400/40'
+                                  : 'bg-slate-800 text-slate-400'
+                              }`}
+                            >
                               {msgCount}
                             </span>
                           )}
+                          {isUnread && (
+                            <span className="px-1.5 py-0.5 rounded-full bg-emerald-400 text-slate-950 font-black text-[9px] uppercase tracking-wider shadow-sm animate-pulse shrink-0">
+                              {isReplyMail ? '✨ NEW REPLY' : '✨ NEW MAIL'}
+                            </span>
+                          )}
                         </div>
-                        <span className="text-[10px] text-slate-500 font-mono shrink-0">
+                        <span
+                          className={`text-[10px] font-mono shrink-0 ${
+                            isUnread ? 'text-emerald-300 font-extrabold' : 'text-slate-500'
+                          }`}
+                        >
                           {t.updatedAt || t.lastMessageDate || 'Today'}
                         </span>
                       </div>
 
-                      <div className="text-[11px] text-cyan-400/90 truncate font-semibold">
+                      <div
+                        className={`text-[11px] truncate ${
+                          isUnread
+                            ? 'text-emerald-300 font-extrabold'
+                            : 'text-slate-400 font-normal'
+                        }`}
+                      >
                         {t.subject}
                       </div>
 
@@ -1228,14 +1269,16 @@ export const SmartInbox: React.FC = () => {
                           ? cleanBodyText(latestLeadReply.body, t.leadCompany, t.leadName)
                           : cleanBodyText(t.lastMessage, t.leadCompany, t.leadName);
                         const { mainReply } = splitReplyAndQuotedHistory(rawPreview);
-                        return latestLeadReply ? (
-                          <div className="mt-1 p-2 rounded-xl bg-emerald-950/35 border border-emerald-500/30 text-[11px] text-emerald-100 font-medium line-clamp-2 leading-snug">
-                            <span className="text-emerald-400 font-extrabold mr-1">💬 Reply:</span>
+                        return isUnread ? (
+                          <div className="mt-1 p-2 rounded-xl bg-emerald-950/70 border border-emerald-400/50 text-[11px] text-white font-bold line-clamp-2 leading-snug shadow-sm">
+                            <span className="text-emerald-300 font-black mr-1">
+                              {isReplyMail ? '📩 New Reply:' : '📩 New Mail:'}
+                            </span>
                             {mainReply}
                           </div>
                         ) : (
-                          <p className="text-[11px] text-slate-400 line-clamp-2 leading-snug">
-                            {mainReply}
+                          <p className="text-[11px] text-slate-400 font-normal line-clamp-2 leading-snug">
+                            {latestLeadReply ? `💬 ${mainReply}` : mainReply}
                           </p>
                         );
                       })()}
@@ -1791,6 +1834,7 @@ export const SmartInbox: React.FC = () => {
 
                   return visibleMessages.map((m, idx) => {
                     const isLead = m.sender === 'lead';
+                    const isMsgUnseen = isLead && (m.isRead === false || (currentThread.unreadCount || 0) > 0 && idx === visibleMessages.length - 1);
                     const msgKey = String(m.id || `${currentThread.id}-${idx}`);
                     const cleanedBody = cleanBodyText(m.body, currentThread.leadCompany, currentThread.leadName);
                     const { mainReply, quotedHistory } = splitReplyAndQuotedHistory(cleanedBody);
@@ -1799,9 +1843,20 @@ export const SmartInbox: React.FC = () => {
                     return (
                       <div
                         key={msgKey}
+                        onClick={() => {
+                          if (
+                            (currentThread.unreadCount || 0) > 0 ||
+                            (Array.isArray(currentThread.messages) &&
+                              currentThread.messages.some(msg => msg.sender === 'lead' && msg.isRead === false))
+                          ) {
+                            markThreadRead(currentThread.id);
+                          }
+                        }}
                         className={`p-3 md:p-4 rounded-2xl border space-y-2 shadow-md transition ${
-                          isLead
-                            ? 'bg-[#0b1526] border-emerald-500/40 ring-1 ring-emerald-500/15'
+                          isMsgUnseen
+                            ? 'bg-gradient-to-r from-emerald-950/60 via-[#0b1526] to-[#0b1526] border-emerald-400 ring-2 ring-emerald-400/30 shadow-[0_0_20px_rgba(16,185,129,0.18)]'
+                            : isLead
+                            ? 'bg-[#0b1526] border-slate-800'
                             : 'bg-slate-900/80 border-blue-500/25 md:ml-6'
                         }`}
                       >
@@ -1831,6 +1886,11 @@ export const SmartInbox: React.FC = () => {
                               >
                                 {isLead ? '📥 Prospect Reply' : '📤 Sent by You'}
                               </span>
+                              {isMsgUnseen && (
+                                <span className="px-1.5 py-0.5 rounded-full bg-emerald-400 text-slate-950 font-black text-[9px] uppercase tracking-wider animate-pulse">
+                                  ✨ NEW UNSEEN
+                                </span>
+                              )}
                               <span className="text-[11px] text-slate-400 font-mono truncate hidden sm:inline">
                                 &lt;{isLead ? currentThread.leadEmail : m.senderEmail || currentUser.email}&gt;
                               </span>
@@ -2034,6 +2094,15 @@ export const SmartInbox: React.FC = () => {
                     ref={replyTextareaRef}
                     rows={2}
                     value={replyText}
+                    onFocus={() => {
+                      if (
+                        (currentThread.unreadCount || 0) > 0 ||
+                        (Array.isArray(currentThread.messages) &&
+                          currentThread.messages.some(msg => msg.sender === 'lead' && msg.isRead === false))
+                      ) {
+                        markThreadRead(currentThread.id);
+                      }
+                    }}
                     onChange={(e) => setReplyText(e.target.value)}
                     onKeyDown={(e) => {
                       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && replyText.trim()) {
