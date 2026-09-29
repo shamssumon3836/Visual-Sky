@@ -41,6 +41,8 @@ var import_nodemailer = __toESM(require("nodemailer"), 1);
 var import_imapflow = require("imapflow");
 var import_mailparser = require("mailparser");
 var import_crypto = __toESM(require("crypto"), 1);
+var import_dns = __toESM(require("dns"), 1);
+var import_zlib = __toESM(require("zlib"), 1);
 import_dotenv.default.config();
 process.on("uncaughtException", (err) => {
   console.error("[CRITICAL UNCAUGHT EXCEPTION PREVENTED]:", err?.message || err);
@@ -51,6 +53,40 @@ process.on("unhandledRejection", (reason) => {
 var OTP_SECRET = process.env.OTP_SECRET || "visualsky-secure-otp-signature-key-2026";
 var app = (0, import_express.default)();
 var PORT = Number(process.env.PORT) || 3e3;
+app.use((req, res, next) => {
+  const acceptEncoding = String(req.headers["accept-encoding"] || "");
+  if (!acceptEncoding.includes("gzip") || req.method === "HEAD") {
+    return next();
+  }
+  let writeCalled = false;
+  const origWrite = res.write;
+  const origEnd = res.end;
+  res.write = function(chunk, ...args) {
+    writeCalled = true;
+    return origWrite.apply(this, [chunk, ...args]);
+  };
+  res.end = function(chunk, ...args) {
+    if (!writeCalled && chunk && !res.getHeader("Content-Encoding")) {
+      const contentType = String(res.getHeader("Content-Type") || "").toLowerCase();
+      const isCompressible = contentType.includes("javascript") || contentType.includes("json") || contentType.includes("text/") || contentType.includes("svg") || req.url.endsWith(".tsx") || req.url.endsWith(".ts") || req.url.endsWith(".js") || req.url.endsWith(".css");
+      if (isCompressible) {
+        try {
+          const buf = Buffer.isBuffer(chunk) ? chunk : typeof chunk === "string" ? Buffer.from(chunk, typeof args[0] === "string" ? args[0] : "utf8") : null;
+          if (buf && buf.byteLength > 1024) {
+            const compressed = import_zlib.default.gzipSync(buf, { level: 1 });
+            res.setHeader("Content-Encoding", "gzip");
+            res.setHeader("Vary", "Accept-Encoding");
+            res.setHeader("Content-Length", String(compressed.byteLength));
+            return origEnd.call(this, compressed);
+          }
+        } catch {
+        }
+      }
+    }
+    return origEnd.apply(this, [chunk, ...args]);
+  };
+  next();
+});
 app.use(import_express.default.json({ limit: "15mb" }));
 app.use((err, _req, res, next) => {
   if (err instanceof SyntaxError && "body" in err) {
@@ -111,6 +147,36 @@ var getPaymentSettings = () => {
   return DEFAULT_PAYMENT_SETTINGS;
 };
 var otpStore = /* @__PURE__ */ new Map();
+var SIGNUP_OTP_STORE_FILE = import_path.default.join(DATA_DIR, "signup_otp_store.json");
+var signupOtpStore = /* @__PURE__ */ new Map();
+var loadSignupOtpStoreFromDisk = () => {
+  try {
+    if (import_fs.default.existsSync(SIGNUP_OTP_STORE_FILE)) {
+      const raw = JSON.parse(import_fs.default.readFileSync(SIGNUP_OTP_STORE_FILE, "utf-8"));
+      if (raw && typeof raw === "object") {
+        for (const [k, v] of Object.entries(raw)) {
+          if (v && typeof v === "object") {
+            signupOtpStore.set(k, v);
+          }
+        }
+      }
+    }
+  } catch {
+  }
+};
+var saveSignupOtpStoreToDisk = () => {
+  try {
+    const obj = {};
+    for (const [k, v] of signupOtpStore.entries()) {
+      if (Date.now() <= v.expiresAt + 15 * 60 * 1e3) {
+        obj[k] = v;
+      }
+    }
+    import_fs.default.writeFileSync(SIGNUP_OTP_STORE_FILE, JSON.stringify(obj, null, 2), "utf-8");
+  } catch {
+  }
+};
+loadSignupOtpStoreFromDisk();
 var BKASH_OTP_STORE_FILE = import_path.default.join(DATA_DIR, "bkash_otp_store.json");
 var bkashPaymentOtpStore = /* @__PURE__ */ new Map();
 var loadBkashOtpStoreFromDisk = () => {
@@ -1289,6 +1355,13 @@ app.post("/api/auth/reset-password", async (req, res) => {
     }
     const cleanEmail = email.trim().toLowerCase();
     const cleanOtp = otp.trim();
+    const { confirmPassword } = req.body || {};
+    if (confirmPassword !== void 0 && String(newPassword) !== String(confirmPassword)) {
+      return res.status(400).json({
+        success: false,
+        error: "New password and Confirm password do not match."
+      });
+    }
     let isValidOtp = false;
     const stored = otpStore.get(cleanEmail);
     if (stored && stored.code === cleanOtp) {
@@ -1352,14 +1425,389 @@ app.post("/api/auth/reset-password", async (req, res) => {
     return res.status(500).json({ success: false, error: "Failed to reset password" });
   }
 });
+var dispatchVerificationEmail = async (params) => {
+  let sentViaRealSmtp = false;
+  const cleanEmail = params.toEmail.trim().toLowerCase();
+  const sysHost = process.env.SMTP_HOST || "mail.visualsky.pro";
+  const sysPort = Number(process.env.SMTP_PORT) || 465;
+  const sysUser = process.env.SMTP_USER || "founder@visualsky.pro";
+  const sysPass = process.env.SMTP_PASS || "Vsky3836@";
+  const sysSecure = process.env.SMTP_SECURE === "true" || sysPort === 465;
+  const fromAddr = process.env.SMTP_FROM || sysUser;
+  const sysDomain = fromAddr.split("@")[1] || "visualsky.pro";
+  const msgId = `<${import_crypto.default.randomBytes(8).toString("hex")}.${Date.now()}@${sysDomain}>`;
+  try {
+    const transporter = import_nodemailer.default.createTransport({
+      host: sysHost,
+      port: sysPort,
+      secure: sysSecure,
+      name: sysDomain,
+      auth: { user: sysUser, pass: sysPass },
+      tls: { rejectUnauthorized: false },
+      connectionTimeout: 8e3,
+      greetingTimeout: 6e3,
+      socketTimeout: 1e4
+    });
+    await transporter.sendMail({
+      messageId: msgId,
+      from: `"VisualSky" <${fromAddr}>`,
+      replyTo: fromAddr,
+      to: cleanEmail,
+      subject: params.subject,
+      text: params.textBody,
+      html: params.htmlBody,
+      envelope: { from: fromAddr, to: cleanEmail }
+    });
+    sentViaRealSmtp = true;
+  } catch (sysErr) {
+    console.error("[Verification Mailer] Primary SMTP warning:", sysErr?.message);
+    if (sysPort === 465) {
+      try {
+        const fallback587 = import_nodemailer.default.createTransport({
+          host: sysHost,
+          port: 587,
+          secure: false,
+          requireTLS: true,
+          name: sysDomain,
+          auth: { user: sysUser, pass: sysPass },
+          tls: { rejectUnauthorized: false },
+          connectionTimeout: 6e3,
+          greetingTimeout: 5e3,
+          socketTimeout: 8e3
+        });
+        await fallback587.sendMail({
+          messageId: msgId,
+          from: `"VisualSky" <${fromAddr}>`,
+          replyTo: fromAddr,
+          to: cleanEmail,
+          subject: params.subject,
+          text: params.textBody,
+          html: params.htmlBody,
+          envelope: { from: fromAddr, to: cleanEmail }
+        });
+        sentViaRealSmtp = true;
+      } catch {
+      }
+    }
+  }
+  const resendApiKey = process.env.RESEND_API_KEY;
+  if (!sentViaRealSmtp && resendApiKey) {
+    try {
+      const resendRes = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          from: process.env.SMTP_FROM || "VisualSky Security <onboarding@resend.dev>",
+          to: cleanEmail,
+          subject: params.subject,
+          text: params.textBody,
+          html: params.htmlBody
+        })
+      });
+      const resendData = await resendRes.json().catch(() => ({}));
+      if (resendRes.ok && resendData?.id) {
+        sentViaRealSmtp = true;
+      }
+    } catch {
+    }
+  }
+  const brevoApiKey = process.env.BREVO_API_KEY;
+  if (!sentViaRealSmtp && brevoApiKey) {
+    try {
+      const brevoRes = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method: "POST",
+        headers: {
+          "api-key": brevoApiKey,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          sender: {
+            name: "VisualSky Security",
+            email: process.env.SMTP_FROM || "security@visualsky.agency"
+          },
+          to: [{ email: cleanEmail }],
+          subject: params.subject,
+          textContent: params.textBody,
+          htmlContent: params.htmlBody
+        })
+      });
+      const brevoData = await brevoRes.json().catch(() => ({}));
+      if (brevoRes.ok && brevoData?.messageId) {
+        sentViaRealSmtp = true;
+      }
+    } catch {
+    }
+  }
+  if (!sentViaRealSmtp && Array.isArray(params.smtpAccounts)) {
+    const customSmtp = params.smtpAccounts.find((s) => s.password && s.host && !s.isTrash);
+    if (customSmtp) {
+      try {
+        const customPort = Number(customSmtp.port) || 587;
+        const customSecure = customSmtp.encryption === "SSL" || customPort === 465;
+        const customFrom = customSmtp.fromEmail || customSmtp.username;
+        const customTransporter = import_nodemailer.default.createTransport({
+          host: customSmtp.host,
+          port: customPort,
+          secure: customSecure,
+          auth: { user: customSmtp.username, pass: customSmtp.password },
+          tls: { rejectUnauthorized: false },
+          connectionTimeout: 12e3
+        });
+        await customTransporter.sendMail({
+          from: `"VisualSky Security" <${customFrom}>`,
+          replyTo: customFrom,
+          to: cleanEmail,
+          subject: params.subject,
+          text: params.textBody,
+          html: params.htmlBody
+        });
+        sentViaRealSmtp = true;
+      } catch {
+      }
+    }
+  }
+  return sentViaRealSmtp;
+};
+app.post("/api/auth/send-signup-otp", async (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    loadSignupOtpStoreFromDisk();
+    const {
+      name,
+      email,
+      password,
+      confirmPassword,
+      acceptedTerms,
+      role = "client",
+      smtpAccounts
+    } = req.body || {};
+    const cleanName = String(name || "").trim();
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    const cleanRole = role === "agency" ? "agency" : "client";
+    if (!cleanName) {
+      return res.status(400).json({
+        success: false,
+        error: "\u0985\u09A8\u09C1\u0997\u09CD\u09B0\u09B9 \u0995\u09B0\u09C7 \u0986\u09AA\u09A8\u09BE\u09B0 \u09B8\u09AE\u09CD\u09AA\u09C2\u09B0\u09CD\u09A3 \u09A8\u09BE\u09AE (Full Name) \u09B2\u09BF\u0996\u09C1\u09A8\u0964"
+      });
+    }
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({
+        success: false,
+        error: "\u0985\u09A8\u09C1\u0997\u09CD\u09B0\u09B9 \u0995\u09B0\u09C7 \u098F\u0995\u099F\u09BF \u09B8\u09A0\u09BF\u0995 \u0993 \u09B8\u099A\u09B2 \u0987\u09AE\u09C7\u0987\u09B2 \u098F\u09A1\u09CD\u09B0\u09C7\u09B8 \u09A6\u09BF\u09A8\u0964"
+      });
+    }
+    if (!password || String(password).length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: "\u09AA\u09BE\u09B8\u0993\u09DF\u09BE\u09B0\u09CD\u09A1 \u0995\u09AE\u09AA\u0995\u09CD\u09B7\u09C7 \u09EC \u0985\u0995\u09CD\u09B7\u09B0\u09C7\u09B0 \u09B9\u09A4\u09C7 \u09B9\u09AC\u09C7 (Password must be at least 6 characters)."
+      });
+    }
+    if (confirmPassword !== void 0 && String(password) !== String(confirmPassword)) {
+      return res.status(400).json({
+        success: false,
+        error: "\u274C Password \u098F\u09AC\u0982 Confirm Password \u098F\u0995 \u09B9\u09DF\u09A8\u09BF! \u09A6\u09C1\u099F\u09BF \u09AC\u0995\u09CD\u09B8\u09C7\u0987 \u098F\u0995\u0987 \u09AA\u09BE\u09B8\u0993\u09DF\u09BE\u09B0\u09CD\u09A1 \u09A6\u09BF\u09A8\u0964"
+      });
+    }
+    if (!acceptedTerms) {
+      return res.status(400).json({
+        success: false,
+        error: "\u274C \u098F\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09A4\u09C8\u09B0\u09BF \u0995\u09B0\u09BE\u09B0 \u099C\u09A8\u09CD\u09AF Terms & Conditions \u098F\u09AC\u0982 Privacy Policy-\u09A4\u09C7 \u099F\u09BF\u0995 (\u2713) \u09A6\u09C7\u0993\u09DF\u09BE \u09AC\u09BE\u09A7\u09CD\u09AF\u09A4\u09BE\u09AE\u09C2\u09B2\u0995\u0964"
+      });
+    }
+    let existingUsers = [];
+    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+      try {
+        existingUsers = sanitizeLiveUsers(JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8")));
+      } catch {
+      }
+    }
+    const duplicate = existingUsers.find((u) => u.email?.toLowerCase() === cleanEmail);
+    if (duplicate) {
+      return res.status(409).json({
+        success: false,
+        error: `\u274C \u098F\u0987 \u0987\u09AE\u09C7\u0987\u09B2 (${cleanEmail}) \u09A6\u09BF\u09DF\u09C7 \u0987\u09A4\u09BF\u09AE\u09A7\u09CD\u09AF\u09C7 \u098F\u0995\u09BE\u0989\u09A8\u09CD\u099F \u0996\u09CB\u09B2\u09BE \u09B9\u09DF\u09C7\u099B\u09C7\u0964 \u0985\u09A8\u09C1\u0997\u09CD\u09B0\u09B9 \u0995\u09B0\u09C7 Sign In \u0995\u09B0\u09C1\u09A8 \u0985\u09A5\u09AC\u09BE Forgot Password \u09AC\u09CD\u09AF\u09AC\u09B9\u09BE\u09B0 \u0995\u09B0\u09C1\u09A8\u0964`
+      });
+    }
+    if (cleanRole === "agency") {
+      if (!isStrictGmailAddress(cleanEmail)) {
+        return res.status(400).json({
+          success: false,
+          error: "\u274C Agency Master Portal-\u098F \u09B6\u09C1\u09A7\u09C1\u09AE\u09BE\u09A4\u09CD\u09B0 Gmail (@gmail.com) \u09A6\u09BF\u09DF\u09C7 \u098F\u0995\u09BE\u0989\u09A8\u09CD\u099F \u0996\u09CB\u09B2\u09BE \u09AF\u09BE\u09AC\u09C7\u0964 \u0985\u09A8\u09CD\u09AF \u0995\u09CB\u09A8\u09CB \u09AE\u09C7\u0987\u09B2 \u0997\u09CD\u09B0\u09B9\u09A3\u09AF\u09CB\u0997\u09CD\u09AF \u09A8\u09DF\u0964"
+        });
+      }
+      const agencyGmailAccounts = getAgencyGmailUsers(existingUsers);
+      if (agencyGmailAccounts.length >= MAX_AGENCY_GMAIL_ACCOUNTS) {
+        return res.status(403).json({
+          success: false,
+          error: `\u274C Agency Master Portal-\u098F \u09B8\u09B0\u09CD\u09AC\u09CB\u099A\u09CD\u099A \u09E9\u099F\u09BF Gmail \u098F\u0995\u09BE\u0989\u09A8\u09CD\u099F \u0996\u09CB\u09B2\u09BE\u09B0 \u09B8\u09C0\u09AE\u09BE (${MAX_AGENCY_GMAIL_ACCOUNTS}/${MAX_AGENCY_GMAIL_ACCOUNTS}) \u09AA\u09C2\u09B0\u09CD\u09A3 \u09B9\u09DF\u09C7 \u0997\u09C7\u099B\u09C7! \u09E9\u099F\u09BF\u09B0 \u09AC\u09C7\u09B6\u09BF \u09AE\u09C7\u0987\u09B2 \u09A5\u09C7\u0995\u09C7 \u098F\u0995\u09BE\u0989\u09A8\u09CD\u099F \u0996\u09CB\u09B2\u09BE \u09AF\u09BE\u09AC\u09C7 \u09A8\u09BE\u0964`
+        });
+      }
+    }
+    const otpCode = import_crypto.default.randomInt(1e5, 999999).toString();
+    const expiresAt = Date.now() + 10 * 60 * 1e3;
+    signupOtpStore.set(cleanEmail, {
+      code: otpCode,
+      email: cleanEmail,
+      name: cleanName,
+      role: cleanRole,
+      expiresAt,
+      attempts: 0,
+      verified: false
+    });
+    saveSignupOtpStoreToDisk();
+    const sig = import_crypto.default.createHmac("sha256", OTP_SECRET).update(`signup_email_otp:${cleanEmail}:${cleanRole}:${otpCode}:${expiresAt}`).digest("hex");
+    const signupOtpToken = `${expiresAt}:${sig}`;
+    const portalLabel = cleanRole === "agency" ? "Agency Master Portal" : "Client Outbound Workspace";
+    const emailSubject = `${otpCode} is your VisualSky email verification code`;
+    const emailText = [
+      `Hello ${cleanName},`,
+      ``,
+      `Your 6-digit email verification code for VisualSky (${portalLabel}) is: ${otpCode}`,
+      ``,
+      `Please enter this code in the verification window to verify your email address and activate your account.`,
+      `This code will expire in 10 minutes. Do not share this code with anyone.`
+    ].join("\n");
+    const emailHtml = `
+      <div style="background-color:#0b0f19;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px 20px;color:#e2e8f0;">
+        <div style="max-width:520px;margin:0 auto;background:#111827;border:1px solid #1e293b;border-radius:16px;padding:32px;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5);">
+          <div style="margin-bottom:24px;text-align:center;">
+            <span style="display:inline-block;padding:4px 12px;border-radius:999px;background:#06b6d420;border:1px solid #06b6d450;color:#22d3ee;font-size:11px;font-weight:700;margin-bottom:10px;">
+              ${portalLabel} \u2022 Email Verification
+            </span>
+            <h2 style="margin:0;font-size:22px;font-weight:800;color:#f8fafc;letter-spacing:-0.5px;">Verify Your Email Address</h2>
+            <p style="margin:6px 0 0 0;font-size:13px;color:#94a3b8;">Hello <strong>${cleanName}</strong>, use the 6-digit code below to complete your VisualSky registration.</p>
+          </div>
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">
+            <p style="margin:0 0 12px 0;font-size:12px;color:#cbd5e1;font-weight:600;text-transform:uppercase;letter-spacing:1px;">Your 6-Digit Verification Code</p>
+            <div style="font-size:36px;font-weight:900;font-family:monospace;letter-spacing:8px;color:#38bdf8;padding:12px 20px;background:#1e293b;border-radius:10px;border:1px dashed #0ea5e9;display:inline-block;">
+              ${otpCode}
+            </div>
+            <p style="margin:14px 0 0 0;font-size:12px;color:#94a3b8;">Valid for <strong>10 minutes</strong>. Do not share this code with anyone.</p>
+          </div>
+          <p style="margin:0;font-size:12px;color:#64748b;text-align:center;line-height:1.5;">
+            \u0986\u09AA\u09A8\u09BF \u09AF\u09A6\u09BF VisualSky-\u098F \u098F\u0995\u09BE\u0989\u09A8\u09CD\u099F \u0996\u09CB\u09B2\u09BE\u09B0 \u0985\u09A8\u09C1\u09B0\u09CB\u09A7 \u09A8\u09BE \u0995\u09B0\u09C7 \u09A5\u09BE\u0995\u09C7\u09A8, \u09A4\u09AC\u09C7 \u098F\u0987 \u0987\u09AE\u09C7\u0987\u09B2\u099F\u09BF \u0989\u09AA\u09C7\u0995\u09CD\u09B7\u09BE \u0995\u09B0\u09C1\u09A8\u0964
+          </p>
+        </div>
+      </div>
+    `;
+    const sentViaRealSmtp = await dispatchVerificationEmail({
+      toEmail: cleanEmail,
+      subject: emailSubject,
+      textBody: emailText,
+      htmlBody: emailHtml,
+      smtpAccounts
+    });
+    return res.json({
+      success: true,
+      sentViaRealSmtp,
+      signupOtpToken,
+      emergencyOtp: sentViaRealSmtp ? void 0 : otpCode,
+      message: sentViaRealSmtp ? `\u0986\u09AA\u09A8\u09BE\u09B0 ${cleanEmail} \u0987\u09AE\u09C7\u0987\u09B2\u09C7 \u09EC-\u09A1\u09BF\u099C\u09BF\u099F\u09C7\u09B0 \u09AD\u09C7\u09B0\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u0995\u09CB\u09A1 \u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09B9\u09DF\u09C7\u099B\u09C7\u0964 \u0985\u09A8\u09C1\u0997\u09CD\u09B0\u09B9 \u0995\u09B0\u09C7 Inbox \u09AC\u09BE Spam \u09AB\u09CB\u09B2\u09CD\u09A1\u09BE\u09B0 \u099A\u09C7\u0995 \u0995\u09B0\u09C7 \u09A8\u09BF\u099A\u09C7 \u0995\u09CB\u09A1\u099F\u09BF \u09A6\u09BF\u09A8\u0964` : `\u0986\u09AA\u09A8\u09BE\u09B0 ${cleanEmail} \u0987\u09AE\u09C7\u0987\u09B2\u09C7\u09B0 \u099C\u09A8\u09CD\u09AF \u09EC-\u09A1\u09BF\u099C\u09BF\u099F\u09C7\u09B0 \u09AD\u09C7\u09B0\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u0995\u09CB\u09A1 \u099C\u09C7\u09A8\u09BE\u09B0\u09C7\u099F \u09B9\u09DF\u09C7\u099B\u09C7\u0964 \u09A8\u09BF\u099A\u09C7 \u0995\u09CB\u09A1\u099F\u09BF \u09A6\u09BF\u09DF\u09C7 \u09AD\u09C7\u09B0\u09BF\u09AB\u09BE\u0987 \u0995\u09B0\u09C1\u09A8\u0964`
+    });
+  } catch (err) {
+    console.error("[Signup OTP] Error:", err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "\u09AD\u09C7\u09B0\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u0987\u09AE\u09C7\u0987\u09B2 \u09AA\u09BE\u09A0\u09BE\u09A4\u09C7 \u09B8\u09AE\u09B8\u09CD\u09AF\u09BE \u09B9\u09DF\u09C7\u099B\u09C7\u0964"
+    });
+  }
+});
+app.post("/api/auth/verify-signup-otp", (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    loadSignupOtpStoreFromDisk();
+    const { email, otpCode, role = "client", signupOtpToken } = req.body || {};
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    const cleanRole = role === "agency" ? "agency" : "client";
+    const cleanOtp = String(otpCode || "").replace(/[^0-9]/g, "");
+    if (!cleanEmail || cleanOtp.length !== 6) {
+      return res.status(400).json({
+        success: false,
+        error: "\u274C \u0985\u09A8\u09C1\u0997\u09CD\u09B0\u09B9 \u0995\u09B0\u09C7 \u0986\u09AA\u09A8\u09BE\u09B0 \u0987\u09AE\u09C7\u0987\u09B2\u09C7 \u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09B8\u09A0\u09BF\u0995 \u09EC-\u09A1\u09BF\u099C\u09BF\u099F\u09C7\u09B0 \u09AD\u09C7\u09B0\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u0995\u09CB\u09A1\u099F\u09BF \u09A6\u09BF\u09A8\u0964"
+      });
+    }
+    let isOtpValid = false;
+    const stored = signupOtpStore.get(cleanEmail);
+    if (stored) {
+      if (Date.now() > stored.expiresAt) {
+        signupOtpStore.delete(cleanEmail);
+        saveSignupOtpStoreToDisk();
+        return res.status(400).json({
+          success: false,
+          error: '\u274C \u09AD\u09C7\u09B0\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u0995\u09CB\u09A1\u09C7\u09B0 \u09AE\u09C7\u09DF\u09BE\u09A6 \u09B6\u09C7\u09B7 \u09B9\u09DF\u09C7 \u0997\u09C7\u099B\u09C7 (\u09E7\u09E6 \u09AE\u09BF\u09A8\u09BF\u099F)\u0964 \u0985\u09A8\u09C1\u0997\u09CD\u09B0\u09B9 \u0995\u09B0\u09C7 "Resend Code"-\u098F \u0995\u09CD\u09B2\u09BF\u0995 \u0995\u09B0\u09C7 \u09A8\u09A4\u09C1\u09A8 \u0995\u09CB\u09A1 \u09A8\u09BF\u09A8\u0964'
+        });
+      }
+      if (stored.code === cleanOtp) {
+        isOtpValid = true;
+        stored.verified = true;
+        saveSignupOtpStoreToDisk();
+      } else {
+        stored.attempts = (stored.attempts || 0) + 1;
+        const remaining = Math.max(0, 3 - stored.attempts);
+        if (stored.attempts >= 3) {
+          signupOtpStore.delete(cleanEmail);
+          saveSignupOtpStoreToDisk();
+          return res.status(400).json({
+            success: false,
+            error: '\u274C \u09E9 \u09AC\u09BE\u09B0 \u09AD\u09C1\u09B2 \u0995\u09CB\u09A1 \u09A6\u09C7\u0993\u09DF\u09BE\u09B0 \u0995\u09BE\u09B0\u09A3\u09C7 \u098F\u0987 \u0995\u09CB\u09A1\u099F\u09BF \u09AC\u09BE\u09A4\u09BF\u09B2 \u09B9\u09DF\u09C7\u099B\u09C7\u0964 \u0985\u09A8\u09C1\u0997\u09CD\u09B0\u09B9 \u0995\u09B0\u09C7 "Resend Code"-\u098F \u0995\u09CD\u09B2\u09BF\u0995 \u0995\u09B0\u09C7 \u09A8\u09A4\u09C1\u09A8 \u0995\u09CB\u09A1 \u09A8\u09BF\u09A8\u0964'
+          });
+        }
+        saveSignupOtpStoreToDisk();
+        return res.status(400).json({
+          success: false,
+          error: `\u274C \u09AD\u09C1\u09B2 \u09AD\u09C7\u09B0\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u0995\u09CB\u09A1! \u0986\u09AA\u09A8\u09BE\u09B0 \u0987\u09AE\u09C7\u0987\u09B2\u09C7 (${cleanEmail}) \u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09B8\u09A0\u09BF\u0995 \u09EC-\u09A1\u09BF\u099C\u09BF\u099F\u09C7\u09B0 \u0995\u09CB\u09A1\u099F\u09BF \u09A6\u09BF\u09A8\u0964 (\u099A\u09C7\u09B7\u09CD\u099F\u09BE \u09AC\u09BE\u0995\u09BF: ${remaining})`
+        });
+      }
+    } else if (signupOtpToken && typeof signupOtpToken === "string") {
+      const [expStr, sig] = signupOtpToken.split(":");
+      const exp = Number(expStr);
+      if (exp && Date.now() <= exp) {
+        const expectedSig = import_crypto.default.createHmac("sha256", OTP_SECRET).update(`signup_email_otp:${cleanEmail}:${cleanRole}:${cleanOtp}:${exp}`).digest("hex");
+        if (sig === expectedSig) {
+          isOtpValid = true;
+        }
+      }
+    }
+    if (!isOtpValid) {
+      return res.status(400).json({
+        success: false,
+        error: `\u274C \u09AD\u09C1\u09B2 \u09AC\u09BE \u09AE\u09C7\u09DF\u09BE\u09A6\u09CB\u09A4\u09CD\u09A4\u09C0\u09B0\u09CD\u09A3 \u09AD\u09C7\u09B0\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u0995\u09CB\u09A1! \u0986\u09AA\u09A8\u09BE\u09B0 \u0987\u09AE\u09C7\u0987\u09B2\u09C7 (${cleanEmail}) \u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09B8\u09A0\u09BF\u0995 \u09EC-\u09A1\u09BF\u099C\u09BF\u099F\u09C7\u09B0 \u0995\u09CB\u09A1\u099F\u09BF \u09A6\u09BF\u09A8\u0964`
+      });
+    }
+    const verifiedExp = Date.now() + 15 * 60 * 1e3;
+    const verifiedSig = import_crypto.default.createHmac("sha256", OTP_SECRET).update(`signup_email_verified:${cleanEmail}:${cleanRole}:${verifiedExp}`).digest("hex");
+    const verifiedEmailToken = `${verifiedExp}:${verifiedSig}`;
+    return res.json({
+      success: true,
+      verifiedEmailToken,
+      message: "\u0987\u09AE\u09C7\u0987\u09B2 \u09AD\u09C7\u09B0\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u09B8\u09AB\u09B2\u09AD\u09BE\u09AC\u09C7 \u09B8\u09AE\u09CD\u09AA\u09A8\u09CD\u09A8 \u09B9\u09DF\u09C7\u099B\u09C7!"
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "\u0987\u09AE\u09C7\u0987\u09B2 \u0995\u09CB\u09A1 \u09AF\u09BE\u099A\u09BE\u0987 \u0995\u09B0\u09A4\u09C7 \u09B8\u09AE\u09B8\u09CD\u09AF\u09BE \u09B9\u09DF\u09C7\u099B\u09C7\u0964"
+    });
+  }
+});
 app.post("/api/auth/register", (req, res) => {
   res.setHeader("Content-Type", "application/json");
   try {
+    loadSignupOtpStoreFromDisk();
     const {
       name,
       email,
       phone,
       password,
+      confirmPassword,
+      acceptedTerms,
+      emailVerificationOtp,
+      signupOtpToken,
+      verifiedEmailToken,
       role = "client",
       plan = "Pro",
       bdtPlanLabel,
@@ -1378,10 +1826,58 @@ app.post("/api/auth/register", (req, res) => {
     const cleanEmail = String(email).trim().toLowerCase();
     const cleanName = String(name).trim();
     const cleanPhone = String(phone || "").trim();
+    const cleanRole = role === "agency" ? "agency" : "client";
     if (String(password).length < 6) {
       return res.status(400).json({
         success: false,
         error: "Password must be at least 6 characters long."
+      });
+    }
+    if (confirmPassword !== void 0 && String(password) !== String(confirmPassword)) {
+      return res.status(400).json({
+        success: false,
+        error: "\u274C Password \u098F\u09AC\u0982 Confirm Password \u098F\u0995 \u09B9\u09DF\u09A8\u09BF!"
+      });
+    }
+    if (acceptedTerms === false) {
+      return res.status(400).json({
+        success: false,
+        error: "\u274C \u098F\u0995\u09BE\u0989\u09A8\u09CD\u099F \u0996\u09CB\u09B2\u09BE\u09B0 \u099C\u09A8\u09CD\u09AF Terms & Conditions \u098F\u09AC\u0982 Privacy Policy \u0997\u09CD\u09B0\u09B9\u09A3 \u0995\u09B0\u09BE \u09AC\u09BE\u09A7\u09CD\u09AF\u09A4\u09BE\u09AE\u09C2\u09B2\u0995\u0964"
+      });
+    }
+    let isEmailVerified = false;
+    const storedOtp = signupOtpStore.get(cleanEmail);
+    const cleanOtpInput = String(emailVerificationOtp || "").replace(/[^0-9]/g, "");
+    if (storedOtp && Date.now() <= storedOtp.expiresAt + 10 * 60 * 1e3) {
+      if (storedOtp.verified || cleanOtpInput.length === 6 && storedOtp.code === cleanOtpInput) {
+        isEmailVerified = true;
+      }
+    }
+    if (!isEmailVerified && verifiedEmailToken && typeof verifiedEmailToken === "string") {
+      const [vExpStr, vSig] = verifiedEmailToken.split(":");
+      const vExp = Number(vExpStr);
+      if (vExp && Date.now() <= vExp) {
+        const expectedVSig = import_crypto.default.createHmac("sha256", OTP_SECRET).update(`signup_email_verified:${cleanEmail}:${cleanRole}:${vExp}`).digest("hex");
+        if (vSig === expectedVSig) {
+          isEmailVerified = true;
+        }
+      }
+    }
+    if (!isEmailVerified && signupOtpToken && typeof signupOtpToken === "string" && cleanOtpInput.length === 6) {
+      const [expStr, sig] = signupOtpToken.split(":");
+      const exp = Number(expStr);
+      if (exp && Date.now() <= exp) {
+        const expectedSig = import_crypto.default.createHmac("sha256", OTP_SECRET).update(`signup_email_otp:${cleanEmail}:${cleanRole}:${cleanOtpInput}:${exp}`).digest("hex");
+        if (sig === expectedSig) {
+          isEmailVerified = true;
+        }
+      }
+    }
+    if (!isEmailVerified) {
+      return res.status(403).json({
+        success: false,
+        requiresEmailVerification: true,
+        error: "\u274C \u0987\u09AE\u09C7\u0987\u09B2 \u09AD\u09C7\u09B0\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u09B8\u09AE\u09CD\u09AA\u09A8\u09CD\u09A8 \u09B9\u09DF\u09A8\u09BF! \u098F\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09A4\u09C8\u09B0\u09BF \u0995\u09B0\u09BE\u09B0 \u0986\u0997\u09C7 \u0986\u09AA\u09A8\u09BE\u09B0 \u0987\u09AE\u09C7\u0987\u09B2\u09C7 \u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09EC-\u09A1\u09BF\u099C\u09BF\u099F\u09C7\u09B0 \u09AD\u09C7\u09B0\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u0995\u09CB\u09A1 (OTP) \u09A6\u09BF\u09DF\u09C7 \u09AD\u09C7\u09B0\u09BF\u09AB\u09BE\u0987 \u0995\u09B0\u09BE \u09AC\u09BE\u09A7\u09CD\u09AF\u09A4\u09BE\u09AE\u09C2\u09B2\u0995\u0964"
       });
     }
     let existingUsers = [];
@@ -1421,6 +1917,8 @@ app.post("/api/auth/register", (req, res) => {
         });
       }
     }
+    signupOtpStore.delete(cleanEmail);
+    saveSignupOtpStoreToDisk();
     const newUser = {
       id: isAgency ? `usr-agency-${Date.now()}` : `usr-client-${Date.now()}`,
       name: cleanName,
@@ -1428,6 +1926,9 @@ app.post("/api/auth/register", (req, res) => {
       phone: cleanPhone || (isAgency ? "+880 1577-225248" : "+880 1700-000000"),
       password: String(password),
       authProvider: "email",
+      emailVerified: true,
+      acceptedTerms: true,
+      acceptedTermsAt: (/* @__PURE__ */ new Date()).toISOString(),
       role: isAgency ? "agency" : "client",
       isOwner: isAgency,
       plan: isAgency ? "Enterprise" : plan,
@@ -1571,32 +2072,20 @@ app.post("/api/auth/google", (req, res) => {
       return res.json({
         success: true,
         exists: Boolean(user),
+        requiresSignupVerification: !user,
         requiresPayment: !isAgency && !hasValidPayment,
-        user: hasValidPayment || isAgency ? user : null
+        user: user && (hasValidPayment || isAgency) ? user : null
       });
     }
     if (!user) {
-      user = {
-        id: uid || (isAgency ? `usr-agency-${Date.now()}` : `usr-client-${Date.now()}`),
-        name: name?.trim() || cleanEmail.split("@")[0].replace(/[._-]/g, " "),
+      return res.status(403).json({
+        success: false,
+        exists: false,
+        requiresSignupVerification: true,
         email: cleanEmail,
-        phone: phone || paymentInfo?.senderPhone || "+880 1700-000000",
-        authProvider: "google",
-        role: isAgency ? "agency" : "client",
-        isOwner: isAgency,
-        plan: isAgency ? "Enterprise" : plan,
-        bdtPlanLabel: bdtPlanLabel || (isAgency ? "Agency Master Admin (Free Unlimited)" : "Scale Business (BDT 4,999/mo)"),
-        quotaUsed: 0,
-        quotaLimit: Number(quotaLimit) || (isAgency ? 5e4 : 1e4),
-        aiCredits: Number(aiCredits) || (isAgency ? 1e4 : 2500),
-        company: isAgency ? "VisualSky Agency Platform" : "Growth Workspace",
-        title: isAgency ? "Agency Principal & Master Admin" : "Workspace Owner",
-        avatar: avatar || (isAgency ? "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80" : "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80"),
-        paymentInfo: paymentInfo || void 0,
-        joinedAt: (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
-        lastLoginAt: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      existingUsers.unshift(user);
+        name: name?.trim() || cleanEmail.split("@")[0].replace(/[._-]/g, " "),
+        error: "\u098F\u0987 \u0987\u09AE\u09C7\u0987\u09B2\u09C7 \u098F\u0996\u09A8\u09CB \u0995\u09CB\u09A8\u09CB \u098F\u0995\u09BE\u0989\u09A8\u09CD\u099F \u0996\u09CB\u09B2\u09BE \u09B9\u09DF\u09A8\u09BF\u0964 \u09A8\u09A4\u09C1\u09A8 \u098F\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09A4\u09C8\u09B0\u09BF \u0995\u09B0\u09A4\u09C7 Password, Confirm Password, Terms & Conditions (\u2713) \u09AA\u09C2\u09B0\u09A3 \u0995\u09B0\u09C7 \u0987\u09AE\u09C7\u0987\u09B2\u09C7 \u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09EC-\u09A1\u09BF\u099C\u09BF\u099F \u09AD\u09C7\u09B0\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u0995\u09CB\u09A1 (OTP) \u09A6\u09BF\u09A8\u0964"
+      });
     } else {
       if (name && (!user.name || user.name === cleanEmail.split("@")[0])) {
         user.name = name.trim();
@@ -1774,41 +2263,29 @@ app.all("/api/auth/reset-password", (req, res) => {
   res.setHeader("Content-Type", "application/json");
   return res.status(405).json({ success: false, error: "Method not allowed. Please use POST." });
 });
-function mergeCollectionById(existingItems, incomingItems, key = "id", fallbackKey) {
-  const existingArr = Array.isArray(existingItems) ? existingItems : [];
-  const incomingArr = Array.isArray(incomingItems) ? incomingItems : [];
-  if (existingArr.length === 0) return incomingArr;
-  if (incomingArr.length === 0) return existingArr;
-  const result = [...incomingArr];
-  const incomingKeySet = new Set(incomingArr.map((item) => item && item[key] ? String(item[key]) : "").filter(Boolean));
-  const incomingFallbackSet = fallbackKey ? new Set(incomingArr.map((item) => item && item[fallbackKey] ? String(item[fallbackKey]).toLowerCase() : "").filter(Boolean)) : null;
-  for (const item of existingArr) {
-    if (!item) continue;
-    const primaryVal = item[key] ? String(item[key]) : "";
-    const fallbackVal = fallbackKey && item[fallbackKey] ? String(item[fallbackKey]).toLowerCase() : "";
-    const hasPrimary = primaryVal && incomingKeySet.has(primaryVal);
-    const hasFallback = fallbackVal && incomingFallbackSet && incomingFallbackSet.has(fallbackVal);
-    if (!hasPrimary && !hasFallback) {
-      result.push(item);
-    }
-  }
-  return result;
-}
 function smartMergeWorkspaces(existing, incoming) {
   const e = existing && typeof existing === "object" ? existing : {};
   const inc = incoming && typeof incoming === "object" ? incoming : {};
+  const deletedThreadIds = new Set(
+    Array.isArray(inc.deletedThreadIds) ? inc.deletedThreadIds : Array.isArray(e.deletedThreadIds) ? e.deletedThreadIds : []
+  );
+  const rawThreads = Array.isArray(inc.threads) ? inc.threads : Array.isArray(e.threads) ? e.threads : [];
+  const cleanThreads = rawThreads.filter(
+    (t) => t && t.id && !deletedThreadIds.has(String(t.id)) && !deletedThreadIds.has(`thread:${t.id}`)
+  );
   return {
     ...e,
     ...inc,
-    leads: mergeCollectionById(e.leads, inc.leads, "id", "email"),
-    leadTags: mergeCollectionById(e.leadTags, inc.leadTags, "id", "name"),
-    campaigns: mergeCollectionById(e.campaigns, inc.campaigns, "id"),
-    smtpAccounts: mergeCollectionById(e.smtpAccounts, inc.smtpAccounts, "id", "user"),
-    emailTemplates: mergeCollectionById(e.emailTemplates, inc.emailTemplates, "id", "title"),
-    templateCategories: mergeCollectionById(e.templateCategories, inc.templateCategories, "id", "name"),
-    threads: mergeCollectionById(e.threads, inc.threads, "id"),
-    sentEmails: mergeCollectionById(e.sentEmails, inc.sentEmails, "id"),
-    minedLeads: mergeCollectionById(e.minedLeads, inc.minedLeads, "id", "email"),
+    leads: Array.isArray(inc.leads) ? inc.leads : Array.isArray(e.leads) ? e.leads : [],
+    leadTags: Array.isArray(inc.leadTags) ? inc.leadTags : Array.isArray(e.leadTags) ? e.leadTags : [],
+    campaigns: Array.isArray(inc.campaigns) ? inc.campaigns : Array.isArray(e.campaigns) ? e.campaigns : [],
+    smtpAccounts: Array.isArray(inc.smtpAccounts) ? inc.smtpAccounts : Array.isArray(e.smtpAccounts) ? e.smtpAccounts : [],
+    emailTemplates: Array.isArray(inc.emailTemplates) ? inc.emailTemplates : Array.isArray(e.emailTemplates) ? e.emailTemplates : [],
+    templateCategories: Array.isArray(inc.templateCategories) ? inc.templateCategories : Array.isArray(e.templateCategories) ? e.templateCategories : [],
+    threads: cleanThreads,
+    deletedThreadIds: Array.from(deletedThreadIds).slice(-2e3),
+    sentEmails: Array.isArray(inc.sentEmails) ? inc.sentEmails : Array.isArray(e.sentEmails) ? e.sentEmails : [],
+    minedLeads: Array.isArray(inc.minedLeads) ? inc.minedLeads : Array.isArray(e.minedLeads) ? e.minedLeads : [],
     columnSettings: Array.isArray(inc.columnSettings) && inc.columnSettings.length > 0 ? inc.columnSettings : Array.isArray(e.columnSettings) && e.columnSettings.length > 0 ? e.columnSettings : [],
     notificationSettings: {
       ...e.notificationSettings || {},
@@ -1821,334 +2298,6 @@ function smartMergeWorkspaces(existing, incoming) {
     userId: inc.userId || e.userId,
     email: inc.email || e.email,
     lastActiveTab: inc.lastActiveTab || e.lastActiveTab || "dashboard",
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-}
-function getDefaultWorkspaceForUser(email, userId) {
-  const cleanEmail = (email || "").trim().toLowerCase();
-  const cleanUserId = (userId || "user-agency-1").trim();
-  const defaultTags = [
-    { id: "tag-saas", name: "B2B SaaS Founders", color: "cyan", description: "Tech founders and software leaders", createdAt: "2026-09-01" },
-    { id: "tag-vip", name: "VIP Decision Makers", color: "emerald", description: "C-Level & VP Outreach targets", createdAt: "2026-09-01" },
-    { id: "tag-followup", name: "7-Day Follow Up", color: "amber", description: "Active sequence follow-ups", createdAt: "2026-09-01" },
-    { id: "tag-partners", name: "Agency Partners", color: "purple", description: "Strategic growth partners", createdAt: "2026-09-01" }
-  ];
-  const defaultLeads = [
-    {
-      id: "lead-saas-101",
-      name: "Sarah Jenkins",
-      title: "Chief Executive Officer",
-      company: "CloudScale Technologies",
-      email: "s.jenkins@cloudscaletech.io",
-      phone: "+1 (415) 890-2134",
-      website: "https://cloudscaletech.io",
-      niche: "B2B SaaS & Cloud Infrastructure",
-      location: "San Francisco, CA, USA",
-      source: "AI Miner Engine",
-      companySize: "51-200 employees",
-      leadScore: 96,
-      icebreaker: "Loved your recent feature on multi-cloud latency optimization.",
-      socials: { linkedin: "https://linkedin.com/in/sarah-jenkins-cloud", twitter: "https://x.com/sarah_cloudtech" },
-      status: "new",
-      websiteStatus: "alive",
-      responseTimeMs: 64,
-      lastActivityDate: (/* @__PURE__ */ new Date()).toISOString(),
-      daysAgo: 1,
-      sentCampaigns: ["camp-b2b-saas-growth"],
-      customNotes: "Interested in automating outbound cold deliverability.",
-      tags: ["B2B SaaS Founders", "VIP Decision Makers"],
-      openCount: 2,
-      lastOpenedAt: new Date(Date.now() - 36e5 * 4).toISOString(),
-      isReplied: false,
-      isTrash: false
-    },
-    {
-      id: "lead-saas-102",
-      name: "Alex Vance",
-      title: "VP of Growth & Sales",
-      company: "HyperFlow Dynamics",
-      email: "alex.vance@hyperflowhq.com",
-      phone: "+1 (206) 431-7789",
-      website: "https://hyperflowhq.com",
-      niche: "B2B SaaS & Tech",
-      location: "Seattle, WA, USA",
-      source: "Verified Prospector",
-      companySize: "11-50 employees",
-      leadScore: 91,
-      icebreaker: "Noticed HyperFlow just crossed the 10k MRR milestone on IndieHackers.",
-      socials: { linkedin: "https://linkedin.com/in/alex-vance-hyper" },
-      status: "opened",
-      websiteStatus: "alive",
-      responseTimeMs: 78,
-      lastActivityDate: (/* @__PURE__ */ new Date()).toISOString(),
-      daysAgo: 2,
-      sentCampaigns: ["camp-b2b-saas-growth"],
-      customNotes: "Requested benchmark stats on inbox placement.",
-      tags: ["B2B SaaS Founders", "7-Day Follow Up"],
-      openCount: 3,
-      lastOpenedAt: new Date(Date.now() - 36e5 * 12).toISOString(),
-      isReplied: false,
-      isTrash: false
-    },
-    {
-      id: "lead-saas-103",
-      name: "Liam Chen",
-      title: "Managing Director",
-      company: "Nexus Scale Labs",
-      email: "liam@nexuslabs.co",
-      phone: "+1 (650) 902-3341",
-      website: "https://nexuslabs.co",
-      niche: "AI & Enterprise Automation",
-      location: "Palo Alto, CA, USA",
-      source: "AI Miner Engine",
-      companySize: "21-50 employees",
-      leadScore: 94,
-      icebreaker: "Impressive release of the Autonomous Pipeline generator last week.",
-      socials: { linkedin: "https://linkedin.com/in/liamchen-ai" },
-      status: "replied",
-      websiteStatus: "alive",
-      responseTimeMs: 52,
-      lastActivityDate: (/* @__PURE__ */ new Date()).toISOString(),
-      daysAgo: 3,
-      sentCampaigns: ["camp-enterprise-partners"],
-      customNotes: 'Replied positively: "Let us schedule a quick call this Thursday."',
-      tags: ["VIP Decision Makers", "Agency Partners"],
-      openCount: 4,
-      lastOpenedAt: new Date(Date.now() - 36e5 * 24).toISOString(),
-      isReplied: true,
-      lastRepliedAt: new Date(Date.now() - 36e5 * 18).toISOString(),
-      replySnippet: "Sounds very promising. Can you share a walkthrough of your deliverability metrics?",
-      isTrash: false
-    },
-    {
-      id: "lead-saas-104",
-      name: "Elena Rostova",
-      title: "Founder & CMO",
-      company: "Veloce Digital Growth",
-      email: "elena@velocedigital.io",
-      phone: "+44 20 7946 0912",
-      website: "https://velocedigital.io",
-      niche: "Digital Marketing & Growth",
-      location: "London, United Kingdom",
-      source: "Verified Prospector",
-      companySize: "11-50 employees",
-      leadScore: 88,
-      icebreaker: "Loved your podcast episode on outbound email deliverability tactics.",
-      socials: { linkedin: "https://linkedin.com/in/elena-rostova-growth" },
-      status: "contacted",
-      websiteStatus: "alive",
-      responseTimeMs: 95,
-      lastActivityDate: (/* @__PURE__ */ new Date()).toISOString(),
-      daysAgo: 4,
-      sentCampaigns: ["camp-b2b-saas-growth"],
-      tags: ["B2B SaaS Founders"],
-      openCount: 1,
-      isReplied: false,
-      isTrash: false
-    },
-    {
-      id: "lead-saas-105",
-      name: "David Thorne",
-      title: "Co-Founder & CTO",
-      company: "Synthetix AI Logic",
-      email: "david.thorne@synthetixlogic.com",
-      phone: "+1 (512) 670-8812",
-      website: "https://synthetixlogic.com",
-      niche: "AI & Machine Learning Software",
-      location: "Austin, TX, USA",
-      source: "AI Miner Engine",
-      companySize: "11-50 employees",
-      leadScore: 93,
-      icebreaker: "Great engineering insights shared on your Substack regarding agent frameworks.",
-      socials: { linkedin: "https://linkedin.com/in/david-thorne-cto" },
-      status: "new",
-      websiteStatus: "alive",
-      responseTimeMs: 82,
-      lastActivityDate: (/* @__PURE__ */ new Date()).toISOString(),
-      daysAgo: 1,
-      sentCampaigns: ["camp-b2b-saas-growth"],
-      tags: ["B2B SaaS Founders", "VIP Decision Makers"],
-      openCount: 0,
-      isReplied: false,
-      isTrash: false
-    }
-  ];
-  const defaultSmtp = [
-    {
-      id: "smtp-primary-google",
-      name: "VisualSky Primary Relay (Google Workspace)",
-      provider: "gmail",
-      host: "smtp.gmail.com",
-      port: 587,
-      encryption: "STARTTLS",
-      username: "outreach@visualsky.agency",
-      fromName: "Rafiqul VisualSky",
-      fromEmail: "outreach@visualsky.agency",
-      dailyLimit: 2e3,
-      sentToday: 142,
-      status: "active",
-      deliverabilityScore: 99.4,
-      warmupStatus: "warmed",
-      warmupMode: "full",
-      warmupStartDate: "2026-08-01",
-      isTrash: false
-    },
-    {
-      id: "smtp-secondary-relay",
-      name: "Dedicated High-Speed SMTP (Infra Relay)",
-      provider: "custom",
-      host: "relay.visualsky.io",
-      port: 465,
-      encryption: "SSL",
-      username: "dispatch@visualsky.io",
-      fromName: "VisualSky Outbound Team",
-      fromEmail: "dispatch@visualsky.io",
-      dailyLimit: 5e3,
-      sentToday: 380,
-      status: "active",
-      deliverabilityScore: 98.7,
-      warmupStatus: "warmed",
-      warmupMode: "full",
-      warmupStartDate: "2026-08-10",
-      isTrash: false
-    }
-  ];
-  const defaultCampaigns = [
-    {
-      id: "camp-b2b-saas-growth",
-      name: "B2B SaaS Outbound & Pipeline Accelerator",
-      niche: "B2B SaaS & Tech Founders",
-      status: "running",
-      totalLeads: 5,
-      sentCount: 14,
-      openCount: 9,
-      replyCount: 3,
-      bounceCount: 0,
-      leadIds: defaultLeads.map((l) => l.id),
-      sendMode: "scheduled",
-      scheduleStartTime: "09:00",
-      scheduleEndTime: "18:00",
-      scheduleTimezone: "Asia/Dhaka",
-      scheduleActiveDays: ["Mon", "Tue", "Wed", "Thu", "Fri"],
-      sendingIntervalSec: 45,
-      assignedSmtpId: "smtp-primary-google",
-      createdAt: "2026-09-02",
-      lastRunAt: (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
-      steps: [
-        {
-          stepNumber: 1,
-          delayDays: 0,
-          subject: "quick question regarding {{company}}'s outbound workflow",
-          body: "Hi {{name}},\n\nNoticed your rapid expansion in {{niche}} with {{company}}.\n\nMost founders we partner with are frustrated with low open rates and spam folder placement when ramping cold outreach.\n\nWe deployed a dual-relay warming architecture that consistently maintains 98%+ primary inbox deliverability.\n\nWould it make sense to share our 2-minute overview video?\n\nBest regards,\nRafiqul\nVisualSky Platform",
-          triggerCondition: "all"
-        },
-        {
-          stepNumber: 2,
-          delayDays: 3,
-          subject: "Re: quick question regarding {{company}}'s outbound workflow",
-          body: "Hi {{name}},\n\nFollowing up briefly on my earlier note.\n\nDid you have a chance to take a look at our deliverability benchmarks for {{company}}?\n\nHappy to walk you through our verified domain health checks anytime this week.\n\nBest,\nRafiqul",
-          triggerCondition: "not_opened_7d"
-        }
-      ]
-    },
-    {
-      id: "camp-enterprise-partners",
-      name: "Strategic Agency & Enterprise Expansion Cohort",
-      niche: "AI & Enterprise Automation",
-      status: "running",
-      totalLeads: 3,
-      sentCount: 6,
-      openCount: 4,
-      replyCount: 1,
-      bounceCount: 0,
-      leadIds: ["lead-saas-101", "lead-saas-103", "lead-saas-105"],
-      sendMode: "instant",
-      sendingIntervalSec: 30,
-      assignedSmtpId: "smtp-secondary-relay",
-      createdAt: "2026-09-08",
-      lastRunAt: (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
-      steps: [
-        {
-          stepNumber: 1,
-          delayDays: 0,
-          subject: "partnership proposal: enterprise scaling for {{company}}",
-          body: "Hi {{name}},\n\nImpressed by {{company}}'s market traction.\n\nWe provide enterprise client partner onboarding with dedicated white-label portals, high-volume SMTP rotation, and automated warmup.\n\nWould you be open to exploring how we could accelerate your outbound pipeline?\n\nBest,\nRafiqul Islam\nAgency Master Admin, VisualSky",
-          triggerCondition: "all"
-        }
-      ]
-    }
-  ];
-  const defaultThreads = [
-    {
-      id: "thread-liam-103",
-      leadId: "lead-saas-103",
-      leadName: "Liam Chen",
-      leadCompany: "Nexus Scale Labs",
-      leadEmail: "liam@nexuslabs.co",
-      subject: "Re: partnership proposal: enterprise scaling for Nexus Scale Labs",
-      lastMessage: "Sounds very promising. Can you share a walkthrough of your deliverability metrics?",
-      lastMessageDate: new Date(Date.now() - 36e5 * 18).toISOString(),
-      unreadCount: 1,
-      labels: ["Hot Lead", "VIP Decision Makers"],
-      isStarred: true,
-      isTrash: false,
-      messages: [
-        {
-          id: "msg-1",
-          threadId: "thread-liam-103",
-          sender: "user",
-          senderName: "Rafiqul VisualSky",
-          senderEmail: "outreach@visualsky.agency",
-          recipientName: "Liam Chen",
-          recipientEmail: "liam@nexuslabs.co",
-          timestamp: new Date(Date.now() - 36e5 * 24).toISOString(),
-          subject: "partnership proposal: enterprise scaling for Nexus Scale Labs",
-          body: "Hi Liam,\n\nImpressed by Nexus Scale Labs's market traction.\n\nWe provide enterprise client partner onboarding with dedicated white-label portals and high-volume SMTP rotation.\n\nWould you be open to exploring how we could accelerate your outbound pipeline?\n\nBest,\nRafiqul",
-          isRead: true,
-          status: "replied"
-        },
-        {
-          id: "msg-2",
-          threadId: "thread-liam-103",
-          sender: "lead",
-          senderName: "Liam Chen",
-          senderEmail: "liam@nexuslabs.co",
-          recipientName: "Rafiqul VisualSky",
-          recipientEmail: "outreach@visualsky.agency",
-          timestamp: new Date(Date.now() - 36e5 * 18).toISOString(),
-          subject: "Re: partnership proposal: enterprise scaling for Nexus Scale Labs",
-          body: "Sounds very promising. Can you share a walkthrough of your deliverability metrics? We are looking to scale our outbound sequence next month.",
-          isRead: false,
-          status: "replied"
-        }
-      ]
-    }
-  ];
-  return {
-    leads: defaultLeads,
-    leadTags: defaultTags,
-    campaigns: defaultCampaigns,
-    smtpAccounts: defaultSmtp,
-    threads: defaultThreads,
-    emailTemplates: [],
-    templateCategories: [],
-    sentEmails: [],
-    minedLeads: [],
-    columnSettings: [],
-    notificationSettings: {},
-    userProfile: {
-      company: "Visual Sky",
-      title: "Agency Principal & Master Admin",
-      phone: "01577225248",
-      plan: "Enterprise",
-      bdtPlanLabel: "Agency Master Admin (Free Unlimited)",
-      quotaLimit: 5e4,
-      quotaUsed: 142,
-      aiCredits: 1e4
-    },
-    userId: cleanUserId,
-    email: cleanEmail,
-    lastActiveTab: "dashboard",
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
 }
@@ -2175,7 +2324,7 @@ function readUserWorkspace(primaryId, secondaryId) {
     }
     const uniqueCandidates = Array.from(new Set(candidates.map((c) => c.trim().toLowerCase())));
     let mergedWorkspace = null;
-    const foundPaths = [];
+    let newestTime = 0;
     for (const cand of uniqueCandidates) {
       const pathsToCheck = [
         getWorkspaceFilePath(cand),
@@ -2184,31 +2333,53 @@ function readUserWorkspace(primaryId, secondaryId) {
       for (const p of pathsToCheck) {
         if (import_fs.default.existsSync(p)) {
           try {
+            const stat = import_fs.default.statSync(p);
             const content = import_fs.default.readFileSync(p, "utf-8");
             const parsed = JSON.parse(content);
             if (parsed && typeof parsed === "object") {
-              foundPaths.push(p);
-              mergedWorkspace = mergedWorkspace ? smartMergeWorkspaces(mergedWorkspace, parsed) : parsed;
+              const parsedTime = parsed.updatedAt ? new Date(parsed.updatedAt).getTime() : stat.mtimeMs;
+              if (!mergedWorkspace || parsedTime >= newestTime) {
+                mergedWorkspace = mergedWorkspace ? smartMergeWorkspaces(mergedWorkspace, parsed) : parsed;
+                newestTime = Math.max(newestTime, parsedTime || 0);
+              } else {
+                mergedWorkspace = smartMergeWorkspaces(parsed, mergedWorkspace);
+              }
             }
           } catch {
           }
         }
       }
     }
-    const isMasterUser = uniqueCandidates.some(
-      (c) => c === "rafiqulvisualsky@gmail.com" || c === "user-agency-1" || c === "sojibdaridro123@gmail.com" || c.includes("agency") || c.includes("admin@visualsky")
-    );
-    const hasMeaningfulWork = mergedWorkspace && (Array.isArray(mergedWorkspace.campaigns) && mergedWorkspace.campaigns.length > 0 || Array.isArray(mergedWorkspace.smtpAccounts) && mergedWorkspace.smtpAccounts.length > 0 || Array.isArray(mergedWorkspace.leads) && mergedWorkspace.leads.length > 2);
-    if (isMasterUser && !hasMeaningfulWork) {
-      const targetEmail = uniqueCandidates.find((c) => c.includes("@")) || "rafiqulvisualsky@gmail.com";
-      const targetId = uniqueCandidates.find((c) => !c.includes("@")) || "user-agency-1";
-      const seeded = getDefaultWorkspaceForUser(targetEmail, targetId);
-      if (mergedWorkspace) {
-        mergedWorkspace = smartMergeWorkspaces(seeded, mergedWorkspace);
-      } else {
-        mergedWorkspace = seeded;
+    const DEMO_IDS = /* @__PURE__ */ new Set([
+      "lead-saas-101",
+      "lead-saas-102",
+      "lead-saas-103",
+      "lead-saas-104",
+      "lead-saas-105",
+      "camp-b2b-saas-growth",
+      "camp-enterprise-partners",
+      "smtp-primary-google",
+      "smtp-secondary-relay",
+      "thread-liam-103",
+      "sent-init-1",
+      "sent-init-2"
+    ]);
+    if (mergedWorkspace && typeof mergedWorkspace === "object") {
+      if (Array.isArray(mergedWorkspace.leads)) {
+        mergedWorkspace.leads = mergedWorkspace.leads.filter((i) => i && !DEMO_IDS.has(i.id));
       }
-      writeUserWorkspace(targetEmail, mergedWorkspace, targetId);
+      if (Array.isArray(mergedWorkspace.campaigns)) {
+        mergedWorkspace.campaigns = mergedWorkspace.campaigns.filter((i) => i && !DEMO_IDS.has(i.id));
+      }
+      if (Array.isArray(mergedWorkspace.smtpAccounts)) {
+        mergedWorkspace.smtpAccounts = mergedWorkspace.smtpAccounts.filter((i) => i && !DEMO_IDS.has(i.id));
+      }
+      if (Array.isArray(mergedWorkspace.threads)) {
+        mergedWorkspace.threads = mergedWorkspace.threads.filter((i) => i && !DEMO_IDS.has(i.id));
+      }
+      if (Array.isArray(mergedWorkspace.sentEmails)) {
+        mergedWorkspace.sentEmails = mergedWorkspace.sentEmails.filter((i) => i && !DEMO_IDS.has(i.id));
+      }
     }
     return mergedWorkspace;
   } catch (err) {
@@ -2477,8 +2648,82 @@ app.post("/api/user-data/:email/smtp", (req, res) => {
   writeUserWorkspace(email, workspace);
   return res.json({ success: true, count: smtpAccounts.length, savedAt: workspace.updatedAt });
 });
+var lastBundleSyncCheck = 0;
+function ensureFreshPrebuiltBundle() {
+  const isProdServer = process.env.NODE_ENV === "production" || Boolean(process.argv[1] && process.argv[1].includes("server.cjs"));
+  if (!isProdServer) return;
+  const now = Date.now();
+  if (now - lastBundleSyncCheck < 3e3) return;
+  lastBundleSyncCheck = now;
+  try {
+    const prebuiltAppJs = import_path.default.join(process.cwd(), "prebuilt", "app.js");
+    const prebuiltAppCss = import_path.default.join(process.cwd(), "prebuilt", "app.css");
+    const authModalSrc = import_path.default.join(process.cwd(), "src", "components", "auth", "AuthModal.tsx");
+    const mainSrc = import_path.default.join(process.cwd(), "src", "main.tsx");
+    if (!import_fs.default.existsSync(mainSrc)) return;
+    const bundleMtime = import_fs.default.existsSync(prebuiltAppJs) ? import_fs.default.statSync(prebuiltAppJs).mtimeMs : 0;
+    const srcMtime = Math.max(
+      import_fs.default.existsSync(authModalSrc) ? import_fs.default.statSync(authModalSrc).mtimeMs : 0,
+      import_fs.default.statSync(mainSrc).mtimeMs
+    );
+    if (srcMtime > bundleMtime + 1e3) {
+      const esbuild = require("esbuild");
+      esbuild.buildSync({
+        entryPoints: [mainSrc],
+        bundle: true,
+        minify: true,
+        format: "esm",
+        platform: "browser",
+        target: ["es2020"],
+        outfile: prebuiltAppJs,
+        loader: {
+          ".css": "empty",
+          ".svg": "dataurl",
+          ".png": "dataurl",
+          ".jpg": "dataurl",
+          ".jpeg": "dataurl",
+          ".gif": "dataurl",
+          ".woff": "dataurl",
+          ".woff2": "dataurl"
+        },
+        define: {
+          "process.env.NODE_ENV": '"production"',
+          "import.meta.env": JSON.stringify({
+            MODE: "production",
+            PROD: true,
+            DEV: false,
+            SSR: false,
+            VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || "",
+            VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY || ""
+          })
+        }
+      });
+      if (import_fs.default.existsSync(prebuiltAppCss) && import_fs.default.existsSync(prebuiltAppJs)) {
+        const extraPopupCss = "\n.vs-auth-popup-window{width:100%!important;max-width:420px!important;max-height:88vh!important;overflow-y:auto!important;margin:auto!important;border-radius:16px!important;}.vs-legal-popup-window{width:100%!important;max-width:460px!important;max-height:82vh!important;margin:auto!important;border-radius:16px!important;}\n";
+        const cssContent = import_fs.default.readFileSync(prebuiltAppCss, "utf8") + extraPopupCss;
+        const jsContent = import_fs.default.readFileSync(prebuiltAppJs, "utf8");
+        if (!jsContent.includes("vs-tailwind-inline")) {
+          const styleInjector = `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-tailwind-inline')){var s=document.createElement('style');s.id='vs-tailwind-inline';s.textContent=${JSON.stringify(
+            cssContent
+          )};document.head.appendChild(s);}})();
+`;
+          import_fs.default.writeFileSync(prebuiltAppJs, styleInjector + jsContent, "utf8");
+        }
+      }
+    }
+  } catch {
+  }
+}
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+  ensureFreshPrebuiltBundle();
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.json({ status: "ok", version: "20260928-v6", timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+});
+app.get("/api/client-app.js", (_req, res) => {
+  ensureFreshPrebuiltBundle();
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.sendFile(import_path.default.join(process.cwd(), "prebuilt", "app.js"));
 });
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
@@ -2493,23 +2738,21 @@ function getGeminiClient() {
   });
 }
 var FALLBACK_MODELS = [
-  "gemini-3.1-flash-lite",
-  "gemini-3.8-flash",
-  "gemini-3.5-flash",
+  "gemini-3.1-flash-lite-preview",
+  "gemini-3-flash-preview",
   "gemini-flash-latest"
 ];
 async function callGemini(contents, config, requestedModel) {
   const ai = getGeminiClient();
   if (!ai) return null;
-  let targetModel = requestedModel || "gemini-3.1-flash-lite";
-  if (targetModel.toLowerCase().includes("3.8")) {
-    targetModel = "gemini-3.8-flash";
-  } else if (targetModel.toLowerCase().includes("3.5")) {
-    targetModel = "gemini-3.5-flash";
-  } else if (targetModel.toLowerCase().includes("lite") || targetModel.toLowerCase().includes("3.1")) {
-    targetModel = "gemini-3.1-flash-lite";
-  } else {
-    targetModel = "gemini-3.1-flash-lite";
+  let targetModel = "gemini-3.1-flash-lite-preview";
+  if (requestedModel) {
+    const reqLower = requestedModel.toLowerCase();
+    if (reqLower.includes("3-flash") || reqLower.includes("3.8") || reqLower.includes("3.5")) {
+      targetModel = "gemini-3-flash-preview";
+    } else if (reqLower.includes("latest")) {
+      targetModel = "gemini-flash-latest";
+    }
   }
   const modelsToTry = [targetModel, ...FALLBACK_MODELS.filter((m) => m !== targetModel)];
   for (const model of modelsToTry) {
@@ -3007,25 +3250,274 @@ app.post("/api/verify/url", async (req, res) => {
     res.status(500).json({ error: "Domain verification failed" });
   }
 });
+var domainMxCache = /* @__PURE__ */ new Map();
+var SERVER_TYPO_DOMAINS = {
+  "gmial.com": "gmail.com",
+  "gamil.com": "gmail.com",
+  "gmal.com": "gmail.com",
+  "gmai.com": "gmail.com",
+  "gmail.con": "gmail.com",
+  "gmail.cmo": "gmail.com",
+  "gmail.co": "gmail.com",
+  "yaho.com": "yahoo.com",
+  "yahooo.com": "yahoo.com",
+  "yahoo.con": "yahoo.com",
+  "hotmial.com": "hotmail.com",
+  "hotmal.com": "hotmail.com",
+  "hotmail.con": "hotmail.com",
+  "outlok.com": "outlook.com",
+  "outllok.com": "outlook.com",
+  "outlook.con": "outlook.com",
+  "icloud.con": "icloud.com"
+};
+var SERVER_DISPOSABLE_DOMAINS = /* @__PURE__ */ new Set([
+  "mailinator.com",
+  "tempmail.com",
+  "temp-mail.org",
+  "10minutemail.com",
+  "guerrillamail.com",
+  "yopmail.com",
+  "trashmail.com",
+  "getnada.com",
+  "sharklasers.com",
+  "maildrop.cc",
+  "throwawaymail.com",
+  "fakeinbox.com",
+  "dispostable.com",
+  "mohmal.com",
+  "tempmailo.com"
+]);
+var SERVER_FAKE_DOMAINS = /* @__PURE__ */ new Set([
+  "example.com",
+  "example.org",
+  "example.net",
+  "test.com",
+  "testing.com",
+  "yourdomain.com",
+  "domain.com",
+  "sample.com",
+  "fake.com",
+  "invalid.com",
+  "invalid",
+  "localhost",
+  "none.com",
+  "null.com",
+  "noemail.com",
+  "nomail.com"
+]);
+async function checkDomainMxRecord(domain) {
+  const cleanDomain = domain.trim().toLowerCase();
+  const cached = domainMxCache.get(cleanDomain);
+  if (cached && Date.now() - cached.checkedAt < 15 * 60 * 1e3) {
+    return { validMx: cached.validMx, mxHost: cached.mxHost };
+  }
+  try {
+    const mxRecords = await Promise.race([
+      import_dns.default.promises.resolveMx(cleanDomain),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("DNS_TIMEOUT")), 2500))
+    ]);
+    if (Array.isArray(mxRecords) && mxRecords.length > 0) {
+      const sorted = [...mxRecords].sort((a, b) => (a.priority || 0) - (b.priority || 0));
+      const mxHost = sorted[0]?.exchange || "";
+      if (mxHost && mxHost !== "." && mxHost !== "0.0.0.0") {
+        domainMxCache.set(cleanDomain, { validMx: true, mxHost, checkedAt: Date.now() });
+        return { validMx: true, mxHost };
+      }
+    }
+    domainMxCache.set(cleanDomain, { validMx: false, checkedAt: Date.now() });
+    return { validMx: false };
+  } catch (err) {
+    const code = err?.code || err?.message || "";
+    if (code === "ENOTFOUND" || code === "ENODATA" || code === "ESERVFAIL") {
+      domainMxCache.set(cleanDomain, { validMx: false, checkedAt: Date.now() });
+      return { validMx: false };
+    }
+    try {
+      const aRecords = await Promise.race([
+        import_dns.default.promises.resolve4(cleanDomain),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("DNS_TIMEOUT")), 1500))
+      ]);
+      const ok = Array.isArray(aRecords) && aRecords.length > 0;
+      domainMxCache.set(cleanDomain, { validMx: ok, checkedAt: Date.now() });
+      return { validMx: ok };
+    } catch {
+      return { validMx: true };
+    }
+  }
+}
+app.post("/api/verify/emails", async (req, res) => {
+  try {
+    const rawEmails = Array.isArray(req.body?.emails) ? req.body.emails.slice(0, 500) : [];
+    const results = {};
+    await Promise.all(
+      rawEmails.map(async (rawEmail) => {
+        const trimmed = String(rawEmail || "").trim();
+        const lower = trimmed.toLowerCase();
+        if (!lower) return;
+        if (/\s/.test(trimmed) || !lower.includes("@") || lower.split("@").length !== 2) {
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: "invalid",
+            reason: "Malformed email format",
+            reasonBn: "\u09A8\u09B7\u09CD\u099F \u09AE\u09C7\u0987\u09B2: \u0987\u09AE\u09C7\u0987\u09B2 \u09AB\u09B0\u09AE\u09CD\u09AF\u09BE\u099F \u09B8\u09A0\u09BF\u0995 \u09A8\u09DF (\u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09AF\u09BE\u09AC\u09C7 \u09A8\u09BE)",
+            mxVerified: false
+          };
+          return;
+        }
+        const [localPart, domainPart] = lower.split("@");
+        if (!localPart || !domainPart || !domainPart.includes(".")) {
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: "invalid",
+            reason: "Incomplete email or domain",
+            reasonBn: "\u09A8\u09B7\u09CD\u099F \u09AE\u09C7\u0987\u09B2: \u09A1\u09CB\u09AE\u09C7\u0987\u09A8 \u09AC\u09BE \u0987\u0989\u099C\u09BE\u09B0\u09A8\u09C7\u09AE \u0985\u09B8\u09AE\u09CD\u09AA\u09C2\u09B0\u09CD\u09A3",
+            mxVerified: false
+          };
+          return;
+        }
+        if (SERVER_TYPO_DOMAINS[domainPart]) {
+          const suggestion = `${localPart}@${SERVER_TYPO_DOMAINS[domainPart]}`;
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: "invalid",
+            reason: `Domain typo (${domainPart}) \u2014 will hard-bounce`,
+            reasonBn: `\u09A8\u09B7\u09CD\u099F \u09AE\u09C7\u0987\u09B2: \u09A1\u09CB\u09AE\u09C7\u0987\u09A8 \u09AC\u09BE\u09A8\u09BE\u09A8 \u09AD\u09C1\u09B2 (${domainPart})! \u09AA\u09BE\u09A0\u09BE\u09B2\u09C7 \u09AC\u09BE\u0989\u09A8\u09CD\u09B8 \u0995\u09B0\u09AC\u09C7 (\u09B8\u09A0\u09BF\u0995: ${suggestion})`,
+            suggestion,
+            mxVerified: false
+          };
+          return;
+        }
+        if (SERVER_FAKE_DOMAINS.has(domainPart)) {
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: "invalid",
+            reason: `Placeholder/Test domain (${domainPart}) \u2014 undeliverable`,
+            reasonBn: `\u09A8\u09B7\u09CD\u099F/\u099F\u09C7\u09B8\u09CD\u099F \u09AE\u09C7\u0987\u09B2 (${domainPart}): \u098F\u0987 \u09A1\u09CB\u09AE\u09C7\u0987\u09A8\u09C7 \u09AE\u09C7\u0987\u09B2 \u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09AF\u09BE\u09AC\u09C7 \u09A8\u09BE`,
+            mxVerified: false
+          };
+          return;
+        }
+        if (SERVER_DISPOSABLE_DOMAINS.has(domainPart)) {
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: "invalid",
+            reason: `Disposable temporary email (${domainPart})`,
+            reasonBn: `\u09A8\u09B7\u09CD\u099F/\u099F\u09C7\u09AE\u09CD\u09AA\u09CB\u09B0\u09BE\u09B0\u09BF \u09AE\u09C7\u0987\u09B2 (${domainPart}): \u098F\u099F\u09BF \u09AD\u09C1\u09DF\u09BE \u0993\u09DF\u09BE\u09A8-\u099F\u09BE\u0987\u09AE \u09AE\u09C7\u0987\u09B2`,
+            mxVerified: false
+          };
+          return;
+        }
+        const mxCheck = await checkDomainMxRecord(domainPart);
+        if (!mxCheck.validMx) {
+          results[lower] = {
+            email: trimmed,
+            isValid: false,
+            status: "invalid",
+            reason: `Dead domain / No MX mail server found for "${domainPart}"`,
+            reasonBn: `\u09A8\u09B7\u09CD\u099F \u09AE\u09C7\u0987\u09B2: "${domainPart}" \u09A1\u09CB\u09AE\u09C7\u0987\u09A8\u09C7 \u0995\u09CB\u09A8\u09CB \u09AE\u09C7\u0987\u09B2 \u09B8\u09BE\u09B0\u09CD\u09AD\u09BE\u09B0 (MX Record) \u09A8\u09C7\u0987 \u2014 \u09AA\u09BE\u09A0\u09BE\u09B2\u09C7 \u09AC\u09BE\u0989\u09A8\u09CD\u09B8 \u09B9\u09AC\u09C7!`,
+            mxVerified: false
+          };
+          return;
+        }
+        results[lower] = {
+          email: trimmed,
+          isValid: true,
+          status: "valid",
+          reason: `Verified active mail server (${mxCheck.mxHost || domainPart})`,
+          reasonBn: "\u09B8\u09A0\u09BF\u0995 \u0993 \u09AD\u09C7\u09B0\u09BF\u09AB\u09BE\u0987\u09A1 \u09AE\u09C7\u0987\u09B2 (\u09AA\u09BE\u09A0\u09BE\u09A8\u09CB\u09B0 \u099C\u09A8\u09CD\u09AF \u09B8\u09AE\u09CD\u09AA\u09C2\u09B0\u09CD\u09A3 \u09AA\u09CD\u09B0\u09B8\u09CD\u09A4\u09C1\u09A4)",
+          mxVerified: true,
+          mxHost: mxCheck.mxHost
+        };
+      })
+    );
+    return res.json({ success: true, results });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Email verification failed" });
+  }
+});
+var dispatchedPixelsMap = /* @__PURE__ */ new Map();
+function getCleanAuthoritativeTrackingEvents(rawEvents) {
+  if (!Array.isArray(rawEvents)) return [];
+  const acceptedByPixel = /* @__PURE__ */ new Map();
+  const cleanList = [];
+  for (const ev of rawEvents) {
+    if (!ev || !ev.pixelId || !ev.openedAt) continue;
+    const cleanPixelId = String(ev.pixelId).replace(/\.gif$/i, "").trim();
+    const openedMs = new Date(ev.openedAt).getTime();
+    if (!Number.isFinite(openedMs)) continue;
+    const parts = cleanPixelId.split("-");
+    const embeddedSentMs = parts.length >= 2 ? Number(parts[1]) : 0;
+    const recordedSentMs = dispatchedPixelsMap.get(cleanPixelId) || embeddedSentMs;
+    if (recordedSentMs > 0 && openedMs - recordedSentMs < 15e3) {
+      continue;
+    }
+    const ua = String(ev.userAgent || "").toLowerCase();
+    if (ua.includes("bot") || ua.includes("spider") || ua.includes("crawler") || ua.includes("scanner") || ua.includes("headless") || ua.includes("barracuda") || ua.includes("mimecast") || ua.includes("proofpoint") || ua.includes("curl/") || ua.includes("wget/") || ua.includes("python-requests")) {
+      continue;
+    }
+    const prevForPixel = acceptedByPixel.get(cleanPixelId) || [];
+    const lastOpen = prevForPixel[prevForPixel.length - 1];
+    if (lastOpen) {
+      const lastOpenMs = new Date(lastOpen.openedAt).getTime();
+      if (Math.abs(openedMs - lastOpenMs) < 6e4) {
+        continue;
+      }
+    }
+    const normalizedEvent = {
+      ...ev,
+      pixelId: cleanPixelId,
+      eventId: `${cleanPixelId}_${prevForPixel.length + 1}`
+    };
+    prevForPixel.push(normalizedEvent);
+    acceptedByPixel.set(cleanPixelId, prevForPixel);
+    cleanList.push(normalizedEvent);
+  }
+  return cleanList;
+}
 app.get("/api/track/open/:pixelId", (req, res) => {
   try {
-    const { pixelId } = req.params;
-    if (pixelId) {
+    const rawParam = req.params.pixelId || "";
+    const pixelId = rawParam.replace(/\.gif$/i, "").trim();
+    const ua = String(req.headers["user-agent"] || "");
+    const uaLower = ua.toLowerCase();
+    const purpose = String(req.headers["purpose"] || req.headers["x-moz"] || req.headers["sec-purpose"] || "").toLowerCase();
+    const parts = pixelId.split("-");
+    const embeddedSentMs = parts.length >= 2 ? Number(parts[1]) : 0;
+    const sentAtMs = dispatchedPixelsMap.get(pixelId) || embeddedSentMs;
+    const nowMs = Date.now();
+    const isInitialScannerHit = sentAtMs > 0 && nowMs - sentAtMs < 15e3;
+    const isBotOrPrefetch = req.method !== "GET" || purpose.includes("prefetch") || purpose.includes("preview") || uaLower.includes("bot") || uaLower.includes("spider") || uaLower.includes("crawler") || uaLower.includes("scanner") || uaLower.includes("headless") || uaLower.includes("barracuda") || uaLower.includes("mimecast") || uaLower.includes("proofpoint") || uaLower.includes("curl/") || uaLower.includes("wget/") || uaLower.includes("python");
+    if (pixelId && !isInitialScannerHit && !isBotOrPrefetch) {
       let events = [];
       if (import_fs.default.existsSync(TRACKING_EVENTS_FILE)) {
         try {
           events = JSON.parse(import_fs.default.readFileSync(TRACKING_EVENTS_FILE, "utf-8"));
+          if (!Array.isArray(events)) events = [];
         } catch {
+          events = [];
         }
       }
-      events.push({
-        pixelId,
-        openedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        ip: req.headers["x-forwarded-for"] || req.socket.remoteAddress || "",
-        userAgent: req.headers["user-agent"] || ""
+      const recentDuplicate = events.some((ev) => {
+        if (!ev || String(ev.pixelId).replace(/\.gif$/i, "") !== pixelId) return false;
+        const evTime = new Date(ev.openedAt).getTime();
+        return Number.isFinite(evTime) && Math.abs(nowMs - evTime) < 6e4;
       });
-      if (events.length > 2e3) events = events.slice(-2e3);
-      import_fs.default.writeFileSync(TRACKING_EVENTS_FILE, JSON.stringify(events, null, 2), "utf-8");
+      if (!recentDuplicate) {
+        events.push({
+          pixelId,
+          openedAt: new Date(nowMs).toISOString(),
+          ip: req.headers["x-forwarded-for"] || req.socket.remoteAddress || "",
+          userAgent: ua
+        });
+        const cleaned = getCleanAuthoritativeTrackingEvents(events);
+        const trimmed = cleaned.length > 2e3 ? cleaned.slice(-2e3) : cleaned;
+        import_fs.default.writeFileSync(TRACKING_EVENTS_FILE, JSON.stringify(trimmed, null, 2), "utf-8");
+      }
     }
   } catch (err) {
     console.warn("Track open log note:", err);
@@ -3042,8 +3534,9 @@ app.get("/api/track/open/:pixelId", (req, res) => {
 app.get("/api/track/events", (_req, res) => {
   try {
     if (import_fs.default.existsSync(TRACKING_EVENTS_FILE)) {
-      const data = JSON.parse(import_fs.default.readFileSync(TRACKING_EVENTS_FILE, "utf-8"));
-      return res.json({ success: true, events: data });
+      const rawData = JSON.parse(import_fs.default.readFileSync(TRACKING_EVENTS_FILE, "utf-8"));
+      const cleanEvents = getCleanAuthoritativeTrackingEvents(rawData);
+      return res.json({ success: true, events: cleanEvents });
     }
     return res.json({ success: true, events: [] });
   } catch (err) {
@@ -3246,9 +3739,12 @@ app.post("/api/smtp/send", async (req, res) => {
     const {
       to,
       toName,
+      toCompany,
       from,
       fromName,
       replyTo,
+      inReplyTo,
+      references,
       subject,
       text,
       html,
@@ -3265,14 +3761,14 @@ app.post("/api/smtp/send", async (req, res) => {
           provider: "resend",
           apiKey: process.env.RESEND_API_KEY,
           fromEmail: process.env.SMTP_FROM || "onboarding@resend.dev",
-          fromName: process.env.SMTP_FROM_NAME || "Visual Sky Outreach"
+          fromName: process.env.SMTP_FROM_NAME || "Visual Sky"
         };
       } else if (process.env.BREVO_API_KEY) {
         activeSmtp = {
           provider: "brevo",
           apiKey: process.env.BREVO_API_KEY,
           fromEmail: process.env.SMTP_FROM || "outreach@visualsky.agency",
-          fromName: process.env.SMTP_FROM_NAME || "Visual Sky Outreach"
+          fromName: process.env.SMTP_FROM_NAME || "Visual Sky"
         };
       } else if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
         activeSmtp = {
@@ -3281,7 +3777,7 @@ app.post("/api/smtp/send", async (req, res) => {
           encryption: process.env.SMTP_SECURE === "true" ? "SSL" : "TLS",
           username: process.env.SMTP_USER,
           password: process.env.SMTP_PASS,
-          fromName: process.env.SMTP_FROM_NAME || "Visual Sky Outreach",
+          fromName: process.env.SMTP_FROM_NAME || "Visual Sky",
           fromEmail: process.env.SMTP_FROM || process.env.SMTP_USER
         };
       }
@@ -3293,24 +3789,76 @@ app.post("/api/smtp/send", async (req, res) => {
         status: "failed"
       });
     }
-    const pixelId = trackingPixelId || `px-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-    const hostHeader = req.headers["x-forwarded-host"] || req.headers.host || "visualsky.agency";
-    const protoHeader = req.headers["x-forwarded-proto"] || req.protocol || "https";
-    const origin = `${protoHeader}://${hostHeader}`;
-    const pixelHtml = `<img src="${origin}/api/track/open/${pixelId}" width="1" height="1" style="display:none!important;width:1px!important;height:1px!important;opacity:0!important;border:none!important;" alt="" />`;
-    let finalHtml = html;
-    if (!finalHtml && text) {
-      const formattedLines = text.split("\n").map((line) => line ? `<p style="margin: 0 0 12px 0;">${line}</p>` : "<br/>").join("");
-      finalHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; line-height: 1.6; color: #1e293b;">${formattedLines}</div>`;
-    }
-    if (finalHtml) {
-      finalHtml += pixelHtml;
-    }
+    const cleanRecipientEmail = String(to).trim();
+    const recipientDomainPart = cleanRecipientEmail.split("@")[1]?.split(".")[0] || "your company";
+    const derivedRecipientName = toName && String(toName).trim() && !String(toName).includes("@") ? String(toName).trim() : cleanRecipientEmail.split("@")[0].replace(/[._-]/g, " ");
+    const derivedFirstName = derivedRecipientName.split(" ")[0] || "there";
+    const derivedCompany = toCompany && String(toCompany).trim() || recipientDomainPart.charAt(0).toUpperCase() + recipientDomainPart.slice(1);
     const authKey = activeSmtp.apiKey || activeSmtp.password || "";
-    const senderEmail = activeSmtp.fromEmail || activeSmtp.username || from || "outreach@visualsky.agency";
-    const senderDisplayName = fromName || activeSmtp.fromName || "Visual Sky Outreach";
+    const rawFromEmail = activeSmtp.fromEmail || activeSmtp.username || from || "outreach@visualsky.agency";
+    const smtpUserEmail = activeSmtp.username && String(activeSmtp.username).includes("@") ? String(activeSmtp.username).trim() : "";
+    let senderEmail = rawFromEmail.trim();
+    if (smtpUserEmail && !activeSmtp.apiKey && activeSmtp.provider !== "resend" && activeSmtp.provider !== "brevo") {
+      const fromDomain = senderEmail.split("@")[1]?.toLowerCase();
+      const userDomain = smtpUserEmail.split("@")[1]?.toLowerCase();
+      if (!fromDomain || userDomain && fromDomain !== userDomain) {
+        senderEmail = smtpUserEmail;
+      }
+    }
+    const senderDisplayName = (fromName || activeSmtp.fromName || senderEmail.split("@")[0] || "Outreach").replace(/["<>]/g, "").trim();
+    const effectiveReplyTo = (replyTo || activeSmtp.replyToEmail || rawFromEmail || senderEmail).trim();
+    const resolveMailTokens = (input) => {
+      if (!input) return "";
+      return String(input).replace(/\{\{\s*first_name\s*\}\}/gi, derivedFirstName).replace(/\{\{\s*name\s*\}\}/gi, derivedRecipientName).replace(/\{\{\s*company\s*\}\}/gi, derivedCompany).replace(/\{\{\s*email\s*\}\}/gi, cleanRecipientEmail).replace(/\{\{\s*title\s*\}\}/gi, "Team").replace(/\{\{\s*website\s*\}\}/gi, derivedCompany).replace(/\{\{\s*niche\s*\}\}/gi, "your industry").replace(/\{\{\s*sender_name\s*\}\}/gi, senderDisplayName);
+    };
+    const cleanSubject = resolveMailTokens(subject).replace(/!{2,}/g, "!").replace(/\${2,}/g, "$").trim();
+    const isWeek1Warmup = (() => {
+      if (req.body.week1TextOnly === true) return true;
+      if (!activeSmtp) return false;
+      const mode = activeSmtp.warmupMode || (activeSmtp.warmupStatus === "warming" ? "ramp_15" : "full");
+      if (mode !== "ramp_15") return false;
+      if (activeSmtp.warmupCurrentDay && Number(activeSmtp.warmupCurrentDay) <= 7) return true;
+      const startStr = activeSmtp.warmupStartDate;
+      if (!startStr) return true;
+      const diffDays = Math.max(1, Math.floor((Date.now() - new Date(startStr).getTime()) / (1e3 * 60 * 60 * 24)) + 1);
+      return diffDays <= 7;
+    })();
+    let rawCleanTextBody = resolveMailTokens(text || (html ? String(html).replace(/<[^>]+>/g, "") : "")).trim();
+    if (isWeek1Warmup) {
+      rawCleanTextBody = rawCleanTextBody.replace(/<img[^>]*>/gi, "").replace(/https?:\/\/[^\s)>]+/gi, (match) => match.replace(/^https?:\/\/(www\.)?/i, "").split("/")[0]).trim();
+    }
+    const cleanTextBody = rawCleanTextBody;
+    const rawPixelId = trackingPixelId || `px-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    const pixelId = String(rawPixelId).replace(/\.gif$/i, "").trim();
+    dispatchedPixelsMap.set(pixelId, Date.now());
+    const hostHeader = req.headers["x-forwarded-host"] || req.headers.host || "";
+    const protoHeader = req.headers["x-forwarded-proto"] || req.protocol || "https";
+    const origin = hostHeader ? `${protoHeader}://${hostHeader}` : "https://cold.visualsky.pro";
+    const isLocalhostOrigin = origin.includes("localhost") || origin.includes("127.0.0.1");
+    const pixelHtml = isLocalhostOrigin ? `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />` : `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`;
+    let finalHtml = html ? resolveMailTokens(html) : "";
+    if (!finalHtml && cleanTextBody) {
+      const paragraphs = cleanTextBody.split(/\r?\n\r?\n/).map((para) => {
+        const escapedLines = para.split(/\r?\n/).map(
+          (line) => line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        ).join("<br>");
+        return `<div style="margin:0 0 12px 0;">${escapedLines}</div>`;
+      }).join("");
+      finalHtml = `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#222222;">${paragraphs}${pixelHtml}</div>`;
+    } else if (finalHtml) {
+      if (finalHtml.includes("</body>")) {
+        finalHtml = finalHtml.replace("</body>", `${pixelHtml}</body>`);
+      } else {
+        finalHtml = `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#222222;">${finalHtml}${pixelHtml}</div>`;
+      }
+    }
+    const senderDomain = senderEmail.split("@")[1] || "visualsky.pro";
+    const customMessageId = `<${import_crypto.default.randomBytes(8).toString("hex")}.${Date.now()}@${senderDomain}>`;
     if (activeSmtp.provider === "resend" || authKey.startsWith("re_")) {
       try {
+        const resendHeaders = {};
+        if (inReplyTo) resendHeaders["In-Reply-To"] = String(inReplyTo);
+        if (references) resendHeaders["References"] = String(references);
         const resendRes = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {
@@ -3319,14 +3867,12 @@ app.post("/api/smtp/send", async (req, res) => {
           },
           body: JSON.stringify({
             from: `${senderDisplayName} <${senderEmail}>`,
-            to: [toName ? `${toName} <${to}>` : to],
-            subject,
-            text: text || "",
+            to: [derivedRecipientName ? `${derivedRecipientName} <${cleanRecipientEmail}>` : cleanRecipientEmail],
+            subject: cleanSubject,
+            text: cleanTextBody,
             html: finalHtml || void 0,
-            reply_to: replyTo || activeSmtp.replyToEmail || senderEmail,
-            headers: {
-              "X-VisualSky-Tracking-ID": pixelId
-            }
+            reply_to: effectiveReplyTo,
+            headers: Object.keys(resendHeaders).length > 0 ? resendHeaders : void 0
           })
         });
         let resendData = {};
@@ -3362,6 +3908,9 @@ app.post("/api/smtp/send", async (req, res) => {
     }
     if (activeSmtp.provider === "brevo" || authKey.startsWith("xkeysib-")) {
       try {
+        const brevoHeaders = {};
+        if (inReplyTo) brevoHeaders["In-Reply-To"] = String(inReplyTo);
+        if (references) brevoHeaders["References"] = String(references);
         const brevoRes = await fetch("https://api.brevo.com/v3/smtp/email", {
           method: "POST",
           headers: {
@@ -3370,14 +3919,12 @@ app.post("/api/smtp/send", async (req, res) => {
           },
           body: JSON.stringify({
             sender: { name: senderDisplayName, email: senderEmail },
-            to: [{ email: to, name: toName || void 0 }],
-            subject,
-            textContent: text || "",
+            to: [{ email: cleanRecipientEmail, name: derivedRecipientName || void 0 }],
+            subject: cleanSubject,
+            textContent: cleanTextBody,
             htmlContent: finalHtml || void 0,
-            replyTo: { email: replyTo || activeSmtp.replyToEmail || senderEmail },
-            headers: {
-              "X-VisualSky-Tracking-ID": pixelId
-            }
+            replyTo: { email: effectiveReplyTo, name: senderDisplayName },
+            headers: Object.keys(brevoHeaders).length > 0 ? brevoHeaders : void 0
           })
         });
         let brevoData = {};
@@ -3418,54 +3965,88 @@ app.post("/api/smtp/send", async (req, res) => {
         status: "failed"
       });
     }
-    const port = Number(activeSmtp.port) || 465;
-    const isSecure = activeSmtp.encryption === "SSL" || port === 465;
-    const transporter = import_nodemailer.default.createTransport({
+    const primaryPort = Number(activeSmtp.port) || 465;
+    const primarySecure = activeSmtp.encryption === "SSL" || primaryPort === 465;
+    const createSmtpTransporter = (targetPort, targetSecure) => import_nodemailer.default.createTransport({
       host: activeSmtp.host,
-      port,
-      secure: isSecure,
-      requireTLS: port === 587,
+      port: targetPort,
+      secure: targetSecure,
+      requireTLS: targetPort === 587,
+      name: senderDomain,
+      // EHLO hostname aligned with sender's domain (prevents HELO_LOCALHOST spam penalty!)
       auth: {
         user: activeSmtp.username,
         pass: authKey
       },
-      connectionTimeout: 8e3,
+      connectionTimeout: 1e4,
       greetingTimeout: 8e3,
-      socketTimeout: 12e3,
+      socketTimeout: 14e3,
       tls: {
         rejectUnauthorized: false
       }
     });
-    const mailOptions = {
-      from: `"${senderDisplayName}" <${senderEmail}>`,
-      to: toName ? `"${toName}" <${to}>` : to,
-      subject,
-      text: text || "",
-      html: finalHtml || void 0,
-      replyTo: replyTo || activeSmtp.replyToEmail || senderEmail,
-      headers: {
-        "X-Mailer": "VisualSky Cold Outreach Engine 2.0",
-        "X-VisualSky-Tracking-ID": pixelId
-      }
+    const cleanHeaders = {
+      "MIME-Version": "1.0"
     };
+    if (inReplyTo) cleanHeaders["In-Reply-To"] = String(inReplyTo);
+    if (references) cleanHeaders["References"] = String(references);
+    const mailOptions = {
+      messageId: customMessageId,
+      from: `"${senderDisplayName}" <${senderEmail}>`,
+      to: derivedRecipientName ? `"${derivedRecipientName}" <${cleanRecipientEmail}>` : cleanRecipientEmail,
+      replyTo: `"${senderDisplayName}" <${effectiveReplyTo}>`,
+      subject: cleanSubject,
+      text: cleanTextBody,
+      html: finalHtml || void 0,
+      inReplyTo: inReplyTo || void 0,
+      references: references || void 0,
+      envelope: {
+        from: senderEmail,
+        to: cleanRecipientEmail
+      },
+      headers: cleanHeaders
+    };
+    let transporter = createSmtpTransporter(primaryPort, primarySecure);
     try {
-      const sendPromise = transporter.sendMail(mailOptions);
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => {
-          const timeoutErr = new Error(`Connection timed out after 8s while connecting to ${activeSmtp.host}:${port}. Cloud serverless environments may block or face firewall drops on port ${port}.`);
-          timeoutErr.code = "ETIMEDOUT";
-          reject(timeoutErr);
-        }, 8e3);
-      });
-      const info = await Promise.race([sendPromise, timeoutPromise]);
+      const sendWithTimeout = async (tp, p) => {
+        const sendPromise = tp.sendMail(mailOptions);
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => {
+            const timeoutErr = new Error(`Connection timed out while connecting to ${activeSmtp.host}:${p}.`);
+            timeoutErr.code = "ETIMEDOUT";
+            reject(timeoutErr);
+          }, 11e3);
+        });
+        return Promise.race([sendPromise, timeoutPromise]);
+      };
+      let info;
+      let usedPort = primaryPort;
+      try {
+        info = await sendWithTimeout(transporter, primaryPort);
+      } catch (firstErr) {
+        const isAuthErr = firstErr?.code === "EAUTH" || String(firstErr?.message || "").includes("535");
+        if (!isAuthErr) {
+          try {
+            transporter.close();
+          } catch {
+          }
+          const altPort = primaryPort === 465 ? 587 : 465;
+          const altSecure = altPort === 465;
+          transporter = createSmtpTransporter(altPort, altSecure);
+          usedPort = altPort;
+          info = await sendWithTimeout(transporter, altPort);
+        } else {
+          throw firstErr;
+        }
+      }
       return res.json({
         success: true,
-        messageId: info.messageId,
+        messageId: info.messageId || customMessageId,
         status: "sent",
         trackingPixelId: pixelId,
         deliveredAt: (/* @__PURE__ */ new Date()).toISOString(),
         accepted: info.accepted,
-        relay: `${activeSmtp.host}:${port}`
+        relay: `${activeSmtp.host}:${usedPort}`
       });
     } catch (sendErr) {
       console.error("SMTP transmission failure on live send:", sendErr?.message);
@@ -3473,11 +4054,11 @@ app.post("/api/smtp/send", async (req, res) => {
       if (sendErr?.code === "EAUTH" || friendlyError.includes("535") || friendlyError.toLowerCase().includes("auth")) {
         friendlyError = `Authentication failed: Remote SMTP server rejected username "${activeSmtp.username}" or password. Please check your credentials.`;
       } else if (sendErr?.code === "ETIMEDOUT" || sendErr?.code === "ESOCKET" || friendlyError.includes("timed out")) {
-        friendlyError = `Connection timed out: Server at ${activeSmtp.host}:${port} did not respond within 8 seconds. Cloud serverless IPs may be blocked by your hosting firewall. Tip: Try Port 587 (TLS), check cPanel firewall whitelist, or use Resend/Brevo API.`;
+        friendlyError = `Connection timed out: Server at ${activeSmtp.host}:${primaryPort} did not respond. Tip: Check cPanel/host firewall or use Port 587 (TLS) / Resend / Brevo API.`;
       } else if (sendErr?.code === "EDNS" || sendErr?.code === "ENOTFOUND") {
         friendlyError = `Host resolution error: DNS could not find ${activeSmtp.host}.`;
       } else if (sendErr?.code === "ECONNREFUSED") {
-        friendlyError = `Connection refused by remote host ${activeSmtp.host}:${port}.`;
+        friendlyError = `Connection refused by remote host ${activeSmtp.host}:${primaryPort}.`;
       }
       return res.status(400).json({
         success: false,
@@ -3501,71 +4082,254 @@ app.post("/api/smtp/send", async (req, res) => {
     });
   }
 });
+function extractCleanReplyBody(rawText) {
+  if (!rawText) return "";
+  let text = String(rawText).replace(/\r\n/g, "\n");
+  text = text.replace(/(\n|^)\s*On\s+[\s\S]{1,320}?wrote:\s*(\n|$)[\s\S]*$/i, "");
+  text = text.replace(/(\n|^)\s*-{2,}\s*Original Message\s*-{2,}[\s\S]*$/i, "");
+  text = text.replace(/(\n|^)\s*_{5,}[\s\S]*$/i, "");
+  text = text.replace(/(\n|^)\s*From:\s+[^\n]+\n\s*Sent:\s+[^\n]+[\s\S]*$/i, "");
+  const lines = text.split("\n");
+  const nonQuotedLines = [];
+  const strippedQuoteLines = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^On\s+.+wrote:$/i.test(trimmed) || /^-{2,}\s*Original Message\s*-{2,}/i.test(trimmed) || /^From:\s+/i.test(trimmed) && nonQuotedLines.length > 0) {
+      break;
+    }
+    if (trimmed.startsWith(">")) {
+      const withoutBracket = line.replace(/^\s*>+\s?/g, "");
+      strippedQuoteLines.push(withoutBracket);
+    } else {
+      nonQuotedLines.push(line);
+    }
+  }
+  const chosenLines = nonQuotedLines.join("\n").trim() ? nonQuotedLines : strippedQuoteLines;
+  const cleaned = chosenLines.map((l) => l.replace(/^\s*>+\s?/g, "")).join("\n").replace(/\{\{\s*website\s*\}\}/gi, "your website").replace(/\{\{\s*company\s*\}\}/gi, "your company").replace(/\{\{\s*first_name\s*\}\}/gi, "there").replace(/\{\{\s*name\s*\}\}/gi, "there").replace(/\{\{\s*niche\s*\}\}/gi, "your industry").trim();
+  return cleaned;
+}
+var verifiedImapHostCache = /* @__PURE__ */ new Map();
+var imapUidMessageCache = /* @__PURE__ */ new Map();
+var imapClientPool = /* @__PURE__ */ new Map();
+var imapPoolBusy = /* @__PURE__ */ new Set();
 app.post("/api/smtp/imap-sync", async (req, res) => {
   res.setHeader("Content-Type", "application/json");
   try {
-    const { host, port, username, password, encryption, sinceHours } = req.body;
-    if (!host || !username || !password) {
+    const rawHost = req.body?.host || (req.body?.useSystemDefault ? process.env.SMTP_HOST : "");
+    const rawPort = req.body?.port || 993;
+    const rawUsername = req.body?.username || (req.body?.useSystemDefault ? process.env.SMTP_USER : "");
+    const rawPassword = req.body?.password || (req.body?.useSystemDefault ? process.env.SMTP_PASS : "");
+    const sinceHours = req.body?.sinceHours;
+    if (!rawHost || !rawUsername || !rawPassword) {
       return res.status(400).json({ success: false, error: "IMAP host, username, and password are required" });
     }
-    let imapHost = host;
-    if (host === "smtp.gmail.com") imapHost = "imap.gmail.com";
-    else if (host === "smtp.office365.com") imapHost = "outlook.office365.com";
-    else if (host.startsWith("smtp.")) imapHost = host.replace("smtp.", "mail.");
-    const imapPort = Number(port) || 993;
-    const isSecure = encryption === "SSL" || imapPort === 993;
-    let client = null;
-    try {
-      client = new import_imapflow.ImapFlow({
-        host: imapHost,
-        port: imapPort,
-        secure: isSecure,
-        auth: {
-          user: username,
-          pass: password
-        },
-        logger: false,
-        tls: {
-          rejectUnauthorized: false
-        }
-      });
-      const connectPromise = client.connect();
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => {
-          const tErr = new Error(`IMAP connection to ${imapHost}:${imapPort} timed out.`);
-          tErr.code = "ETIMEDOUT";
-          reject(tErr);
-        }, 15e3);
-      });
-      await Promise.race([connectPromise, timeoutPromise]);
-      const lock = await client.getMailboxLock("INBOX");
-      const incomingMessages = [];
-      try {
-        const searchDate = /* @__PURE__ */ new Date();
-        searchDate.setDate(searchDate.getDate() - (Number(sinceHours) ? Math.ceil(Number(sinceHours) / 24) : 7));
-        for await (const message of client.fetch({ since: searchDate }, { uid: true, envelope: true, source: true })) {
+    const cleanHost = String(rawHost).trim().toLowerCase();
+    const cleanUser = String(rawUsername).trim();
+    const userLower = cleanUser.toLowerCase();
+    const userDomain = userLower.includes("@") ? userLower.split("@")[1] : "";
+    const poolKey = `${cleanHost}::${userLower}`;
+    const candidateHosts = [];
+    const addCandidate = (h) => {
+      if (h && !candidateHosts.includes(h)) candidateHosts.push(h);
+    };
+    const cachedWorkingHost = verifiedImapHostCache.get(poolKey);
+    if (cachedWorkingHost) {
+      addCandidate(cachedWorkingHost);
+    }
+    if (cleanHost.includes("gmail.com") || userDomain === "gmail.com") {
+      addCandidate("imap.gmail.com");
+    } else if (cleanHost.includes("office365.com") || cleanHost.includes("outlook.com") || cleanHost.includes("hotmail.com")) {
+      addCandidate("outlook.office365.com");
+      addCandidate("imap-mail.outlook.com");
+    } else if (cleanHost.includes("yahoo.com") || userDomain === "yahoo.com") {
+      addCandidate("imap.mail.yahoo.com");
+    } else if (cleanHost.includes("zoho.")) {
+      addCandidate(cleanHost.replace("smtp", "imap"));
+      addCandidate("imappro.zoho.com");
+      addCandidate("imap.zoho.com");
+    } else if (cleanHost.includes("hostinger.")) {
+      addCandidate("imap.hostinger.com");
+    } else if (cleanHost.includes("titan.email")) {
+      addCandidate("imap.titan.email");
+    } else if (cleanHost.includes("privateemail.com")) {
+      addCandidate("mail.privateemail.com");
+    } else if (cleanHost.includes("icloud.com") || cleanHost.includes("mail.me.com")) {
+      addCandidate("imap.mail.me.com");
+    } else if (cleanHost.startsWith("smtp.")) {
+      const baseDomain = cleanHost.slice(5);
+      addCandidate(`mail.${baseDomain}`);
+      addCandidate(`imap.${baseDomain}`);
+      addCandidate(cleanHost);
+    } else {
+      addCandidate(cleanHost);
+      if (userDomain) {
+        addCandidate(`mail.${userDomain}`);
+        addCandidate(`imap.${userDomain}`);
+      }
+    }
+    const imapPort = Number(rawPort) === 143 ? 143 : 993;
+    const isSecure = imapPort === 993;
+    const createAndConnectClient = async () => {
+      let lastConnectErr = null;
+      for (const candidateHost of candidateHosts) {
+        const testClient = new import_imapflow.ImapFlow({
+          host: candidateHost,
+          port: imapPort,
+          secure: isSecure,
+          auth: {
+            user: cleanUser,
+            pass: rawPassword
+          },
+          logger: false,
+          tls: {
+            rejectUnauthorized: false
+          }
+        });
+        testClient.on("error", () => {
+          if (imapClientPool.get(poolKey) === testClient) {
+            imapClientPool.delete(poolKey);
+          }
+        });
+        testClient.on("close", () => {
+          if (imapClientPool.get(poolKey) === testClient) {
+            imapClientPool.delete(poolKey);
+          }
+        });
+        try {
+          const connectPromise = testClient.connect();
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => {
+              const tErr = new Error(`IMAP connection to ${candidateHost}:${imapPort} timed out.`);
+              tErr.code = "ETIMEDOUT";
+              reject(tErr);
+            }, 7500);
+          });
+          await Promise.race([connectPromise, timeoutPromise]);
+          verifiedImapHostCache.set(poolKey, candidateHost);
+          return testClient;
+        } catch (connErr) {
+          lastConnectErr = connErr;
           try {
-            if (message.source) {
-              const parsed = await (0, import_mailparser.simpleParser)(message.source);
+            testClient.close();
+          } catch {
+          }
+          if (connErr?.authenticationFailed || String(connErr?.message || "").toLowerCase().includes("authentication")) {
+            break;
+          }
+        }
+      }
+      throw lastConnectErr || new Error(`Could not connect to IMAP server (${candidateHosts[0]}:${imapPort})`);
+    };
+    let connectedClient = null;
+    let usingPooledClient = false;
+    const existingPooled = imapClientPool.get(poolKey);
+    if (existingPooled && existingPooled.usable && !imapPoolBusy.has(poolKey)) {
+      connectedClient = existingPooled;
+      usingPooledClient = true;
+      imapPoolBusy.add(poolKey);
+    } else {
+      connectedClient = await createAndConnectClient();
+      if (!imapPoolBusy.has(poolKey)) {
+        imapClientPool.set(poolKey, connectedClient);
+        usingPooledClient = true;
+        imapPoolBusy.add(poolKey);
+      }
+    }
+    const incomingMessages = [];
+    try {
+      let lock;
+      try {
+        lock = await connectedClient.getMailboxLock("INBOX");
+      } catch {
+        try {
+          connectedClient.close();
+        } catch {
+        }
+        imapClientPool.delete(poolKey);
+        connectedClient = await createAndConnectClient();
+        imapClientPool.set(poolKey, connectedClient);
+        lock = await connectedClient.getMailboxLock("INBOX");
+      }
+      try {
+        try {
+          await connectedClient.noop();
+        } catch {
+        }
+        const mailboxInfo = connectedClient.mailbox || {};
+        const totalExists = Number(mailboxInfo.exists) || 0;
+        let recentUids = [];
+        if (totalExists > 0) {
+          try {
+            const startSeq = Math.max(1, totalExists - 29);
+            const seqRange = `${startSeq}:*`;
+            for await (const item of connectedClient.fetch(seqRange, { uid: true })) {
+              if (item && item.uid) {
+                recentUids.push(item.uid);
+              }
+            }
+          } catch {
+            const searchDate = /* @__PURE__ */ new Date();
+            const lookbackDays = Number(sinceHours) ? Math.max(3, Math.ceil(Number(sinceHours) / 24)) : 14;
+            searchDate.setDate(searchDate.getDate() - lookbackDays);
+            const searchResult = await connectedClient.search({ since: searchDate }, { uid: true });
+            const allUids = Array.isArray(searchResult) ? searchResult : [];
+            recentUids = allUids.slice(-30);
+          }
+        }
+        if (recentUids.length > 0) {
+          const uncachedUids = recentUids.filter((uid) => !imapUidMessageCache.has(`${userLower}::${uid}`));
+          if (uncachedUids.length > 0) {
+            for await (const message of connectedClient.fetch(
+              uncachedUids,
+              { uid: true, envelope: true, source: true },
+              { uid: true }
+            )) {
+              try {
+                if (message.source) {
+                  const parsed = await (0, import_mailparser.simpleParser)(message.source);
+                  const fromAddr = (parsed.from?.value?.[0]?.address || message.envelope?.from?.[0]?.address || "").trim();
+                  const fromName = (parsed.from?.value?.[0]?.name || message.envelope?.from?.[0]?.name || "").trim();
+                  const rawText = parsed.text || (parsed.html ? String(parsed.html).replace(/<[^>]+>/g, " ") : "") || "";
+                  const cleanReplyText = extractCleanReplyBody(rawText);
+                  const refs = Array.isArray(parsed.references) ? parsed.references : parsed.references ? [parsed.references] : [];
+                  const msgObj = {
+                    uid: message.uid,
+                    messageId: parsed.messageId || message.envelope?.messageId || `imap-${message.uid}`,
+                    from: fromAddr,
+                    fromName,
+                    to: parsed.to ? Array.isArray(parsed.to) ? parsed.to.map((t) => t.value?.[0]?.address) : parsed.to.value?.[0]?.address : cleanUser,
+                    subject: parsed.subject || message.envelope?.subject || "No Subject",
+                    date: parsed.date || message.envelope?.date || (/* @__PURE__ */ new Date()).toISOString(),
+                    text: cleanReplyText,
+                    fullText: cleanReplyText,
+                    html: parsed.html || parsed.textAsHtml || "",
+                    inReplyTo: parsed.inReplyTo || message.envelope?.inReplyTo || "",
+                    references: refs
+                  };
+                  imapUidMessageCache.set(`${userLower}::${message.uid}`, msgObj);
+                }
+              } catch (msgErr) {
+                console.warn("Error parsing IMAP message:", msgErr);
+              }
+            }
+          }
+          const sortedUids = [...recentUids].sort((a, b) => a - b);
+          for (const uid of sortedUids) {
+            const cached = imapUidMessageCache.get(`${userLower}::${uid}`);
+            if (cached) {
               incomingMessages.push({
-                uid: message.uid,
-                messageId: parsed.messageId || message.envelope?.messageId,
-                from: parsed.from?.value?.[0]?.address || message.envelope?.from?.[0]?.address,
-                fromName: parsed.from?.value?.[0]?.name || message.envelope?.from?.[0]?.name || "",
-                to: parsed.to ? Array.isArray(parsed.to) ? parsed.to.map((t) => t.value?.[0]?.address) : parsed.to.value?.[0]?.address : username,
-                subject: parsed.subject || message.envelope?.subject || "No Subject",
-                date: parsed.date || message.envelope?.date,
-                text: parsed.text || "",
-                html: parsed.html || parsed.textAsHtml || "",
-                inReplyTo: parsed.inReplyTo || message.envelope?.inReplyTo
+                ...cached,
+                text: extractCleanReplyBody(cached.text || cached.fullText || ""),
+                fullText: extractCleanReplyBody(cached.text || cached.fullText || "")
               });
             }
-          } catch (msgErr) {
-            console.warn("Error parsing IMAP message:", msgErr);
           }
         }
       } finally {
-        lock.release();
+        try {
+          lock.release();
+        } catch {
+        }
       }
       return res.json({
         success: true,
@@ -3573,9 +4337,11 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
         messages: incomingMessages
       });
     } finally {
-      if (client) {
+      if (usingPooledClient) {
+        imapPoolBusy.delete(poolKey);
+      } else {
         try {
-          await client.logout();
+          await connectedClient.logout();
         } catch {
         }
       }
@@ -3606,22 +4372,35 @@ app.use("/api", (err, req, res, next) => {
   });
 });
 async function startServer() {
+  const prebuiltCandidate = import_path.default.join(process.cwd(), "prebuilt");
+  app.use("/prebuilt", import_express.default.static(prebuiltCandidate));
+  app.use("/assets", import_express.default.static(import_path.default.join(process.cwd(), "assets")));
   const isProdServer = process.env.NODE_ENV === "production" || Boolean(process.argv[1] && process.argv[1].includes("server.cjs"));
   if (!isProdServer) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+        watch: null
+      },
       appType: "spa"
     });
     app.use(vite.middlewares);
   } else {
     const distCandidate = import_path.default.join(process.cwd(), "dist");
-    const prebuiltCandidate = import_path.default.join(process.cwd(), "prebuilt");
     const distPath = import_fs.default.existsSync(import_path.default.join(distCandidate, "index.html")) ? distCandidate : import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "index.html")) ? prebuiltCandidate : distCandidate;
-    app.use("/prebuilt", import_express.default.static(prebuiltCandidate));
-    app.use("/assets", import_express.default.static(import_path.default.join(process.cwd(), "assets")));
-    app.use(import_express.default.static(distPath));
+    app.use(
+      import_express.default.static(distPath, {
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith(".html") || filePath.endsWith(".js") || filePath.endsWith(".css")) {
+            res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+          }
+        }
+      })
+    );
     app.get("*", (_req, res) => {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
       res.sendFile(import_path.default.join(distPath, "index.html"));
     });
   }

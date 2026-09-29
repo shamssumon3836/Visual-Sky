@@ -4,20 +4,34 @@ const path = require('path');
 const distDir = path.join(__dirname, '..', 'dist');
 const distAssets = path.join(distDir, 'assets');
 const prebuiltDir = path.join(__dirname, '..', 'prebuilt');
+const prebuiltAssetsDir = path.join(prebuiltDir, 'assets');
 const rootAssetsDir = path.join(__dirname, '..', 'assets');
 
 fs.mkdirSync(prebuiltDir, { recursive: true });
 fs.mkdirSync(rootAssetsDir, { recursive: true });
 
-// Clean up stale hashed index-* files in prebuilt/ and assets/ so old builds don't accumulate
-for (const dir of [prebuiltDir, rootAssetsDir]) {
+// Clean up stale hashed files in prebuilt/, prebuilt/assets/, and assets/ so old builds never accumulate or cause git conflicts
+for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
-      if (f.startsWith('index-') && (f.endsWith('.js') || f.endsWith('.css'))) {
-        try {
-          fs.unlinkSync(path.join(dir, f));
-        } catch {}
-      }
+      const fullPath = path.join(dir, f);
+      try {
+        if (fs.statSync(fullPath).isFile()) {
+          const isPrebuiltCore =
+            dir === prebuiltDir &&
+            (f === 'app.js' ||
+              f === 'app.css' ||
+              f === 'tailwind-bundle.css' ||
+              f === 'server.cjs' ||
+              f === 'favicon.svg' ||
+              f === 'logo.svg' ||
+              f === 'manifest.json' ||
+              f === 'sw.js');
+          if (!isPrebuiltCore && (f.endsWith('.js') || f.endsWith('.css'))) {
+            fs.unlinkSync(fullPath);
+          }
+        }
+      } catch {}
     }
   }
 }
