@@ -821,179 +821,93 @@ export const SmartInbox: React.FC = () => {
   };
 
   return (
-    <div className="p-2 md:p-6 max-w-7xl mx-auto h-[calc(100vh-5.5rem)] flex flex-col gap-4 animate-in fade-in">
+    <div className="p-1.5 md:px-3 md:py-2 max-w-[1460px] mx-auto h-[calc(100vh-4rem)] flex flex-col animate-in fade-in">
       
-      {/* GMAIL TOP SEARCH & ACTION TOOLBAR */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-3 md:p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xl shrink-0">
-        {/* Search Bar */}
-        <div className="relative w-full sm:max-w-md">
-          <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search mail: sender, company, subject, label:hot..."
-            className="w-full bg-slate-950/80 border border-slate-800 rounded-2xl pl-10 pr-4 py-2 text-xs md:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-
-        {/* Action Buttons (Auto-Sync Live Status instead of manual Sync Mailbox button) */}
-        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end flex-wrap">
-          <div
-            className="px-3.5 py-2 rounded-2xl bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center gap-2 shadow-sm select-none"
-            title="Your mailbox automatically syncs incoming replies in the background without reloading"
-          >
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            <span>Auto-Sync Live</span>
-            <span className="text-[10px] text-emerald-400/80 font-mono hidden md:inline">({lastAutoSyncTime})</span>
-          </div>
-
-          {selectedFolder === 'trash' && threads.some(t => t.isTrash) && selectedThreadIds.length === 0 && (
-            <button
-              type="button"
-              onClick={handleEmptyTrash}
-              className="px-3.5 py-2 rounded-2xl bg-rose-950/80 hover:bg-rose-900 border border-rose-500/40 text-rose-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shadow-md"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-              <span>Empty Trash ({threads.filter(t => t.isTrash).length})</span>
-            </button>
-          )}
-
-          {selectedThreadIds.length > 0 ? (
-            <div className="flex items-center gap-2 animate-in fade-in relative">
-              <span className="text-xs font-bold text-cyan-300 bg-cyan-950 px-2.5 py-1 rounded-lg border border-cyan-800">
-                {selectedThreadIds.length} selected
-              </span>
-              {selectedFolder === 'trash' ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    bulkRestoreThreads(selectedThreadIds);
-                    setSelectedThreadIds([]);
-                  }}
-                  className="px-3 py-1.5 rounded-xl bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
-                >
-                  <CornerUpLeft className="w-3.5 h-3.5" />
-                  <span>Restore</span>
-                </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleBulkMarkRead}
-                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer"
-                  >
-                    Mark Read
-                  </button>
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setShowBulkLabelMenu(prev => !prev)}
-                      className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
-                    >
-                      <Tag className="w-3.5 h-3.5" />
-                      <span>Label</span>
-                    </button>
-                    {showBulkLabelMenu && (
-                      <div className="absolute right-0 mt-2 w-48 bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl p-2 z-40 space-y-1">
-                        {labelPresets.map(preset => (
-                          <button
-                            key={preset.name}
-                            type="button"
-                            onClick={() => handleBulkAssignLabel(preset.name)}
-                            className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-slate-900 text-xs text-slate-200 cursor-pointer flex items-center gap-2"
-                          >
-                            <span className={`w-2 h-2 rounded-full border ${preset.color}`} />
-                            <span>{preset.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-              <button
-                type="button"
-                onClick={handleBulkDelete}
-                className="px-3 py-1.5 rounded-xl bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete</span>
-              </button>
-            </div>
-          ) : (
+      {/* MAIN 3-COLUMN SPLIT CONTAINER - TAKES FULL HEIGHT */}
+      <div className="flex-1 flex gap-2.5 overflow-hidden min-h-0">
+        
+        {/* 1. LEFT MAILBOXES, COMPOSE & SEARCH SIDEBAR */}
+        <div className="w-56 bg-slate-900/90 border border-slate-800 rounded-2xl p-2.5 flex flex-col justify-between shrink-0 shadow-2xl hidden lg:flex">
+          <div className="space-y-2 overflow-y-auto no-scrollbar min-h-0">
+            {/* Compose Email Button inside Mailboxes Sidebar */}
             <button
               type="button"
               onClick={() => setShowComposeModal(true)}
-              className="px-4 py-2 rounded-2xl bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-xs shadow-lg shadow-cyan-500/25 flex items-center gap-2 transition cursor-pointer"
+              className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-xs shadow-md shadow-cyan-500/20 flex items-center justify-center gap-1.5 transition cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>Compose Email</span>
             </button>
-          )}
-        </div>
-      </div>
 
-      {/* MAIN 3-COLUMN SPLIT CONTAINER */}
-      <div className="flex-1 flex gap-4 overflow-hidden min-h-0">
-        
-        {/* 1. LEFT MAILBOXES & LABELS SIDEBAR */}
-        <div className="w-56 bg-slate-900/90 border border-slate-800 rounded-3xl p-3 flex flex-col justify-between shrink-0 shadow-2xl hidden lg:flex">
-          <div className="space-y-1 overflow-y-auto no-scrollbar min-h-0">
-            <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 px-3 py-1.5">
-              Mailboxes
-            </div>
-            {[
-              { id: 'inbox', label: 'Primary Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash && t.unreadCount > 0).length },
-              { id: 'needs_reply', label: 'Waiting Reply', icon: Clock, count: waitingReplyCount },
-              { id: 'sent', label: 'Sent Mails', icon: Send, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'user')).length },
-              { id: 'starred', label: 'Starred', icon: Star, count: threads.filter(t => t.isStarred && !t.isTrash).length },
-              { id: 'high_intent', label: 'High Intent Leads', icon: Flame, count: threads.filter(t => t.labels.includes('Hot Lead') && !t.isTrash).length },
-              { id: 'meetings', label: 'Meetings Booked', icon: Calendar, count: threads.filter(t => t.labels.includes('Meeting Scheduled') && !t.isTrash).length },
-              { id: 'trash', label: 'Trash Bin', icon: Trash2, count: threads.filter(t => t.isTrash).length },
-            ].map(folder => {
-              const Icon = folder.icon;
-              const isSelected = selectedFolder === folder.id && !selectedLabelFilter;
-              return (
+            {/* Search Bar inside Mailboxes Sidebar */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search mail, label:hot..."
+                className="w-full bg-slate-950/90 border border-slate-800 rounded-xl pl-8 pr-6 py-1.5 text-[11px] text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+              />
+              {searchQuery && (
                 <button
-                  key={folder.id}
                   type="button"
-                  onClick={() => {
-                    setSelectedFolder(folder.id as any);
-                    setSelectedLabelFilter(null);
-                    setSelectedThreadIds([]);
-                  }}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-2xl text-xs font-bold transition cursor-pointer ${
-                    isSelected
-                      ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
-                      : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                  }`}
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white cursor-pointer"
                 >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-cyan-400' : 'text-slate-400'}`} />
-                    <span className="truncate">{folder.label}</span>
-                  </div>
-                  {folder.count > 0 && (
-                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full shrink-0 ${
-                      isSelected ? 'bg-cyan-500 text-black font-extrabold' : 'bg-slate-800 text-slate-400'
-                    }`}>
-                      {folder.count}
-                    </span>
-                  )}
+                  <X className="w-3 h-3" />
                 </button>
-              );
-            })}
+              )}
+            </div>
 
-            <div className="pt-3 mt-3 border-t border-slate-800 space-y-1">
-              <div className="flex items-center justify-between px-3 py-1">
+            <div className="space-y-0.5 pt-1">
+              <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 px-2.5 py-1">
+                Mailboxes
+              </div>
+              {[
+                { id: 'inbox', label: 'Primary Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash && t.unreadCount > 0).length },
+                { id: 'needs_reply', label: 'Waiting Reply', icon: Clock, count: waitingReplyCount },
+                { id: 'sent', label: 'Sent Mails', icon: Send, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'user')).length },
+                { id: 'starred', label: 'Starred', icon: Star, count: threads.filter(t => t.isStarred && !t.isTrash).length },
+                { id: 'high_intent', label: 'High Intent Leads', icon: Flame, count: threads.filter(t => t.labels.includes('Hot Lead') && !t.isTrash).length },
+                { id: 'meetings', label: 'Meetings Booked', icon: Calendar, count: threads.filter(t => t.labels.includes('Meeting Scheduled') && !t.isTrash).length },
+                { id: 'trash', label: 'Trash Bin', icon: Trash2, count: threads.filter(t => t.isTrash).length },
+              ].map(folder => {
+                const Icon = folder.icon;
+                const isSelected = selectedFolder === folder.id && !selectedLabelFilter;
+                return (
+                  <button
+                    key={folder.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedFolder(folder.id as any);
+                      setSelectedLabelFilter(null);
+                      setSelectedThreadIds([]);
+                    }}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                      isSelected
+                        ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Icon className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-cyan-400' : 'text-slate-400'}`} />
+                      <span className="truncate">{folder.label}</span>
+                    </div>
+                    {folder.count > 0 && (
+                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full shrink-0 ${
+                        isSelected ? 'bg-cyan-500 text-black font-extrabold' : 'bg-slate-800 text-slate-400'
+                      }`}>
+                        {folder.count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="pt-2 mt-2 border-t border-slate-800 space-y-0.5">
+              <div className="flex items-center justify-between px-2.5 py-1">
                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
                   Labels & Tags
                 </span>
@@ -1018,14 +932,14 @@ export const SmartInbox: React.FC = () => {
                       if (selectedFolder === 'trash') setSelectedFolder('inbox');
                       setSelectedLabelFilter(prev => (prev === preset.name ? null : preset.name));
                     }}
-                    className={`w-full px-3 py-1.5 rounded-xl flex items-center justify-between gap-2 text-xs transition cursor-pointer ${
+                    className={`w-full px-2.5 py-1 rounded-xl flex items-center justify-between gap-2 text-xs transition cursor-pointer ${
                       isActiveLabel
                         ? 'bg-slate-800 text-cyan-300 font-bold border border-cyan-500/30'
                         : 'text-slate-300 hover:bg-slate-800/60'
                     }`}
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className={`w-2.5 h-2.5 rounded-full border shrink-0 ${preset.color}`} />
+                      <span className={`w-2 h-2 rounded-full border shrink-0 ${preset.color}`} />
                       <span className="truncate">{preset.name}</span>
                     </div>
                     {count > 0 && (
@@ -1037,7 +951,7 @@ export const SmartInbox: React.FC = () => {
             </div>
           </div>
 
-          <div className="p-3 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-1 text-[11px] shrink-0">
+          <div className="p-2.5 bg-slate-950/80 rounded-xl border border-slate-800 space-y-0.5 text-[10px] shrink-0">
             <div className="flex items-center justify-between text-slate-400 font-medium">
               <span>IMAP / SMTP Relay</span>
               <span className="text-emerald-400 font-bold">100% Online</span>
@@ -1049,12 +963,43 @@ export const SmartInbox: React.FC = () => {
         </div>
 
         {/* 2. THREADS LIST (Middle Column) */}
-        <div className={`w-full md:w-96 bg-slate-900/90 border border-slate-800 rounded-3xl flex flex-col overflow-hidden shadow-2xl shrink-0 ${
+        <div className={`w-full md:w-80 lg:w-[320px] bg-slate-900/90 border border-slate-800 rounded-2xl flex flex-col overflow-hidden shadow-2xl shrink-0 ${
           mobileShowChat ? 'hidden md:flex' : 'flex'
         }`}>
           
+          {/* Mobile/Tablet Search + Compose Bar (Only visible below lg where Left Sidebar is hidden) */}
+          <div className="lg:hidden flex items-center gap-1.5 p-2 border-b border-slate-800 bg-slate-950/90 shrink-0">
+            <div className="relative flex-1">
+              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search mail..."
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-8 pr-6 py-1 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowComposeModal(true)}
+              className="px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-extrabold text-[11px] flex items-center gap-1 shrink-0 cursor-pointer shadow"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Compose</span>
+            </button>
+          </div>
+
           {/* Gmail Top Categories Tabs */}
-          <div className="flex items-center border-b border-slate-800 bg-slate-950/90 overflow-x-auto text-xs p-1 shrink-0">
+          <div className="flex items-center border-b border-slate-800 bg-slate-950/90 overflow-x-auto no-scrollbar text-[11px] px-1 shrink-0">
             {[
               { id: 'primary', label: 'Primary' },
               { id: 'interested', label: 'High Intent' },
@@ -1065,7 +1010,7 @@ export const SmartInbox: React.FC = () => {
                 key={tab.id}
                 type="button"
                 onClick={() => setPrimaryTab(tab.id as any)}
-                className={`flex-1 py-2 px-3 text-center font-bold border-b-2 whitespace-nowrap transition cursor-pointer ${
+                className={`flex-1 py-1.5 px-2 text-center font-bold border-b-2 whitespace-nowrap transition cursor-pointer ${
                   primaryTab === tab.id
                     ? 'border-cyan-400 text-cyan-300 bg-cyan-950/20'
                     : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -1077,12 +1022,14 @@ export const SmartInbox: React.FC = () => {
           </div>
 
           {/* Mobile/Tablet Folder Bar (visible below lg where left sidebar is hidden) */}
-          <div className="lg:hidden flex items-center gap-1 px-2.5 py-1.5 border-b border-slate-800/80 bg-slate-950/60 overflow-x-auto no-scrollbar shrink-0">
+          <div className="lg:hidden flex items-center gap-1 px-2 py-1 border-b border-slate-800/80 bg-slate-950/60 overflow-x-auto no-scrollbar shrink-0">
             {[
               { id: 'inbox', label: 'Inbox' },
               { id: 'needs_reply', label: `Waiting (${waitingReplyCount})` },
               { id: 'sent', label: 'Sent' },
               { id: 'starred', label: 'Starred' },
+              { id: 'high_intent', label: 'Hot Leads' },
+              { id: 'meetings', label: 'Meetings' },
               { id: 'trash', label: 'Trash' }
             ].map(f => (
               <button
@@ -1092,7 +1039,7 @@ export const SmartInbox: React.FC = () => {
                   setSelectedFolder(f.id as any);
                   setSelectedLabelFilter(null);
                 }}
-                className={`px-2.5 py-1 rounded-xl text-[11px] font-bold whitespace-nowrap cursor-pointer transition ${
+                className={`px-2 py-0.5 rounded-lg text-[10px] font-bold whitespace-nowrap cursor-pointer transition ${
                   selectedFolder === f.id
                     ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
                     : 'text-slate-400 hover:text-slate-200'
@@ -1103,38 +1050,108 @@ export const SmartInbox: React.FC = () => {
             ))}
           </div>
 
-          {/* User-Friendly Sub-header: Select All + Quick Filter Pills */}
-          <div className="px-3.5 py-2 border-b border-slate-800/80 bg-slate-950/50 flex items-center justify-between gap-2 text-[11px] text-slate-400 shrink-0">
-            <label className="flex items-center gap-2 cursor-pointer select-none hover:text-slate-200">
+          {/* Sub-header: Select All + Bulk Actions (when selected) or Quick Filter Pills */}
+          <div className="px-3 py-1.5 border-b border-slate-800/80 bg-slate-950/50 flex items-center justify-between gap-1.5 text-[11px] text-slate-400 shrink-0 relative">
+            <label className="flex items-center gap-1.5 cursor-pointer select-none hover:text-slate-200 shrink-0">
               <input
                 type="checkbox"
                 checked={filteredThreads.length > 0 && selectedThreadIds.length === filteredThreads.length}
                 onChange={handleToggleSelectAll}
                 className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 cursor-pointer w-3.5 h-3.5"
               />
-              <span className="font-bold">Select All ({filteredThreads.length})</span>
+              <span className="font-bold text-[10px]">
+                {selectedThreadIds.length > 0 ? `${selectedThreadIds.length} Selected` : `All (${filteredThreads.length})`}
+              </span>
             </label>
 
-            <div className="flex items-center gap-1">
-              {[
-                { id: 'all', label: 'All' },
-                { id: 'unread', label: 'Unread' },
-                { id: 'needs_reply', label: 'Needs Reply' }
-              ].map(flt => (
+            {selectedThreadIds.length > 0 ? (
+              <div className="flex items-center gap-1 animate-in fade-in">
+                {selectedFolder === 'trash' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      bulkRestoreThreads(selectedThreadIds);
+                      setSelectedThreadIds([]);
+                    }}
+                    className="px-2 py-0.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold cursor-pointer"
+                  >
+                    Restore
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleBulkMarkRead}
+                      className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-bold cursor-pointer"
+                    >
+                      Read
+                    </button>
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowBulkLabelMenu(prev => !prev)}
+                        className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[10px] font-bold flex items-center gap-0.5 cursor-pointer"
+                      >
+                        <Tag className="w-2.5 h-2.5" />
+                        <span>Label</span>
+                      </button>
+                      {showBulkLabelMenu && (
+                        <div className="absolute right-0 mt-1.5 w-44 bg-slate-950 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-40 space-y-0.5">
+                          {labelPresets.map(preset => (
+                            <button
+                              key={preset.name}
+                              type="button"
+                              onClick={() => handleBulkAssignLabel(preset.name)}
+                              className="w-full text-left px-2 py-1 rounded-lg hover:bg-slate-900 text-[11px] text-slate-200 cursor-pointer flex items-center gap-1.5"
+                            >
+                              <span className={`w-2 h-2 rounded-full border ${preset.color}`} />
+                              <span>{preset.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
                 <button
-                  key={flt.id}
                   type="button"
-                  onClick={() => setQuickStatusFilter(flt.id as any)}
-                  className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition cursor-pointer ${
-                    quickStatusFilter === flt.id
-                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
+                  onClick={handleBulkDelete}
+                  className="px-2 py-0.5 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-800 text-[10px] font-bold cursor-pointer"
                 >
-                  {flt.label}
+                  Delete
                 </button>
-              ))}
-            </div>
+              </div>
+            ) : selectedFolder === 'trash' && threads.some(t => t.isTrash) ? (
+              <button
+                type="button"
+                onClick={handleEmptyTrash}
+                className="px-2 py-0.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/40 text-rose-200 font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+              >
+                <Trash2 className="w-2.5 h-2.5 text-rose-400" />
+                <span>Empty Trash</span>
+              </button>
+            ) : (
+              <div className="flex items-center gap-1">
+                {[
+                  { id: 'all', label: 'All' },
+                  { id: 'unread', label: 'Unread' },
+                  { id: 'needs_reply', label: 'Needs Reply' }
+                ].map(flt => (
+                  <button
+                    key={flt.id}
+                    type="button"
+                    onClick={() => setQuickStatusFilter(flt.id as any)}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                      quickStatusFilter === flt.id
+                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {flt.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Threads List */}
@@ -1669,7 +1686,7 @@ export const SmartInbox: React.FC = () => {
                 ref={messagesScrollRef}
                 className="flex-1 overflow-y-auto p-2.5 md:p-4 space-y-3 min-h-0 bg-gradient-to-b from-slate-950/40 to-slate-900/40"
               >
-                {/* Sleek Latest Reply Quick-Translate & Highlight Bar (Only shown when thread has multiple messages so it never duplicates single-message threads) */}
+                {/* Ultra-Compact 1-Line Latest Reply Quick-Translate Bar (when thread has multiple messages) */}
                 {(() => {
                   const allMsgs = Array.isArray(currentThread.messages) ? currentThread.messages : [];
                   const latestLeadMsg = [...allMsgs].reverse().find(m => m.sender === 'lead');
@@ -1683,17 +1700,17 @@ export const SmartInbox: React.FC = () => {
                   const spotlightKey = `spotlight-${latestLeadMsg.id || currentThread.id}`;
 
                   return (
-                    <div className="p-2.5 md:p-3 rounded-xl bg-gradient-to-r from-emerald-950/60 via-slate-900/95 to-cyan-950/50 border border-emerald-500/40 space-y-1.5">
+                    <div className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-950/60 via-slate-900/95 to-cyan-950/50 border border-emerald-500/40 space-y-1">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
                           <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-slate-950 font-black text-[9px] uppercase tracking-wider shrink-0">
-                            📩 Latest Reply From {currentThread.leadName}
+                            📩 Latest Reply
                           </span>
-                          <span className="text-[11px] font-mono text-emerald-300/90 shrink-0">
-                            {latestLeadMsg.timestamp || currentThread.lastMessageDate || 'Recent'}
+                          <span className="text-xs text-emerald-50 font-medium truncate">
+                            {mainReply}
                           </span>
                         </div>
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1 shrink-0">
                           <button
                             type="button"
                             onClick={() => handleTranslateMessage(spotlightKey, mainReply)}
@@ -1704,8 +1721,8 @@ export const SmartInbox: React.FC = () => {
                               {translatingMsgId === spotlightKey
                                 ? 'অনুবাদ হচ্ছে...'
                                 : translatedMessagesMap[spotlightKey]
-                                ? 'Hide বাংলা অনুবাদ'
-                                : '🇧🇩 বাংলায় বুঝুন (Translate)'}
+                                ? 'Hide বাংলা'
+                                : '🇧🇩 বাংলায় বুঝুন'}
                             </span>
                           </button>
                           <button
@@ -1717,17 +1734,13 @@ export const SmartInbox: React.FC = () => {
                             className="px-2 py-0.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-[10px] flex items-center gap-1 cursor-pointer transition"
                           >
                             <Reply className="w-2.5 h-2.5" />
-                            <span>Write Reply</span>
+                            <span>Reply</span>
                           </button>
                         </div>
                       </div>
 
-                      <div className="text-xs md:text-sm text-emerald-50 font-medium line-clamp-2 leading-snug">
-                        {mainReply}
-                      </div>
-
                       {translatedMessagesMap[spotlightKey] && (
-                        <div className="mt-1.5 p-2.5 rounded-xl bg-slate-950/90 border border-emerald-500/40 text-xs text-emerald-200 whitespace-pre-wrap leading-relaxed">
+                        <div className="p-2 rounded-lg bg-slate-950/90 border border-emerald-500/40 text-xs text-emerald-200 whitespace-pre-wrap leading-relaxed">
                           {translatedMessagesMap[spotlightKey]}
                         </div>
                       )}
@@ -1918,84 +1931,74 @@ export const SmartInbox: React.FC = () => {
                 })()}
               </div>
 
-              {/* Bottom Reply & AI Draft Box (Compact by default + Collapsible so reading area stays huge) */}
+              {/* Bottom Reply & AI Draft Box (AI Draft options inside Toggle + Compact Composer so reading area stays huge) */}
               {isComposerMinimized ? (
-                <div className="px-3 py-2 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2 shrink-0">
+                <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={() => {
                       setIsComposerMinimized(false);
                       setTimeout(() => replyTextareaRef.current?.focus(), 50);
                     }}
-                    className="flex-1 text-left px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 hover:text-white transition cursor-pointer flex items-center justify-between"
+                    className="flex-1 text-left px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 hover:text-white transition cursor-pointer flex items-center justify-between"
                   >
-                    <span>✍️ Click here to write a reply to {currentThread.leadName} ({currentThread.leadEmail})...</span>
-                    <span className="text-cyan-400 font-bold">Expand Reply Box ⬆️</span>
+                    <span className="truncate">✍️ Click to write a reply to {currentThread.leadName} ({currentThread.leadEmail})...</span>
+                    <span className="text-cyan-400 font-bold shrink-0 ml-2">Expand Reply ⬆️</span>
                   </button>
                 </div>
               ) : (
               <div className="px-3 py-2 bg-slate-950/95 border-t border-slate-800 space-y-1.5 shrink-0">
-                {/* Single-Row Sleek AI Copilot Bar */}
-                <div className="px-2.5 py-1.5 bg-gradient-to-r from-purple-950/30 via-slate-900/90 to-indigo-950/30 rounded-xl border border-purple-800/40 space-y-1.5">
-                  <div className="flex items-center justify-between gap-1.5 overflow-x-auto no-scrollbar">
-                    <div className="flex items-center gap-1 shrink-0">
-                      <Sparkles className="w-3 h-3 text-purple-400 animate-pulse" />
-                      <span className="text-[10px] font-black uppercase tracking-wider text-purple-300 mr-1">
-                        AI Draft:
-                      </span>
-                      {[
-                        { id: 'demo', label: '📅 Book 15m Demo' },
-                        { id: 'pricing', label: '💰 Share Pricing & ROI' },
-                        { id: 'objection', label: '🛡️ Handle Objection' },
-                        { id: 'agreement', label: '⚡ Agree & Schedule' },
-                        { id: 'friendly', label: '🤝 Friendly Video Intro' },
-                      ].map(btn => (
+                {/* Toggleable AI Draft Options Panel (Hidden by default until user clicks '✨ AI Draft' toggle) */}
+                {isAiCopilotExpanded && (
+                  <div className="p-2.5 bg-gradient-to-r from-purple-950/40 via-slate-900/95 to-indigo-950/40 rounded-xl border border-purple-700/50 space-y-2 animate-in fade-in">
+                    <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <Sparkles className="w-3 h-3 text-purple-400 animate-pulse shrink-0" />
+                        <span className="text-[10px] font-black uppercase tracking-wider text-purple-300 mr-1">
+                          AI Draft Presets:
+                        </span>
+                        {[
+                          { id: 'demo', label: '📅 Book 15m Demo' },
+                          { id: 'pricing', label: '💰 Share Pricing & ROI' },
+                          { id: 'objection', label: '🛡️ Handle Objection' },
+                          { id: 'agreement', label: '⚡ Agree & Schedule' },
+                          { id: 'friendly', label: '🤝 Friendly Video Intro' },
+                        ].map(btn => (
+                          <button
+                            key={btn.id}
+                            type="button"
+                            disabled={isGeneratingAiReply}
+                            onClick={() => handleAiDraft(btn.id as any)}
+                            className="px-2 py-0.5 rounded-lg bg-purple-950/70 hover:bg-purple-900 text-purple-200 border border-purple-700/60 text-[10px] font-bold whitespace-nowrap transition cursor-pointer disabled:opacity-50"
+                          >
+                            {btn.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
                         <button
-                          key={btn.id}
                           type="button"
-                          disabled={isGeneratingAiReply}
-                          onClick={() => handleAiDraft(btn.id as any)}
-                          className="px-2 py-0.5 rounded-lg bg-purple-950/60 hover:bg-purple-900 text-purple-200 border border-purple-700/60 text-[10px] font-bold whitespace-nowrap transition cursor-pointer disabled:opacity-50"
+                          disabled={isGeneratingAiReply || !replyText.trim()}
+                          onClick={handlePolishReply}
+                          className="px-2 py-0.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-40 whitespace-nowrap"
+                          title="Polish grammar, tone, and eliminate spam triggers"
                         >
-                          {btn.label}
+                          <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" />
+                          <span>✨ AI Polish & Proofread</span>
                         </button>
-                      ))}
+                        <button
+                          type="button"
+                          onClick={() => setIsAiCopilotExpanded(false)}
+                          className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
+                          title="Close AI Draft Panel"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        disabled={isGeneratingAiReply || !replyText.trim()}
-                        onClick={handlePolishReply}
-                        className="px-2 py-0.5 rounded-lg bg-emerald-950/50 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-40 whitespace-nowrap"
-                        title="Polish grammar, tone, and eliminate spam triggers"
-                      >
-                        <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" />
-                        <span>✨ AI Polish</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIsAiCopilotExpanded(prev => !prev)}
-                        className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[10px] font-bold flex items-center gap-0.5 cursor-pointer whitespace-nowrap"
-                        title={isAiCopilotExpanded ? 'Minimize Custom AI Prompt' : 'Open Custom AI Prompt'}
-                      >
-                        {isAiCopilotExpanded ? (
-                          <>
-                            <ChevronDown className="w-2.5 h-2.5" />
-                            <span>Compact</span>
-                          </>
-                        ) : (
-                          <>
-                            <ChevronUp className="w-2.5 h-2.5" />
-                            <span>Custom AI</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-
-                  {isAiCopilotExpanded && (
-                    <div className="flex items-center gap-1.5 pt-0.5">
+                    <div className="flex items-center gap-1.5">
                       <input
                         type="text"
                         value={customReplyPrompt}
@@ -2006,7 +2009,7 @@ export const SmartInbox: React.FC = () => {
                             handleAiDraft('custom');
                           }
                         }}
-                        placeholder="Custom prompt (e.g. Confirm 2pm Thursday, emphasize free trial, and ask for mobile number)..."
+                        placeholder="Custom AI instruction (e.g. Confirm 2pm Thursday, emphasize free trial, ask for phone)..."
                         className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-[11px] text-slate-100 placeholder-slate-500 focus:outline-none focus:border-purple-500"
                       />
                       <button
@@ -2023,8 +2026,8 @@ export const SmartInbox: React.FC = () => {
                         <span>{isGeneratingAiReply ? 'Drafting...' : '✨ Generate'}</span>
                       </button>
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
 
                 <form onSubmit={handleSendReply} className="space-y-1.5">
                   <textarea
@@ -2038,11 +2041,40 @@ export const SmartInbox: React.FC = () => {
                       }
                     }}
                     placeholder={`Reply to ${currentThread.leadName} (${currentThread.leadEmail})...`}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs md:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner resize-y"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs md:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner resize-y"
                   />
 
                   <div className="flex flex-wrap items-center justify-between gap-1.5">
                     <div className="flex items-center gap-1.5 flex-wrap">
+                      {/* 1-Click Toggle Button for AI Draft Options */}
+                      <button
+                        type="button"
+                        onClick={() => setIsAiCopilotExpanded(prev => !prev)}
+                        className={`px-2.5 py-1 rounded-lg border text-[10px] font-extrabold flex items-center gap-1 cursor-pointer transition ${
+                          isAiCopilotExpanded
+                            ? 'bg-purple-600 text-white border-purple-400 shadow-sm shadow-purple-500/30'
+                            : 'bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 border-purple-700/60'
+                        }`}
+                        title="Toggle AI Draft Presets, AI Polish & Custom AI Reply Generator"
+                      >
+                        <Sparkles className="w-3 h-3 text-purple-300" />
+                        <span>✨ AI Draft {isAiCopilotExpanded ? '▾' : '▸'}</span>
+                      </button>
+
+                      {/* Quick AI Polish button right in bar when text is typed */}
+                      {replyText.trim() && !isAiCopilotExpanded && (
+                        <button
+                          type="button"
+                          disabled={isGeneratingAiReply}
+                          onClick={handlePolishReply}
+                          className="px-2 py-1 rounded-lg bg-emerald-950/50 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-40"
+                          title="Polish grammar, tone, and eliminate spam triggers"
+                        >
+                          <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" />
+                          <span>✨ Polish</span>
+                        </button>
+                      )}
+
                       {/* Instant Template Selector */}
                       <div className="flex items-center gap-1 bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-0.5">
                         <FileText className="w-3 h-3 text-cyan-400" />
@@ -2054,10 +2086,10 @@ export const SmartInbox: React.FC = () => {
                             }
                           }}
                           defaultValue=""
-                          className="bg-transparent text-slate-200 text-[10px] font-bold cursor-pointer focus:outline-none max-w-[170px] truncate"
+                          className="bg-transparent text-slate-200 text-[10px] font-bold cursor-pointer focus:outline-none max-w-[150px] truncate"
                         >
                           <option value="" disabled className="bg-slate-900 text-slate-400">
-                            ⚡ Instant Template ({activeEmailTemplates.length})...
+                            ⚡ Template ({activeEmailTemplates.length})...
                           </option>
                           {activeEmailTemplates.map(t => (
                             <option key={t.id} value={t.id} className="bg-slate-900 text-slate-100">
@@ -2074,7 +2106,7 @@ export const SmartInbox: React.FC = () => {
                           <select
                             value={replySmtpId}
                             onChange={(e) => setReplySmtpId(e.target.value)}
-                            className="bg-transparent text-slate-200 text-[10px] font-bold cursor-pointer focus:outline-none max-w-[150px] truncate"
+                            className="bg-transparent text-slate-200 text-[10px] font-bold cursor-pointer focus:outline-none max-w-[140px] truncate"
                           >
                             {activeSmtpAccounts.map(acc => (
                               <option key={acc.id} value={acc.id} className="bg-slate-900 text-slate-100">
@@ -2092,7 +2124,7 @@ export const SmartInbox: React.FC = () => {
                         className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-[10px] font-bold cursor-pointer transition"
                         title="Insert a proposed meeting slot"
                       >
-                        📅 +Time Slot
+                        📅 +Slot
                       </button>
 
                       <button
@@ -2101,7 +2133,7 @@ export const SmartInbox: React.FC = () => {
                         className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-[10px] font-bold cursor-pointer transition"
                         title="Minimize reply box for full screen reading"
                       >
-                        ⬇️ Minimize
+                        ⬇️ Hide
                       </button>
                     </div>
 
