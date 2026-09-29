@@ -5799,8 +5799,8 @@ async function startServer() {
     }
   };
 
-  // Serve ultra-fast prebuilt/index.html with dynamic mtime cache-busting on root '/' if prebuilt/app.js exists
-  app.get('/', (req, res, next) => {
+  // Serve ultra-fast prebuilt/index.html with dynamic mtime cache-busting on '/' and '/index.html' if prebuilt/app.js exists
+  app.get(['/', '/index.html'], (_req, res, next) => {
     if (fs.existsSync(prebuiltAppJsPath) && fs.existsSync(path.join(prebuiltCandidate, 'index.html'))) {
       return sendFreshIndexHtml(res);
     }

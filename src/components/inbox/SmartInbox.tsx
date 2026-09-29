@@ -944,34 +944,55 @@ export const SmartInbox: React.FC = () => {
 
   return (
     <div className="p-1.5 md:px-3 md:py-2 max-w-[1460px] mx-auto h-[calc(100vh-4rem)] flex flex-col gap-2 animate-in fade-in">
-      {/* ALWAYS-VISIBLE TOP GOOGLE DRIVE ATTACHMENT & INBOX BAR */}
-      <div className="px-3 py-2 rounded-2xl bg-gradient-to-r from-emerald-950/70 via-slate-900/95 to-cyan-950/60 border border-emerald-500/40 flex flex-wrap items-center justify-between gap-2 shrink-0 shadow-lg">
-        <div className="flex items-center gap-2 min-w-0 flex-wrap">
-          <span className="px-2.5 py-1 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-black text-[11px] flex items-center gap-1.5">
+      {/* ALWAYS-VISIBLE TOP GOOGLE DRIVE ATTACHMENT & INBOX BAR WITH DIRECT INLINE INPUT */}
+      <div className="px-3 py-2 rounded-2xl bg-gradient-to-r from-emerald-950/80 via-slate-900/95 to-cyan-950/70 border border-emerald-500/50 flex flex-col lg:flex-row lg:items-center justify-between gap-2 shrink-0 shadow-lg">
+        <div className="flex items-center gap-2 min-w-0 flex-wrap flex-1">
+          <span className="px-2.5 py-1 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-black text-[11px] flex items-center gap-1.5 shrink-0">
             <FolderOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            <span>☁️ Google Drive Attachment Storage (0 KB Hosting)</span>
+            <span>☁️ Google Drive Link (0 KB Hosting):</span>
           </span>
-          {driveStorageSettings.folderUrl ? (
-            <div className="flex items-center gap-1.5 text-[11px] text-emerald-200 font-bold">
-              <span className="px-2 py-0.5 rounded-full bg-emerald-400 text-slate-950 font-black text-[9px] uppercase">
-                ✓ Folder Linked
-              </span>
+
+          <div className="flex items-center gap-1.5 flex-1 min-w-[220px] max-w-xl">
+            <input
+              type="url"
+              value={driveFolderUrlInput}
+              onChange={(e) => setDriveFolderUrlInput(e.target.value)}
+              placeholder="Paste Google Drive Folder Link (https://drive.google.com/drive/folders/...)"
+              className="flex-1 bg-slate-950/95 border border-emerald-500/40 focus:border-emerald-400 rounded-xl px-2.5 py-1 text-[11px] text-slate-100 placeholder-slate-400 font-mono focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                updateDriveStorageSettings({
+                  folderUrl: driveFolderUrlInput.trim(),
+                  folderName: driveFolderNameInput.trim() || 'My Google Drive Email Attachments',
+                  appsScriptWebAppUrl: driveScriptUrlInput.trim(),
+                  autoIncludeDriveLinkInEmail: autoIncludeDriveLink
+                });
+                setDriveSavedFeedback(true);
+                setTimeout(() => setDriveSavedFeedback(false), 2500);
+              }}
+              className="px-2.5 py-1 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] shrink-0 cursor-pointer transition whitespace-nowrap shadow"
+            >
+              {driveSavedFeedback
+                ? '✓ Saved!'
+                : driveStorageSettings.folderUrl
+                ? '💾 Change / Save Link'
+                : '💾 Save Drive Link'}
+            </button>
+            {driveStorageSettings.folderUrl && (
               <a
                 href={driveStorageSettings.folderUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-cyan-300 hover:underline flex items-center gap-1 truncate max-w-[200px]"
+                className="px-2 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-cyan-500/40 text-cyan-300 font-bold text-[11px] flex items-center gap-1 shrink-0 transition whitespace-nowrap"
                 title="Open Connected Google Drive Folder"
               >
-                <span className="truncate">{driveStorageSettings.folderName || 'Open Drive Folder'}</span>
+                <span>Open Drive</span>
                 <ExternalLink className="w-3 h-3 shrink-0" />
               </a>
-            </div>
-          ) : (
-            <span className="text-[11px] text-amber-200 font-semibold">
-              যেকোনো ফাইল Google Drive-এ স্টোর করে ইমেইলে অ্যাটাচ করতে আপনার Drive ফোল্ডার লিংক যুক্ত করুন
-            </span>
-          )}
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-1.5 flex-wrap shrink-0">
@@ -990,21 +1011,17 @@ export const SmartInbox: React.FC = () => {
             title="Attach any file (PDF, Image, ZIP, Doc, Video) — Stored in Google Drive"
           >
             <Paperclip className="w-3.5 h-3.5" />
-            <span>📎 Attach Any File</span>
+            <span>📎 Attach Any File (Google Drive)</span>
           </button>
 
           <button
             type="button"
             onClick={() => setShowDriveSettingsModal(true)}
-            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-emerald-500/50 text-emerald-200 font-extrabold text-[11px] flex items-center gap-1.5 cursor-pointer transition"
-            title="Share or Change Your Google Drive Folder Link"
+            className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-emerald-500/50 text-emerald-200 font-extrabold text-[11px] flex items-center gap-1 cursor-pointer transition"
+            title="Full Google Drive Storage Settings"
           >
             <Link2 className="w-3.5 h-3.5 text-emerald-400" />
-            <span>
-              {driveStorageSettings.folderUrl
-                ? '⚙️ Change Google Drive Link'
-                : '🔗 Set Google Drive Folder Link'}
-            </span>
+            <span>⚙️ Drive Settings</span>
           </button>
 
           <button
@@ -2877,7 +2894,7 @@ export const SmartInbox: React.FC = () => {
               </div>
 
               {/* Gmail-Style Any-File Attachment Section in Compose Modal (Google Drive Storage) */}
-              <div className="p-3 rounded-2xl bg-slate-950/90 border border-emerald-500/30 space-y-2">
+              <div className="p-3 rounded-2xl bg-slate-950/90 border border-emerald-500/40 space-y-2.5">
                 <input
                   ref={composeFileInputRef}
                   type="file"
@@ -2890,28 +2907,42 @@ export const SmartInbox: React.FC = () => {
                   className="hidden"
                 />
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <button
                       type="button"
                       onClick={() => composeFileInputRef.current?.click()}
                       disabled={isUploadingAttachment}
-                      className="px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-200 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition"
+                      className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1.5 cursor-pointer transition shadow"
                     >
-                      <Paperclip className="w-3.5 h-3.5 text-emerald-400" />
+                      <Paperclip className="w-3.5 h-3.5" />
                       <span>{isUploadingAttachment ? 'Attaching...' : '📎 Attach Any File (Google Drive)'}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowDriveSettingsModal(true)}
-                      className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
-                    >
-                      <FolderOpen className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>{driveStorageSettings.folderUrl ? '⚙️ Change Drive Folder Link' : '🔗 Set Google Drive Folder Link'}</span>
                     </button>
                   </div>
                   <span className="text-[10px] text-emerald-400 font-mono">
                     ☁️ 0 KB Hosting Used • Stored in Google Drive
                   </span>
+                </div>
+
+                {/* Direct Inline Google Drive Folder Link Input inside Compose Modal */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5 pt-1">
+                  <input
+                    type="url"
+                    value={driveFolderUrlInput}
+                    onChange={(e) => setDriveFolderUrlInput(e.target.value)}
+                    placeholder="Paste Google Drive Folder Link (https://drive.google.com/drive/folders/...)"
+                    className="flex-1 bg-slate-900 border border-slate-800 focus:border-emerald-400 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateDriveStorageSettings({ folderUrl: driveFolderUrlInput.trim() });
+                      setDriveSavedFeedback(true);
+                      setTimeout(() => setDriveSavedFeedback(false), 2500);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/40 border border-emerald-500/40 text-emerald-200 font-black text-[11px] cursor-pointer whitespace-nowrap"
+                  >
+                    {driveStorageSettings.folderUrl ? '💾 Change / Save Drive Link' : '💾 Save Drive Link'}
+                  </button>
                 </div>
 
                 {composeAttachments.length > 0 && (

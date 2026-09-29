@@ -32,14 +32,15 @@
     <script>
       window.__vsLoadPrebuiltFallback = function () {
         if (document.getElementById('vs-prebuilt-bundle')) return;
+        var v = Date.now();
         var link = document.createElement('link');
         link.rel = 'stylesheet';
-        link.href = '/prebuilt/app.css?v=20260928-v9';
+        link.href = '/prebuilt/app.css?v=' + v;
         document.head.appendChild(link);
         var script = document.createElement('script');
         script.id = 'vs-prebuilt-bundle';
         script.type = 'module';
-        script.src = '/prebuilt/app.js?v=20260928-v9';
+        script.src = '/prebuilt/app.js?v=' + v;
         document.body.appendChild(script);
       };
     </script>

@@ -755,39 +755,42 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
               </span>
             </div>
 
-            {showDriveLinkEditor && (
-              <div className="p-2.5 bg-slate-950/90 border border-emerald-500/30 rounded-xl flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                <input
-                  type="url"
-                  value={driveUrlDraft}
-                  onChange={(e) => setDriveUrlDraft(e.target.value)}
-                  placeholder="Paste Google Drive Folder Link (https://drive.google.com/drive/folders/...)"
-                  className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-emerald-400"
-                />
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      updateDriveStorageSettings({ folderUrl: driveUrlDraft.trim() });
-                      setShowDriveLinkEditor(false);
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] cursor-pointer"
-                  >
-                    Save Link
-                  </button>
-                  {driveStorageSettings.folderUrl && (
-                    <a
-                      href={driveStorageSettings.folderUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-emerald-300 hover:bg-slate-700 text-[11px] font-bold flex items-center gap-1"
-                    >
-                      <ExternalLink className="w-3 h-3" /> Open
-                    </a>
-                  )}
-                </div>
+            {/* Always-Visible Google Drive Folder Link Input (Share or Change Anytime) */}
+            <div className="p-2.5 bg-slate-950/90 border border-emerald-500/40 rounded-xl flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <div className="flex items-center gap-1.5 text-[11px] font-extrabold text-emerald-300 shrink-0">
+                <HardDrive className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Google Drive Link:</span>
               </div>
-            )}
+              <input
+                type="url"
+                value={driveUrlDraft}
+                onChange={(e) => setDriveUrlDraft(e.target.value)}
+                placeholder="Paste Google Drive Folder Link (https://drive.google.com/drive/folders/...)"
+                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-emerald-400"
+              />
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateDriveStorageSettings({ folderUrl: driveUrlDraft.trim() });
+                    setShowDriveLinkEditor(false);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] cursor-pointer whitespace-nowrap"
+                >
+                  {driveStorageSettings.folderUrl ? 'Change / Save Link' : 'Save Drive Link'}
+                </button>
+                {driveStorageSettings.folderUrl && (
+                  <a
+                    href={driveStorageSettings.folderUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-emerald-300 hover:bg-slate-700 text-[11px] font-bold flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <ExternalLink className="w-3 h-3" /> Open
+                  </a>
+                )}
+              </div>
+            </div>
 
             {attachments.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
@@ -920,14 +923,26 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
           </div>
 
           {/* Permanently Docked Footer Actions */}
-          <div className="p-3.5 sm:p-4 border-t border-slate-800 bg-slate-950/95 flex items-center justify-between shrink-0">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-slate-400 hover:text-slate-200 text-xs font-semibold cursor-pointer"
-            >
-              Cancel
-            </button>
+          <div className="p-3.5 sm:p-4 border-t border-slate-800 bg-slate-950/95 flex flex-wrap items-center justify-between gap-2 shrink-0">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-3.5 py-2 text-slate-400 hover:text-slate-200 text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploadingToDrive}
+                className="px-3.5 py-2 rounded-xl bg-emerald-600/25 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-200 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer transition"
+                title="Attach any file (stored in Google Drive — 0 KB on hosting)"
+              >
+                <Paperclip className="w-3.5 h-3.5 text-emerald-400" />
+                <span>📎 Attach File {attachments.length > 0 ? `(${attachments.length})` : '(Google Drive)'}</span>
+              </button>
+            </div>
 
             <button
               type="submit"
