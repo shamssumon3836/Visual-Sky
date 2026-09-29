@@ -135,12 +135,23 @@ function buildWithEsbuild() {
   }
 }
 
-// Heal git locks/dirty build files and compile runtime server on startup
+// Heal git locks/dirty build files and start prebuilt server immediately (only run esbuild if prebuilt is missing)
 try {
   healCpanelGitRepo();
-  console.log('[Bootstrap] Preparing runtime server...');
-  buildWithEsbuild();
-  console.log('[Bootstrap] Runtime compilation complete.');
+  const prebuiltAppJs = path.join(prebuiltDir, 'app.js');
+  // Remove stale runtime overrides so prebuilt/app.js and prebuilt/server.cjs take effect immediately
+  try {
+    if (fs.existsSync(runtimeAppJs)) fs.unlinkSync(runtimeAppJs);
+  } catch (_e) {}
+  try {
+    if (fs.existsSync(runtimeServer)) fs.unlinkSync(runtimeServer);
+  } catch (_e) {}
+
+  if (!fs.existsSync(prebuiltServer) || !fs.existsSync(prebuiltAppJs)) {
+    console.log('[Bootstrap] Prebuilt bundle missing, compiling runtime server...');
+    buildWithEsbuild();
+    console.log('[Bootstrap] Runtime compilation complete.');
+  }
 } catch (buildErr) {
   console.error('[Bootstrap] Build error:', buildErr);
   process.env.BOOTSTRAP_BUILD_ERROR = String(

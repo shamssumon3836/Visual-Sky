@@ -1536,24 +1536,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  // Sync to LocalStorage (secondary client cache only, never primary authority)
-  useEffect(() => { try { localStorage.setItem('visualsky_tags', JSON.stringify(leadTags)); } catch {} }, [leadTags]);
-  useEffect(() => { try { localStorage.setItem('visualsky_leads', JSON.stringify(leads)); } catch {} }, [leads]);
-  useEffect(() => { try { localStorage.setItem('visualsky_cols', JSON.stringify(columnSettings)); } catch {} }, [columnSettings]);
-  useEffect(() => { try { localStorage.setItem('visualsky_threads', JSON.stringify(threads)); } catch {} }, [threads]);
-  useEffect(() => { try { localStorage.setItem('visualsky_campaigns', JSON.stringify(campaigns)); } catch {} }, [campaigns]);
-  useEffect(() => { try { localStorage.setItem('visualsky_tmpl_categories', JSON.stringify(templateCategories)); } catch {} }, [templateCategories]);
-  useEffect(() => { try { localStorage.setItem('visualsky_templates', JSON.stringify(emailTemplates)); } catch {} }, [emailTemplates]);
-  useEffect(() => { try { localStorage.setItem('visualsky_smtp', JSON.stringify(smtpAccounts)); } catch {} }, [smtpAccounts]);
-  useEffect(() => { try { localStorage.setItem('visualsky_sent_emails', JSON.stringify(sentEmails)); } catch {} }, [sentEmails]);
-  useEffect(() => { try { localStorage.setItem('visualsky_notifs', JSON.stringify(notifications)); } catch {} }, [notifications]);
+  // Sync to LocalStorage (skip initial mount write since state was just hydrated from localStorage)
+  const hasMountedStorageRef = useRef<boolean>(false);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_tags', JSON.stringify(leadTags)); } catch {} } }, [leadTags]);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_leads', JSON.stringify(leads)); } catch {} } }, [leads]);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_cols', JSON.stringify(columnSettings)); } catch {} } }, [columnSettings]);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_threads', JSON.stringify(threads)); } catch {} } }, [threads]);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_campaigns', JSON.stringify(campaigns)); } catch {} } }, [campaigns]);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_tmpl_categories', JSON.stringify(templateCategories)); } catch {} } }, [templateCategories]);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_templates', JSON.stringify(emailTemplates)); } catch {} } }, [emailTemplates]);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_smtp', JSON.stringify(smtpAccounts)); } catch {} } }, [smtpAccounts]);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_sent_emails', JSON.stringify(sentEmails)); } catch {} } }, [sentEmails]);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_notifs', JSON.stringify(notifications)); } catch {} } }, [notifications]);
   useEffect(() => {
-    if (currentUser?.email) {
+    if (hasMountedStorageRef.current && currentUser?.email) {
       try { localStorage.setItem('visualsky_current_user', JSON.stringify(currentUser)); } catch {}
     }
   }, [currentUser]);
   useEffect(() => { 
-    try { localStorage.setItem('visualsky_users', JSON.stringify(allUsers)); } catch {}
+    if (hasMountedStorageRef.current) {
+      try { localStorage.setItem('visualsky_users', JSON.stringify(allUsers)); } catch {}
+    }
     // Only sync to server after initial server registry has been loaded
     if (registryLoadedRef.current && allUsers.length > 0) {
       fetch('/api/users/sync', {
@@ -1563,8 +1566,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }).catch(() => {});
     }
   }, [allUsers]);
-  useEffect(() => { try { localStorage.setItem('visualsky_mined_leads', JSON.stringify(minedLeads)); } catch {} }, [minedLeads]);
-  useEffect(() => { try { localStorage.setItem('visualsky_notification_settings', JSON.stringify(notificationSettings)); } catch {} }, [notificationSettings]);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_mined_leads', JSON.stringify(minedLeads)); } catch {} } }, [minedLeads]);
+  useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_notification_settings', JSON.stringify(notificationSettings)); } catch {} } }, [notificationSettings]);
+  useEffect(() => {
+    hasMountedStorageRef.current = true;
+  }, []);
 
   // Silent debounced database workspace persistence (never flips UI state or reloads page)
   useEffect(() => {

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 const distDir = path.join(__dirname, '..', 'dist');
 const distAssets = path.join(distDir, 'assets');
@@ -9,7 +10,7 @@ const rootAssetsDir = path.join(__dirname, '..', 'assets');
 
 fs.mkdirSync(prebuiltDir, { recursive: true });
 
-// Clean up stale hashed .js and .css files in prebuilt/, prebuilt/assets/, and assets/ so random-hash files never cause git conflicts or serve old chunks
+// Clean up stale hashed .js and .css files in prebuilt/, prebuilt/assets/, and assets/
 for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
@@ -19,7 +20,9 @@ for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
           const isPrebuiltCore =
             dir === prebuiltDir &&
             (f === 'app.js' ||
+              f === 'app.js.gz' ||
               f === 'app.css' ||
+              f === 'app.css.gz' ||
               f === 'tailwind-bundle.css' ||
               f === 'server.cjs' ||
               f === 'index.html' ||
@@ -27,7 +30,7 @@ for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
               f === 'logo.svg' ||
               f === 'manifest.json' ||
               f === 'sw.js');
-          if (!isPrebuiltCore && (f.endsWith('.js') || f.endsWith('.css'))) {
+          if (!isPrebuiltCore && (f.endsWith('.js') || f.endsWith('.css') || f.endsWith('.gz'))) {
             fs.unlinkSync(fullPath);
           }
         }
@@ -68,7 +71,7 @@ try {
   console.warn('[sync-prebuilt] server esbuild warning:', err && err.message);
 }
 
-// 3. Always compile self-contained single-file bundle from src/main.tsx -> prebuilt/app.js (even if dist/ does not exist)
+// 3. Always compile fast, self-contained single-file bundle from src/main.tsx -> prebuilt/app.js
 try {
   const esbuild = require('esbuild');
   const mainEntry = path.join(__dirname, '..', 'src', 'main.tsx');
@@ -79,6 +82,7 @@ try {
       entryPoints: [mainEntry],
       bundle: true,
       minify: true,
+      legalComments: 'none',
       format: 'esm',
       platform: 'browser',
       target: ['es2020'],
@@ -105,25 +109,29 @@ try {
         })
       }
     });
-    if (fs.existsSync(prebuiltAppCss) && fs.existsSync(prebuiltAppJs)) {
-      const extraPopupCss =
-        '\n.vs-auth-popup-window{width:100%!important;max-width:420px!important;max-height:88vh!important;overflow-y:auto!important;margin:auto!important;border-radius:16px!important;}.vs-legal-popup-window{width:100%!important;max-width:460px!important;max-height:82vh!important;margin:auto!important;border-radius:16px!important;}\n';
-      const cssContent = fs.readFileSync(prebuiltAppCss, 'utf8') + extraPopupCss;
-      const jsContent = fs.readFileSync(prebuiltAppJs, 'utf8');
-      if (!jsContent.includes('vs-tailwind-inline')) {
-        const styleInjector = `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-tailwind-inline')){var s=document.createElement('style');s.id='vs-tailwind-inline';s.textContent=${JSON.stringify(
-          cssContent
-        )};document.head.appendChild(s);}})();\n`;
-        fs.writeFileSync(prebuiltAppJs, styleInjector + jsContent, 'utf8');
-      }
+
+    // Pre-compress app.js and app.css with max Gzip level 9 for instant <1ms RAM serving on hard reloads
+    if (fs.existsSync(prebuiltAppJs)) {
+      const jsBuf = fs.readFileSync(prebuiltAppJs);
+      const gzJs = zlib.gzipSync(jsBuf, { level: 9 });
+      fs.writeFileSync(prebuiltAppJs + '.gz', gzJs);
+      console.log(
+        `[sync-prebuilt] Built prebuilt/app.js (${Math.round(jsBuf.byteLength / 1024)}KB -> ${Math.round(
+          gzJs.byteLength / 1024
+        )}KB gzipped)`
+      );
     }
-    console.log('[sync-prebuilt] Built self-contained prebuilt/app.js');
+    if (fs.existsSync(prebuiltAppCss)) {
+      const cssBuf = fs.readFileSync(prebuiltAppCss);
+      const gzCss = zlib.gzipSync(cssBuf, { level: 9 });
+      fs.writeFileSync(prebuiltAppCss + '.gz', gzCss);
+    }
   }
 } catch (err) {
   console.warn('[sync-prebuilt] app esbuild warning:', err && err.message);
 }
 
-// 4. Write clean prebuilt/index.html that references fixed /prebuilt/app.css and /prebuilt/app.js
+// 4. Write clean prebuilt/index.html with parallel modulepreload for instant startup
 const rootIndexHtml = path.join(__dirname, '..', 'index.html');
 const prebuiltIndexHtml = path.join(prebuiltDir, 'index.html');
 if (fs.existsSync(rootIndexHtml)) {
@@ -131,7 +139,7 @@ if (fs.existsSync(rootIndexHtml)) {
   const prodHtml = rawHtml
     .replace(
       '</head>',
-      '    <link rel="stylesheet" href="/prebuilt/app.css" />\n  </head>'
+      '    <link rel="stylesheet" href="/prebuilt/app.css" />\n    <link rel="modulepreload" href="/prebuilt/app.js" />\n  </head>'
     )
     .replace(
       /<script type="module" src="\/src\/main\.tsx"[^>]*><\/script>/,

@@ -5724,6 +5724,7 @@ app.use('/api', (err: any, req: express.Request, res: express.Response, next: ex
 async function startServer() {
   app.set('etag', false);
   const prebuiltCandidate = path.join(process.cwd(), 'prebuilt');
+  const publicCandidate = path.join(process.cwd(), 'public');
   const prebuiltAppJsPath = path.join(prebuiltCandidate, 'app.js');
   const prebuiltAppCssPath = path.join(prebuiltCandidate, 'app.css');
   const runtimeAppJsCandidate = path.join(DATA_DIR, 'runtime-app.js');
@@ -5760,6 +5761,40 @@ async function startServer() {
     return prebuiltAppJsPath;
   };
 
+  // Ultra-fast in-memory RAM cache for raw & gzipped bundles so Hard Reloads finish in <50ms
+  const memoryAssetCache = new Map<
+    string,
+    { mtimeMs: number; etag: string; raw: Buffer; gzip: Buffer }
+  >();
+
+  const getCachedAsset = (filePath: string) => {
+    if (!fs.existsSync(filePath)) return null;
+    const stat = fs.statSync(filePath);
+    const mtimeMs = stat.mtimeMs;
+    const cached = memoryAssetCache.get(filePath);
+    if (cached && cached.mtimeMs === mtimeMs) {
+      return cached;
+    }
+    const raw = fs.readFileSync(filePath);
+    const gzPath = filePath + '.gz';
+    let gzip: Buffer;
+    if (fs.existsSync(gzPath) && fs.statSync(gzPath).mtimeMs >= mtimeMs) {
+      gzip = fs.readFileSync(gzPath);
+    } else {
+      gzip = zlib.gzipSync(raw, { level: 6 });
+    }
+    const etag = `"v-${Math.floor(mtimeMs).toString(36)}-${raw.byteLength.toString(36)}"`;
+    const entry = { mtimeMs, etag, raw, gzip };
+    memoryAssetCache.set(filePath, entry);
+    return entry;
+  };
+
+  // Pre-warm RAM cache on startup so the very first Hard Reload has zero disk/compression latency
+  try {
+    getCachedAsset(getActiveAppJsPath());
+    getCachedAsset(prebuiltAppCssPath);
+  } catch {}
+
   const getDynamicAssetVersion = () => {
     try {
       const targetJs = getActiveAppJsPath();
@@ -5770,24 +5805,59 @@ async function startServer() {
     return Date.now().toString(36);
   };
 
-  // Always serve whichever bundle (prebuilt/app.js from Git/Build or runtime-app.js) is newest on disk
-  app.get('/prebuilt/app.js', (_req, res) => {
-    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    return res.sendFile(getActiveAppJsPath());
+  const sendMemoryCachedAsset = (
+    req: express.Request,
+    res: express.Response,
+    filePath: string,
+    contentType: string
+  ) => {
+    try {
+      const asset = getCachedAsset(filePath);
+      if (!asset) {
+        return res.status(404).end('Not found');
+      }
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('ETag', asset.etag);
+      res.setHeader('Vary', 'Accept-Encoding');
+      if (req.query && req.query.v) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+      if (req.headers['if-none-match'] === asset.etag) {
+        return res.status(304).end();
+      }
+      const acceptEncoding = String(req.headers['accept-encoding'] || '');
+      if (acceptEncoding.includes('gzip')) {
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Content-Length', String(asset.gzip.byteLength));
+        return res.status(200).end(asset.gzip);
+      }
+      res.setHeader('Content-Length', String(asset.raw.byteLength));
+      return res.status(200).end(asset.raw);
+    } catch {
+      return res.sendFile(filePath);
+    }
+  };
+
+  // Serve pre-compressed RAM-cached JS & CSS bundles in <1ms
+  app.get('/prebuilt/app.js', (req, res) => {
+    return sendMemoryCachedAsset(
+      req,
+      res,
+      getActiveAppJsPath(),
+      'application/javascript; charset=utf-8'
+    );
   });
 
-  app.get('/prebuilt/app.css', (_req, res) => {
-    res.setHeader('Content-Type', 'text/css; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    return res.sendFile(prebuiltAppCssPath);
+  app.get('/prebuilt/app.css', (req, res) => {
+    return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, 'text/css; charset=utf-8');
   });
 
-  app.use('/prebuilt', express.static(prebuiltCandidate, { etag: false, lastModified: false }));
+  app.use('/prebuilt', express.static(prebuiltCandidate, { etag: true, maxAge: '1h' }));
+  if (fs.existsSync(publicCandidate)) {
+    app.use(express.static(publicCandidate, { index: false, etag: true, maxAge: '1h' }));
+  }
 
   const sendFreshIndexHtml = (res: express.Response) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -5819,38 +5889,17 @@ async function startServer() {
     return next();
   });
 
-  if (!isProdServer) {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: false
-      },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distCandidate = path.join(process.cwd(), 'dist');
-    const distPath = fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
-      ? prebuiltCandidate
-      : fs.existsSync(path.join(distCandidate, 'index.html'))
-      ? distCandidate
-      : prebuiltCandidate;
-    app.use(
-      express.static(distPath, {
-        index: false,
-        etag: false,
-        setHeaders: (res, filePath) => {
-          if (filePath.endsWith('.html') || filePath.endsWith('.js') || filePath.endsWith('.css')) {
-            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-          }
-        }
-      })
-    );
-    app.get('*', (_req, res) => {
-      return sendFreshIndexHtml(res);
-    });
-  }
+  app.use(
+    express.static(prebuiltCandidate, {
+      index: false,
+      etag: true,
+      maxAge: '1h'
+    })
+  );
+
+  app.get('*', (_req, res) => {
+    return sendFreshIndexHtml(res);
+  });
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`VisualSky AI Cold Outreach Platform running at http://0.0.0.0:${PORT}`);
