@@ -187,12 +187,15 @@ export interface AppNotification {
   id: string;
   title: string;
   message: string;
-  type: 'reply' | 'open' | 'lead' | 'campaign' | 'smtp' | 'system';
+  type: 'reply' | 'open' | 'bounce' | 'lead' | 'campaign' | 'smtp' | 'system';
   timestamp: string;
   isRead: boolean;
   linkTab?: string;
   leadEmail?: string;
   threadId?: string;
+  senderName?: string;
+  senderCompany?: string;
+  subject?: string;
 }
 
 export interface CustomerPermissions {

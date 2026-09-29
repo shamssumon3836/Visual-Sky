@@ -27,19 +27,24 @@ class AudioNotificationEngine {
 
       switch (preset) {
         case 'chime': {
-          // Dual harmonic chime
-          [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+          // Authentic Messenger / Gmail crisp dual-pop harmonic chime
+          const notes = [
+            { freq: 587.33, delay: 0, dur: 0.14 },     // D5 crisp pop
+            { freq: 880.00, delay: 0.09, dur: 0.38 },  // A5 bright chime
+            { freq: 1174.66, delay: 0.14, dur: 0.45 }  // D6 shimmer overtone
+          ];
+          notes.forEach(({ freq, delay, dur }) => {
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
             osc.type = 'sine';
-            osc.frequency.setValueAtTime(freq, now + i * 0.08);
-            gain.gain.setValueAtTime(0, now + i * 0.08);
-            gain.gain.linearRampToValueAtTime(0.3, now + i * 0.08 + 0.02);
-            gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.08 + 0.5);
+            osc.frequency.setValueAtTime(freq, now + delay);
+            gain.gain.setValueAtTime(0, now + delay);
+            gain.gain.linearRampToValueAtTime(0.38, now + delay + 0.015);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + delay + dur);
             osc.connect(gain);
             gain.connect(masterGain);
-            osc.start(now + i * 0.08);
-            osc.stop(now + i * 0.08 + 0.6);
+            osc.start(now + delay);
+            osc.stop(now + delay + dur + 0.05);
           });
           break;
         }

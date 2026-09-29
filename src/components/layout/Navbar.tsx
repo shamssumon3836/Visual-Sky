@@ -67,6 +67,9 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
     emailTemplates,
     sentEmails,
     threads,
+    setActiveThreadId,
+    markThreadRead,
+    requestDesktopNotificationPermission,
     isWorkspaceLoading,
     syncStatus,
     loadUserWorkspace,
@@ -79,7 +82,13 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
   const [showFollowUpMenu, setShowFollowUpMenu] = useState<boolean>(false);
   const [showSearchPopover, setShowSearchPopover] = useState<boolean>(false);
   const [showMobileSearch, setShowMobileSearch] = useState<boolean>(false);
-  const [notifFilter, setNotifFilter] = useState<'all' | 'reply' | 'open' | 'lead' | 'system'>('all');
+  const [notifFilter, setNotifFilter] = useState<'all' | 'reply' | 'open' | 'bounce'>('all');
+  const [browserPushGranted, setBrowserPushGranted] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission === 'granted';
+    }
+    return false;
+  });
 
   const notifRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
@@ -121,6 +130,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
   };
 
   const filteredNotifs = notifications.filter(n => {
+    if (n.type !== 'reply' && n.type !== 'open' && n.type !== 'bounce') return false;
     if (notifFilter === 'all') return true;
     return n.type === notifFilter;
   });
@@ -580,132 +590,216 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
             )}
           </button>
 
-          {/* Facebook-Style Dropdown Menu */}
+          {/* Facebook / Messenger Style Notification Dropdown Menu */}
           {showNotifs && (
-            <div className="fixed inset-x-3 top-16 sm:absolute sm:inset-x-auto sm:top-auto sm:right-0 sm:mt-2 sm:w-96 bg-[#0c121e]/98 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-top-2">
-              <div className="p-3.5 border-b border-slate-800/80 flex items-center justify-between">
+            <div className="fixed inset-x-3 top-16 sm:absolute sm:inset-x-auto sm:top-auto sm:right-0 sm:mt-2 sm:w-[410px] bg-[#111827]/98 backdrop-blur-2xl border border-slate-800 rounded-3xl shadow-2xl shadow-black/90 overflow-hidden z-50 animate-in fade-in slide-in-from-top-2">
+              <div className="p-4 border-b border-slate-800/80 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <span className="font-bold text-slate-100 text-sm">Notifications</span>
+                  <span className="font-black text-white text-base tracking-tight">Notifications</span>
                   {unreadNotificationCount > 0 && (
-                    <span className="px-2 py-0.5 text-[11px] font-bold bg-rose-500/20 text-rose-300 rounded-full">
+                    <span className="px-2 py-0.5 text-[11px] font-extrabold bg-[#0866FF] text-white rounded-full shadow-sm">
                       {unreadNotificationCount} new
                     </span>
                   )}
                 </div>
                 <div className="flex items-center gap-2 text-xs">
                   <button
+                    type="button"
+                    onClick={async () => {
+                      const ok = await requestDesktopNotificationPermission();
+                      setBrowserPushGranted(ok || (typeof Notification !== 'undefined' && Notification.permission === 'granted'));
+                    }}
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 transition cursor-pointer border ${
+                      browserPushGranted
+                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                        : 'bg-[#0866FF]/20 hover:bg-[#0866FF]/35 text-blue-300 border-blue-500/40'
+                    }`}
+                    title="Enable Gmail-style Phone & Desktop Screen Push Notifications"
+                  >
+                    <Bell className="w-3 h-3" />
+                    <span>{browserPushGranted ? 'Push Live' : 'Enable Push'}</span>
+                  </button>
+                  <button
                     onClick={() => setSoundEnabled(!soundEnabled)}
                     title={soundEnabled ? 'Disable notification sound' : 'Enable notification sound'}
-                    className="p-1 text-slate-400 hover:text-slate-200 transition cursor-pointer"
+                    className="p-1.5 rounded-full bg-slate-800/80 text-slate-300 hover:text-white transition cursor-pointer"
                   >
-                    {soundEnabled ? <Volume2 className="w-4 h-4 text-cyan-400" /> : <VolumeX className="w-4 h-4 text-slate-500" />}
+                    {soundEnabled ? <Volume2 className="w-3.5 h-3.5 text-cyan-400" /> : <VolumeX className="w-3.5 h-3.5 text-slate-500" />}
                   </button>
                   <button
                     onClick={markAllNotificationsRead}
-                    className="text-cyan-400 hover:text-cyan-300 font-medium transition cursor-pointer"
+                    className="text-blue-400 hover:text-blue-300 font-bold text-[11px] transition cursor-pointer"
                   >
-                    Mark all read
+                    Mark read
                   </button>
                 </div>
               </div>
 
-              {/* Filter Tabs */}
-              <div className="flex items-center px-3 pt-2 gap-1 border-b border-slate-800/60 overflow-x-auto">
-                {(['all', 'reply', 'open', 'lead', 'system'] as const).map((tab) => (
+              {/* Facebook-Style Pill Filter Tabs (Strictly 3 Real Email Events) */}
+              <div className="flex items-center px-3.5 py-2.5 gap-1.5 border-b border-slate-800/60 overflow-x-auto no-scrollbar">
+                {(
+                  [
+                    { id: 'all', label: 'All' },
+                    { id: 'reply', label: '📩 New Mails' },
+                    { id: 'open', label: '👁️ Opened' },
+                    { id: 'bounce', label: '🚫 Blocked' }
+                  ] as const
+                ).map((tab) => (
                   <button
-                    key={tab}
-                    onClick={() => setNotifFilter(tab)}
-                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg capitalize whitespace-nowrap transition cursor-pointer ${
-                      notifFilter === tab
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-400 hover:text-slate-200'
+                    key={tab.id}
+                    onClick={() => setNotifFilter(tab.id)}
+                    className={`px-3 py-1.5 text-xs font-extrabold rounded-full whitespace-nowrap transition cursor-pointer ${
+                      notifFilter === tab.id
+                        ? 'bg-[#0866FF] text-white shadow-md shadow-blue-600/30'
+                        : 'bg-slate-800/70 text-slate-300 hover:bg-slate-800 hover:text-white'
                     }`}
                   >
-                    {tab === 'all' ? 'All' : tab === 'reply' ? '🔥 Replies' : tab === 'open' ? '👀 Opens' : tab === 'lead' ? '👥 Leads' : '⚙️ System'}
+                    {tab.label}
                   </button>
                 ))}
               </div>
 
-              {/* Notification List */}
-              <div className="max-h-80 overflow-y-auto divide-y divide-slate-800/50">
+              {/* Facebook-Style Notification Feed */}
+              <div className="max-h-96 overflow-y-auto divide-y divide-slate-800/40">
                 {filteredNotifs.length === 0 ? (
-                  <div className="p-8 text-center text-slate-500 text-xs">
-                    No notifications in this category.
+                  <div className="p-10 text-center space-y-2">
+                    <div className="w-11 h-11 rounded-full bg-slate-800/80 flex items-center justify-center mx-auto text-slate-500">
+                      <Bell className="w-5 h-5" />
+                    </div>
+                    <div className="text-xs font-bold text-slate-300">No email notifications yet</div>
+                    <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
+                      You will only be notified here when someone sends/replies a mail, opens your mail, or blocks/bounces a mail.
+                    </p>
                   </div>
                 ) : (
-                  filteredNotifs.map((n) => (
-                    <div
-                      key={n.id}
-                      onClick={() => {
-                        markNotificationRead(n.id);
-                        if (n.linkTab) setActiveTab(n.linkTab);
-                        setShowNotifs(false);
-                      }}
-                      className={`p-3 hover:bg-slate-800/60 transition cursor-pointer flex items-start gap-3 group relative ${
-                        !n.isRead ? 'bg-slate-800/30' : ''
-                      }`}
-                    >
-                      <div className="shrink-0 mt-0.5">
-                        {n.type === 'reply' ? (
-                          <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
-                            <Flame className="w-4 h-4" />
+                  filteredNotifs.map((n) => {
+                    const isReply = n.type === 'reply';
+                    const isOpen = n.type === 'open';
+                    const senderName =
+                      n.senderName ||
+                      (n.leadEmail ? n.leadEmail.split('@')[0] : '') ||
+                      (isReply ? 'Sender' : isOpen ? 'Recipient' : 'Server');
+                    const initials =
+                      senderName
+                        .split(' ')
+                        .map((w: string) => w[0])
+                        .join('')
+                        .slice(0, 2)
+                        .toUpperCase() || 'M';
+
+                    return (
+                      <div
+                        key={n.id}
+                        onClick={() => {
+                          markNotificationRead(n.id);
+                          if (n.threadId) {
+                            setActiveThreadId(n.threadId);
+                            markThreadRead(n.threadId);
+                          } else if (n.leadEmail) {
+                            const matched = threads.find(
+                              t => !t.isTrash && t.leadEmail?.toLowerCase() === String(n.leadEmail).toLowerCase()
+                            );
+                            if (matched) {
+                              setActiveThreadId(matched.id);
+                              markThreadRead(matched.id);
+                            }
+                          }
+                          if (isReply) setActiveTab('inbox');
+                          else if (n.linkTab) setActiveTab(n.linkTab);
+                          else setActiveTab('sent');
+                          setShowNotifs(false);
+                        }}
+                        className={`px-3.5 py-3 hover:bg-slate-800/70 transition cursor-pointer flex items-start gap-3 group relative ${
+                          !n.isRead ? 'bg-[#0866FF]/10' : ''
+                        }`}
+                      >
+                        {/* Circular Avatar + Overlaid Facebook Badge */}
+                        <div className="relative shrink-0 mt-0.5">
+                          <div
+                            className={`w-11 h-11 rounded-full flex items-center justify-center font-black text-xs text-white shadow-md ${
+                              isReply
+                                ? 'bg-gradient-to-br from-[#0866FF] to-emerald-500'
+                                : isOpen
+                                ? 'bg-gradient-to-br from-cyan-600 to-blue-600'
+                                : 'bg-gradient-to-br from-rose-600 to-orange-600'
+                            }`}
+                          >
+                            {initials}
                           </div>
-                        ) : n.type === 'open' ? (
-                          <div className="w-8 h-8 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
-                            <Mail className="w-4 h-4" />
+                          <div
+                            className={`absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center border-2 border-[#111827] ${
+                              isReply
+                                ? 'bg-emerald-500 text-black'
+                                : isOpen
+                                ? 'bg-cyan-400 text-black'
+                                : 'bg-rose-500 text-white'
+                            }`}
+                          >
+                            {isReply ? (
+                              <Mail className="w-2.5 h-2.5 stroke-[2.5]" />
+                            ) : isOpen ? (
+                              <CheckCircle2 className="w-2.5 h-2.5 stroke-[2.5]" />
+                            ) : (
+                              <AlertCircle className="w-2.5 h-2.5 stroke-[2.5]" />
+                            )}
                           </div>
-                        ) : n.type === 'smtp' ? (
-                          <div className="w-8 h-8 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center">
-                            <ShieldCheck className="w-4 h-4" />
+                        </div>
+
+                        <div className="flex-1 min-w-0 pr-6">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className={`text-xs leading-snug truncate ${!n.isRead ? 'font-extrabold text-white' : 'font-semibold text-slate-300'}`}>
+                              {n?.title || 'Mail Notification'}
+                            </span>
                           </div>
-                        ) : (
-                          <div className="w-8 h-8 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center">
-                            <Sparkles className="w-4 h-4" />
+                          <p className={`text-[11px] line-clamp-2 mt-0.5 leading-relaxed ${!n.isRead ? 'text-slate-200 font-medium' : 'text-slate-400'}`}>
+                            {typeof n.message === 'object'
+                              ? ((n.message as any)?.message || (n.message as any)?.text || JSON.stringify(n.message))
+                              : String(n.message || '')}
+                          </p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className={`text-[10px] font-bold ${!n.isRead ? 'text-[#0866FF]' : 'text-slate-500'}`}>
+                              {n.timestamp}
+                            </span>
+                            {n.leadEmail && (
+                              <span className="text-[10px] text-slate-500 font-mono truncate">
+                                &bull; {n.leadEmail}
+                              </span>
+                            )}
                           </div>
+                        </div>
+
+                        {/* Delete Notification Button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteNotification(n.id);
+                          }}
+                          className="absolute right-2.5 top-2.5 p-1 rounded-full text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 opacity-0 group-hover:opacity-100 transition"
+                          title="Remove notification"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+
+                        {!n.isRead && (
+                          <div className="w-2.5 h-2.5 rounded-full bg-[#0866FF] shrink-0 self-center absolute right-3 bottom-3.5 shadow-sm shadow-blue-500/60" />
                         )}
                       </div>
-                      <div className="flex-1 min-w-0 pr-6">
-                        <div className="flex items-center justify-between gap-1">
-                          <span className={`text-xs font-semibold truncate ${!n.isRead ? 'text-slate-100' : 'text-slate-300'}`}>
-                            {n?.title || 'System Notification'}
-                          </span>
-                          <span className="text-[10px] text-slate-500 shrink-0">{n.timestamp}</span>
-                        </div>
-                        <p className="text-[11px] text-slate-400 line-clamp-2 mt-0.5">
-                          {typeof n.message === 'object'
-                            ? ((n.message as any)?.message || (n.message as any)?.text || JSON.stringify(n.message))
-                            : String(n.message || '')}
-                        </p>
-                      </div>
-
-                      {/* Delete Notification Button */}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteNotification(n.id);
-                        }}
-                        className="absolute right-2 top-2.5 p-1 rounded-md text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 opacity-0 group-hover:opacity-100 transition"
-                        title="Delete notification"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-
-                      {!n.isRead && (
-                        <div className="w-2 h-2 rounded-full bg-cyan-400 shrink-0 self-center absolute right-3 bottom-3"></div>
-                      )}
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
 
               {/* Footer */}
-              <div className="p-2 bg-slate-950/60 border-t border-slate-800/80 flex items-center justify-between text-xs px-3">
-                <span className="text-[11px] text-slate-500">Auto real-time sync active</span>
+              <div className="p-2.5 bg-slate-950/80 border-t border-slate-800/80 flex items-center justify-between text-xs px-4">
+                <span className="text-[11px] text-emerald-400 font-bold flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  <span>Gmail &amp; Messenger Live Sync</span>
+                </span>
                 <div className="flex items-center gap-3">
                   <button
                     onClick={markAllNotificationsRead}
-                    className="text-[11px] text-slate-400 hover:text-cyan-300 transition cursor-pointer"
+                    className="text-[11px] text-slate-400 hover:text-cyan-300 transition cursor-pointer font-semibold"
                   >
                     Mark All Read
                   </button>

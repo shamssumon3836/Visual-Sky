@@ -1027,11 +1027,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  // Notifications
+  // Notifications (Strictly filtered to real email events: incoming mail/reply, email open, and mail blocked/bounced)
   const [notifications, setNotifications] = useState<AppNotification[]>(() => {
     try {
       const saved = localStorage.getItem('visualsky_notifs');
-      return saved ? JSON.parse(saved) : [];
+      if (!saved) return [];
+      const parsed: AppNotification[] = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(
+        n =>
+          n &&
+          (n.type === 'reply' || n.type === 'open' || n.type === 'bounce') &&
+          !String(n.title || '').includes('Outbound Email Dispatched') &&
+          !String(n.title || '').includes('Alerts Enabled')
+      );
     } catch {
       return [];
     }
@@ -1512,57 +1521,166 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Register Service Worker for Native Mobile Browser (Android/iOS) & Desktop Gmail-style Push Notifications
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+
+    navigator.serviceWorker
+      .register('/sw.js')
+      .catch(() => {});
+
+    const handleSwMessage = (event: MessageEvent) => {
+      const msg = event.data;
+      if (msg && msg.type === 'VS_NOTIFICATION_CLICK') {
+        const d = msg.data || {};
+        if (d.threadId) {
+          setActiveThreadId(d.threadId);
+        } else if (d.leadEmail) {
+          const found = (latestWorkspaceRef.current.threads || threads).find(
+            t => t.leadEmail?.toLowerCase() === String(d.leadEmail).toLowerCase()
+          );
+          if (found) setActiveThreadId(found.id);
+        }
+        if (d.linkTab) {
+          setActiveTabState(d.linkTab);
+        } else {
+          setActiveTabState('inbox');
+        }
+      }
+    };
+
+    navigator.serviceWorker.addEventListener('message', handleSwMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+    };
+  }, []);
+
   const requestDesktopNotificationPermission = async (): Promise<boolean> => {
     let nativeGranted = false;
     if (typeof window !== 'undefined' && 'Notification' in window) {
       try {
-        // Handle promise & callback styles of Notification.requestPermission
-        const permission = await new Promise<NotificationPermission>((resolve) => {
-          try {
-            const res = Notification.requestPermission((p) => resolve(p));
-            if (res && typeof (res as any).then === 'function') {
-              (res as any).then(resolve).catch(() => resolve('default'));
+        if (Notification.permission === 'granted') {
+          nativeGranted = true;
+        } else {
+          const permission = await new Promise<NotificationPermission>((resolve) => {
+            try {
+              const res = Notification.requestPermission((p) => resolve(p));
+              if (res && typeof (res as any).then === 'function') {
+                (res as any).then(resolve).catch(() => resolve('default'));
+              }
+            } catch {
+              resolve('default');
             }
-          } catch {
-            resolve('default');
-          }
-        });
-        nativeGranted = permission === 'granted';
+          });
+          nativeGranted = permission === 'granted';
+        }
       } catch (err) {
-        console.warn('Native notification permission not available (e.g. running in iframe):', err);
+        console.warn('Native notification permission not available:', err);
       }
     }
     
-    // Always enable in-app floating corner notifications and audio
     updateNotificationSettings({ desktopPushEnabled: true, soundEnabled: true });
     return nativeGranted;
   };
 
-  // Trigger System / OS desktop notification
-  const sendDesktopNotification = (title: string, message: string) => {
-    if (notificationSettings.desktopPushEnabled && 'Notification' in window && Notification.permission === 'granted') {
-      try {
-        new Notification(title, {
-          body: message,
-          icon: '/favicon.ico',
-        });
-      } catch (e) {
-        console.warn('Desktop notification dispatch error:', e);
+  // Trigger Native Phone Screen (ServiceWorker) & Desktop OS App Notification (Gmail / Messenger style)
+  const sendDesktopNotification = (notif: AppNotification) => {
+    if (!notificationSettings.desktopPushEnabled || typeof window === 'undefined' || !('Notification' in window)) {
+      return;
+    }
+    if (Notification.permission !== 'granted') return;
+
+    const notifOptions: any = {
+      body: notif.message,
+      icon: '/favicon.svg',
+      badge: '/favicon.svg',
+      tag: notif.id,
+      renotify: true,
+      vibrate: [200, 100, 200],
+      data: {
+        linkTab: notif.linkTab || (notif.type === 'reply' ? 'inbox' : 'sent'),
+        leadEmail: notif.leadEmail,
+        threadId: notif.threadId
       }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .getRegistration()
+        .then((reg) => {
+          if (reg && typeof reg.showNotification === 'function') {
+            return reg.showNotification(notif.title, notifOptions);
+          }
+          const n = new Notification(notif.title, notifOptions);
+          n.onclick = () => {
+            window.focus();
+            if (notif.threadId) setActiveThreadId(notif.threadId);
+            setActiveTabState(notif.linkTab || (notif.type === 'reply' ? 'inbox' : 'sent'));
+            n.close();
+          };
+        })
+        .catch(() => {
+          try {
+            new Notification(notif.title, notifOptions);
+          } catch {}
+        });
+    } else {
+      try {
+        const n = new Notification(notif.title, notifOptions);
+        n.onclick = () => {
+          window.focus();
+          if (notif.threadId) setActiveThreadId(notif.threadId);
+          setActiveTabState(notif.linkTab || (notif.type === 'reply' ? 'inbox' : 'sent'));
+          n.close();
+        };
+      } catch {}
     }
   };
 
-  // Notification helper
+  // Notification helper — STRICTLY fires ONLY for:
+  // 1. Incoming Mail / Reply ('reply')
+  // 2. Email Opened ('open')
+  // 3. Mail Blocked / Bounced ('bounce')
   const addNotification = (notif: Omit<AppNotification, 'id' | 'timestamp' | 'isRead'>) => {
+    const titleStr = String(notif.title || '');
+    const msgStr = String(notif.message || '');
+
+    // Ignore noisy non-event notifications (like Outbound Dispatched or routine system logs)
+    if (
+      titleStr.includes('Outbound Email Dispatched') ||
+      titleStr.includes('Alerts Enabled')
+    ) {
+      return;
+    }
+
+    let resolvedType = notif.type;
+    if (
+      resolvedType !== 'reply' &&
+      resolvedType !== 'open' &&
+      resolvedType !== 'bounce'
+    ) {
+      // Check if it is an email blocked/bounced/transmission failure alert
+      const isBounceOrBlock =
+        /block|bounce|reject|undeliverable|transmission failed|delivery failed/i.test(titleStr) ||
+        /block|bounce|reject|550|554|spam/i.test(msgStr);
+      if (isBounceOrBlock) {
+        resolvedType = 'bounce';
+      } else {
+        // Silently ignore all other routine UI/system actions so user only gets real email notifications
+        return;
+      }
+    }
+
     const newNotif: AppNotification = {
       ...notif,
+      type: resolvedType,
       id: `notif-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      timestamp: 'Just now',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       isRead: false,
     };
-    setNotifications(prev => [newNotif, ...prev]);
-    playNotificationSound();
-    sendDesktopNotification(newNotif.title, newNotif.message);
+    setNotifications(prev => [newNotif, ...prev.slice(0, 79)]);
+    playNotificationSound(resolvedType === 'bounce' ? 'radar' : 'chime');
+    sendDesktopNotification(newNotif);
   };
 
   const markNotificationRead = (id: string) => {
@@ -2635,7 +2753,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
 
-    if (initialStatus !== 'failed' && initialStatus !== 'bounced') {
+    if (initialStatus === 'failed' || initialStatus === 'bounced') {
+      addNotification({
+        title: `🚫 Mail Blocked / Bounced: ${logData.recipientName || logData.recipientEmail}`,
+        message: `${logData.recipientEmail} — ${logData.errorMessage || 'Recipient mail server blocked or rejected delivery.'}`,
+        type: 'bounce',
+        linkTab: 'sent',
+        leadEmail: logData.recipientEmail,
+        senderName: logData.recipientName || logData.recipientEmail,
+        senderCompany: logData.recipientCompany,
+        subject: logData.subject
+      });
+    } else {
       // Ensure campaign/outbound sent emails also create or update a thread in Smart Inbox so users can view & follow up on all sent conversations
       if (logData.campaignName !== 'Smart Inbox Reply' && logData.campaignName !== 'Direct Outreach Mailer' && logData.recipientEmail) {
         const cleanRecip = logData.recipientEmail.trim().toLowerCase();
@@ -3193,11 +3322,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               notifiedOpenCountsRef.current.set(mail.id, exactOpenCount);
               const latestEv = verifiedOpens[verifiedOpens.length - 1];
               addNotification({
-                title: `👁️ Real Email Opened: ${mail.recipientName}`,
-                message: `${mail.recipientCompany || mail.recipientEmail} opened "${(mail.subject || '').slice(0, 40)}..." (Open #${exactOpenCount}).`,
+                title: `👁️ Mail Opened by ${mail.recipientName}`,
+                message: `${mail.recipientCompany || mail.recipientEmail} opened "${(mail.subject || '').slice(0, 50)}" (Open #${exactOpenCount})`,
                 type: 'open',
                 linkTab: 'sent',
-                leadEmail: mail.recipientEmail
+                leadEmail: mail.recipientEmail,
+                senderName: mail.recipientName,
+                senderCompany: mail.recipientCompany,
+                subject: mail.subject
               });
 
               setLeads(lPrev =>
@@ -3392,18 +3524,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const senderEmail = String(msg.from || '').trim().toLowerCase();
           if (!senderEmail || !senderEmail.includes('@')) continue;
 
-          // Skip automated mail server bounces and noreply daemons
+          const msgSubject = String(msg.subject || 'No Subject').trim();
+          const normSub = normalizeSubject(msgSubject);
+          const cleanUidPart = String(msg.uid || msg.messageId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+          const msgUniqueId = `imap-msg-${mailboxKey}-${cleanUidPart}`;
+
+          // Detect real Mail Server Bounce / Block notifications from mailer-daemon / postmaster
           if (
             senderEmail.startsWith('mailer-daemon@') ||
             senderEmail.startsWith('postmaster@') ||
+            /undeliverable|delivery status notification|mail delivery failed|delivery failure|blocked|rejected/i.test(msgSubject)
+          ) {
+            let notifiedBounces = new Set<string>();
+            try {
+              const rawBounces = localStorage.getItem('visualsky_notified_bounces');
+              if (rawBounces) notifiedBounces = new Set<string>(JSON.parse(rawBounces));
+            } catch {}
+
+            if (!notifiedBounces.has(msgUniqueId)) {
+              notifiedBounces.add(msgUniqueId);
+              try {
+                localStorage.setItem('visualsky_notified_bounces', JSON.stringify(Array.from(notifiedBounces).slice(-200)));
+              } catch {}
+
+              const rawBounceBody = String(msg.text || msg.fullText || '').trim();
+              const emailMatch = rawBounceBody.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+              const bouncedAddr = emailMatch ? emailMatch[1].toLowerCase() : '';
+              const matchedSent = bouncedAddr
+                ? workingSent.find(s => s.recipientEmail?.toLowerCase() === bouncedAddr)
+                : undefined;
+
+              if (matchedSent) {
+                workingSent = workingSent.map(s =>
+                  s.id === matchedSent.id ? { ...s, status: 'bounced' as const } : s
+                );
+                sentChanged = true;
+              }
+
+              addNotification({
+                title: `🚫 Mail Blocked / Bounced${matchedSent ? `: ${matchedSent.recipientName}` : ''}`,
+                message: `${bouncedAddr || senderEmail} • "${msgSubject}": ${rawBounceBody.slice(0, 90) || 'Delivery rejected or blocked by recipient mail server.'}`,
+                type: 'bounce',
+                linkTab: 'sent',
+                leadEmail: bouncedAddr || senderEmail,
+                senderName: matchedSent?.recipientName || bouncedAddr || 'Mail Delivery Subsystem',
+                senderCompany: matchedSent?.recipientCompany || 'Server Bounce Alert',
+                subject: msgSubject
+              });
+            }
+            continue;
+          }
+
+          // Skip automated noreply daemons
+          if (
             senderEmail.startsWith('no-reply@') ||
             senderEmail.startsWith('noreply@')
           ) {
             continue;
           }
-
-          const msgSubject = String(msg.subject || 'No Subject').trim();
-          const normSub = normalizeSubject(msgSubject);
 
           // Skip system OTP verification or password reset emails
           if (
@@ -3425,9 +3603,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
 
           // Deduplicate strictly by unique IMAP UID / Message-ID and ignore permanently deleted messages
-          const cleanUidPart = String(msg.uid || msg.messageId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
-          const msgUniqueId = `imap-msg-${mailboxKey}-${cleanUidPart}`;
-
           let permanentlyDeletedSet = new Set<string>();
           try {
             const rawDel = localStorage.getItem('visualsky_deleted_imap_msgs');
@@ -3671,13 +3846,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const isReplyToSent = Boolean(matchingSentLog || isReplySubjectOrHeader);
           notificationsToFire.push({
             title: isReplyToSent
-              ? `🔥 New Reply from ${leadName}`
-              : `📩 New Email from ${leadName}`,
-            message: `${senderEmail} • "${msgSubject}": "${replyText.slice(0, 70)}${replyText.length > 70 ? '...' : ''}"`,
+              ? `📩 ${leadName} replied to your email`
+              : `📩 New Mail from ${leadName}`,
+            message: `${replyText.slice(0, 110)}${replyText.length > 110 ? '...' : ''}`,
             type: 'reply',
             linkTab: 'inbox',
-            leadEmail: threadLeadEmail
-          });
+            leadEmail: threadLeadEmail,
+            threadId: targetThreadId,
+            senderName: leadName,
+            senderCompany: leadCompany,
+            subject: msgSubject
+          } as any);
         }
       }
 
@@ -3697,7 +3876,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (threadsChanged) {
         setThreads(workingThreads);
         persistResourceDirectly('threads', workingThreads);
-        if (newestArrivedThreadId) {
+        if (newestArrivedThreadId && !activeThreadId) {
           setActiveThreadId(newestArrivedThreadId);
         }
       }
@@ -3742,13 +3921,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const initialSyncTimer = setTimeout(() => {
       syncInboxReplies(undefined, true).catch(() => {});
-    }, 3500);
+    }, 2000);
 
+    // Poll every 5 seconds even in background tabs so mobile/desktop OS push notifications fire like Gmail!
     const imapInterval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        syncInboxReplies(undefined, true).catch(() => {});
-      }
-    }, 8000);
+      syncInboxReplies(undefined, true).catch(() => {});
+    }, 5000);
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
@@ -4007,15 +4185,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return next;
       });
 
-      addNotification({
-        title: 'Outbound Email Dispatched 🚀',
-        message: `Sent live email to ${resolvedName} (${cleanEmail}) via ${smtp.name}.`,
-        type: 'reply'
-      });
-
       return true;
     } else {
-      // Add failed log
+      // Add failed/blocked log (which automatically triggers a 'bounce' notification)
       addSentEmailLog({
         campaignName: 'Direct Outreach Mailer',
         recipientName: resolvedName,
@@ -4029,12 +4201,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         errorMessage,
         openCount: 0,
         trackingPixelId
-      });
-
-      addNotification({
-        title: '❌ Email Transmission Failed',
-        message: `Could not send to ${cleanEmail}: ${errorMessage}`,
-        type: 'system'
       });
 
       return false;

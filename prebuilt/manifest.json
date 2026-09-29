@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "VisualSky - Smart Inbox & Cold Outreach",
+  "short_name": "VisualSky",
+  "description": "Enterprise AI Cold Outreach, Smart Unified Inbox, and Real-Time Email Tracking.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#080c14",
+  "theme_color": "#080c14",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

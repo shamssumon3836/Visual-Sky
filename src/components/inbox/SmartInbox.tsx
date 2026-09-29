@@ -76,16 +76,21 @@ export const SmartInbox: React.FC = () => {
 
   const [isSyncingManual, setIsSyncingManual] = useState<boolean>(false);
 
-  // Automatically sync IMAP replies in background when SmartInbox opens & every 6s while visible
+  // Automatically sync IMAP replies silently in background when SmartInbox opens & every 5s while visible (no manual button or reload needed)
   useEffect(() => {
-    const initTimer = setTimeout(() => {
-      syncInboxReplies(undefined, true).catch(() => {});
-    }, 600);
-    const timer = setInterval(() => {
+    const runSilentSync = () => {
       if (document.visibilityState === 'visible') {
-        syncInboxReplies(undefined, true).catch(() => {});
+        syncInboxReplies(undefined, true)
+          .then(() => {
+            setLastAutoSyncTime(
+              new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            );
+          })
+          .catch(() => {});
       }
-    }, 6000);
+    };
+    const initTimer = setTimeout(runSilentSync, 400);
+    const timer = setInterval(runSilentSync, 5000);
     return () => {
       clearTimeout(initTimer);
       clearInterval(timer);
@@ -141,7 +146,14 @@ export const SmartInbox: React.FC = () => {
 
   const [isGeneratingAiReply, setIsGeneratingAiReply] = useState<boolean>(false);
   const [customReplyPrompt, setCustomReplyPrompt] = useState<string>('');
-  const [isAiCopilotExpanded, setIsAiCopilotExpanded] = useState<boolean>(true);
+  const [isAiCopilotExpanded, setIsAiCopilotExpanded] = useState<boolean>(false);
+  const [isComposerMinimized, setIsComposerMinimized] = useState<boolean>(false);
+  const [messageDirectionFilter, setMessageDirectionFilter] = useState<'all' | 'lead_only' | 'user_only'>('all');
+  const [largeReadingText, setLargeReadingText] = useState<boolean>(true);
+  const [expandedQuotesMap, setExpandedQuotesMap] = useState<Record<string, boolean>>({});
+  const [translatedMessagesMap, setTranslatedMessagesMap] = useState<Record<string, string>>({});
+  const [translatingMsgId, setTranslatingMsgId] = useState<string | null>(null);
+  const [lastAutoSyncTime, setLastAutoSyncTime] = useState<string>('Live');
   const [showLabelMenu, setShowLabelMenu] = useState<boolean>(false);
   const [showBulkLabelMenu, setShowBulkLabelMenu] = useState<boolean>(false);
   const [customLabelInput, setCustomLabelInput] = useState<string>('');
@@ -732,6 +744,82 @@ export const SmartInbox: React.FC = () => {
     [threads]
   );
 
+  // Split email body into actual fresh reply vs quoted email chain ("On ... wrote:" or ">")
+  const splitReplyAndQuotedHistory = (rawText: string): { mainReply: string; quotedHistory: string } => {
+    if (!rawText) return { mainReply: '', quotedHistory: '' };
+    const lines = rawText.split(/\r?\n/);
+    const mainLines: string[] = [];
+    const quoteLines: string[] = [];
+    let inQuoteBlock = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (
+        !inQuoteBlock &&
+        (/^On .+ wrote:$/i.test(trimmed) ||
+          /^-----Original Message-----/i.test(trimmed) ||
+          /^From:\s+.+@/i.test(trimmed) ||
+          (trimmed.startsWith('>') && mainLines.join('').trim().length > 0))
+      ) {
+        inQuoteBlock = true;
+      }
+      if (inQuoteBlock) {
+        quoteLines.push(line);
+      } else {
+        mainLines.push(line);
+      }
+    }
+
+    const mainReply = mainLines.join('\n').trim();
+    const quotedHistory = quoteLines.join('\n').trim();
+    if (!mainReply && quotedHistory) {
+      return { mainReply: rawText.trim(), quotedHistory: '' };
+    }
+    return { mainReply: mainReply || rawText.trim(), quotedHistory };
+  };
+
+  // 1-Click Translate & Explain Prospect's Reply in Bangla + English
+  const handleTranslateMessage = async (msgId: string, textToTranslate: string) => {
+    if (!textToTranslate.trim() || translatingMsgId === msgId) return;
+    if (translatedMessagesMap[msgId]) {
+      setTranslatedMessagesMap(prev => {
+        const next = { ...prev };
+        delete next[msgId];
+        return next;
+      });
+      return;
+    }
+    setTranslatingMsgId(msgId);
+    try {
+      const response = await fetch('/api/gemini/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: 'user',
+              content: `Translate and clearly explain this incoming client email reply in simple Bengali (বাংলা) so the user can easily understand what the person on the other side said and what they want:\n\n"${textToTranslate}"\n\nFormat clearly:\n🇧🇩 বাংলা অনুবাদ (Exact Meaning):\n...\n\n💡 মূল কথা (Key Takeaway in 1 line):\n...`
+            }
+          ],
+          systemInstruction: 'You are a helpful bilingual Bengali-English assistant. Be concise, accurate, and easy to read.'
+        })
+      });
+      const parsed = await safeParseResponse(response, 'Translation failed');
+      const reply = parsed.data?.reply || '';
+      if (reply) {
+        setTranslatedMessagesMap(prev => ({ ...prev, [msgId]: reply.trim() }));
+      }
+    } catch {
+      setTranslatedMessagesMap(prev => ({
+        ...prev,
+        [msgId]: `🇧🇩 মূল বার্তা: "${textToTranslate.slice(0, 220)}"`
+      }));
+    } finally {
+      setTranslatingMsgId(null);
+    }
+  };
+
   return (
     <div className="p-2 md:p-6 max-w-7xl mx-auto h-[calc(100vh-5.5rem)] flex flex-col gap-4 animate-in fade-in">
       
@@ -757,18 +845,16 @@ export const SmartInbox: React.FC = () => {
           )}
         </div>
 
-        {/* Action Buttons */}
+        {/* Action Buttons (Auto-Sync Live Status instead of manual Sync Mailbox button) */}
         <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end flex-wrap">
-          <button
-            type="button"
-            onClick={handleManualSync}
-            disabled={isSyncingManual}
-            className="px-3.5 py-2 rounded-2xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-bold text-xs flex items-center gap-1.5 transition cursor-pointer disabled:opacity-60 shadow-md"
-            title="Fetch and sync replies directly from your SMTP/IMAP mailbox"
+          <div
+            className="px-3.5 py-2 rounded-2xl bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center gap-2 shadow-sm select-none"
+            title="Your mailbox automatically syncs incoming replies in the background without reloading"
           >
-            <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncingManual ? 'animate-spin' : ''}`} />
-            <span>{isSyncingManual ? 'Checking IMAP...' : 'Sync Mailbox'}</span>
-          </button>
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            <span>Auto-Sync Live</span>
+            <span className="text-[10px] text-emerald-400/80 font-mono hidden md:inline">({lastAutoSyncTime})</span>
+          </div>
 
           {selectedFolder === 'trash' && threads.some(t => t.isTrash) && selectedThreadIds.length === 0 && (
             <button
@@ -1117,9 +1203,25 @@ export const SmartInbox: React.FC = () => {
                         {t.subject}
                       </div>
 
-                      <p className="text-[11px] text-slate-400 truncate">
-                        {cleanBodyText(t.lastMessage, t.leadCompany, t.leadName)}
-                      </p>
+                      {(() => {
+                        const latestLeadReply = Array.isArray(t.messages)
+                          ? [...t.messages].reverse().find(m => m.sender === 'lead')
+                          : null;
+                        const rawPreview = latestLeadReply
+                          ? cleanBodyText(latestLeadReply.body, t.leadCompany, t.leadName)
+                          : cleanBodyText(t.lastMessage, t.leadCompany, t.leadName);
+                        const { mainReply } = splitReplyAndQuotedHistory(rawPreview);
+                        return latestLeadReply ? (
+                          <div className="mt-1 p-2 rounded-xl bg-emerald-950/35 border border-emerald-500/30 text-[11px] text-emerald-100 font-medium line-clamp-2 leading-snug">
+                            <span className="text-emerald-400 font-extrabold mr-1">💬 Reply:</span>
+                            {mainReply}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-slate-400 line-clamp-2 leading-snug">
+                            {mainReply}
+                          </p>
+                        );
+                      })()}
 
                       <div className="flex items-center justify-between gap-1 pt-1">
                         <div className="flex items-center gap-1 flex-wrap">
@@ -1484,93 +1586,364 @@ export const SmartInbox: React.FC = () => {
                     <p className="text-xs text-slate-200 leading-relaxed">{threadAiSummary.summary}</p>
                   </div>
                 )}
+
+                {/* User-Friendly Reading Controls Bar: Filter Client Replies Only, Text Size, & Maximize View */}
+                {(() => {
+                  const allMsgs = Array.isArray(currentThread.messages) ? currentThread.messages : [];
+                  const leadRepliesCount = allMsgs.filter(m => m.sender === 'lead').length;
+                  const sentMsgsCount = allMsgs.filter(m => m.sender === 'user').length;
+                  return (
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80 text-[11px]">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mr-1">
+                          Show:
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setMessageDirectionFilter('all')}
+                          className={`px-2.5 py-1 rounded-xl font-bold transition cursor-pointer ${
+                            messageDirectionFilter === 'all'
+                              ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                              : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                          }`}
+                        >
+                          All Messages ({allMsgs.length || 1})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMessageDirectionFilter('lead_only')}
+                          className={`px-2.5 py-1 rounded-xl font-bold flex items-center gap-1 transition cursor-pointer ${
+                            messageDirectionFilter === 'lead_only'
+                              ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-500/50 shadow-sm'
+                              : 'bg-slate-900 text-emerald-400/90 hover:text-emerald-300 border border-slate-800'
+                          }`}
+                          title="Show only what the other person replied"
+                        >
+                          <span>📥 Client Replies Only ({leadRepliesCount})</span>
+                        </button>
+                        {sentMsgsCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setMessageDirectionFilter('user_only')}
+                            className={`px-2.5 py-1 rounded-xl font-bold transition cursor-pointer ${
+                              messageDirectionFilter === 'user_only'
+                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                            }`}
+                          >
+                            📤 My Sent ({sentMsgsCount})
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setLargeReadingText(prev => !prev)}
+                          className={`px-2.5 py-1 rounded-xl font-bold border transition cursor-pointer ${
+                            largeReadingText
+                              ? 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
+                              : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                          }`}
+                          title="Toggle Larger Clear Font for Easy Reading"
+                        >
+                          {largeReadingText ? '🔍 Large Clear Text: ON' : '🔍 Normal Text'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsComposerMinimized(prev => !prev)}
+                          className={`px-2.5 py-1 rounded-xl font-bold border transition cursor-pointer ${
+                            isComposerMinimized
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                              : 'bg-slate-900 text-slate-300 border-slate-800 hover:text-white'
+                          }`}
+                          title="Minimize or Expand bottom reply box to see more of the conversation"
+                        >
+                          {isComposerMinimized ? '⬆️ Show Reply Box' : '⬇️ Full Reading Space'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Scrollable Messages Stream */}
               <div
                 ref={messagesScrollRef}
-                className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 min-h-0"
+                className="flex-1 overflow-y-auto p-3 md:p-5 space-y-4 min-h-0 bg-gradient-to-b from-slate-950/40 to-slate-900/40"
               >
-                {(Array.isArray(currentThread.messages) && currentThread.messages.length > 0
-                  ? currentThread.messages
-                  : [
-                      {
-                        id: `${currentThread.id}-fallback`,
-                        sender: 'lead' as const,
-                        senderName: currentThread.leadName,
-                        senderEmail: currentThread.leadEmail,
-                        body: currentThread.lastMessage || 'No message body.',
-                        timestamp: currentThread.lastMessageDate || currentThread.updatedAt || 'Today',
-                        isRead: true
-                      }
-                    ]
-                ).map((m, idx) => {
-                  const isLead = m.sender === 'lead';
-                  const cleanedBody = cleanBodyText(m.body, currentThread.leadCompany, currentThread.leadName);
+                {/* Pinned Latest Client Reply Spotlight Banner so user immediately sees what the other side replied */}
+                {(() => {
+                  const allMsgs = Array.isArray(currentThread.messages) ? currentThread.messages : [];
+                  const latestLeadMsg = [...allMsgs].reverse().find(m => m.sender === 'lead');
+                  if (!latestLeadMsg || messageDirectionFilter === 'user_only') return null;
+                  const cleanedSpotlight = cleanBodyText(
+                    latestLeadMsg.body,
+                    currentThread.leadCompany,
+                    currentThread.leadName
+                  );
+                  const { mainReply } = splitReplyAndQuotedHistory(cleanedSpotlight);
+                  const spotlightKey = `spotlight-${latestLeadMsg.id || currentThread.id}`;
+
                   return (
-                    <div
-                      key={m.id || idx}
-                      className={`p-5 rounded-2xl border space-y-3 shadow-md ${
-                        isLead
-                          ? 'bg-slate-950/90 border-cyan-500/30'
-                          : 'bg-slate-900 border-slate-800 ml-6'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between border-b border-slate-800/80 pb-2 gap-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div className={`w-7 h-7 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
-                            isLead ? 'bg-cyan-500 text-black' : 'bg-blue-600 text-white'
-                          }`}>
-                            {isLead
-                              ? (currentThread.leadName?.[0] || 'L')
-                              : (currentUser.name ? currentUser.name[0] : 'U')}
-                          </div>
-                          <div className="min-w-0">
-                            <span className="font-bold text-xs text-slate-200">
-                              {isLead ? currentThread.leadName : (m.senderName || currentUser.name)}
-                            </span>
-                            <span className="text-[11px] text-slate-500 font-mono ml-2">
-                              &lt;{isLead ? currentThread.leadEmail : (m.senderEmail || currentUser.email)}&gt;
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-[11px] text-slate-400 font-mono">
-                            {m.timestamp || 'Just now'}
+                    <div className="p-4 md:p-5 rounded-2xl bg-gradient-to-br from-emerald-950/60 via-slate-900/95 to-cyan-950/50 border-2 border-emerald-500/50 shadow-xl shadow-emerald-950/30 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-500/25 pb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="px-2.5 py-0.5 rounded-full bg-emerald-500 text-slate-950 font-black text-[10px] uppercase tracking-wider">
+                            📩 Latest Reply From {currentThread.leadName}
                           </span>
+                          <span className="text-xs font-mono text-emerald-300/90">
+                            {latestLeadMsg.timestamp || currentThread.lastMessageDate || 'Recent'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => handleCopyText(cleanedBody, `msg-${m.id || idx}`, 'Message Copied')}
-                            className="p-1 rounded-lg hover:bg-slate-800 text-slate-500 hover:text-slate-200 transition cursor-pointer"
-                            title="Copy message text"
+                            onClick={() => handleTranslateMessage(spotlightKey, mainReply)}
+                            className="px-2.5 py-1 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
                           >
-                            {copiedTextId === `msg-${m.id || idx}` ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-400" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5" />
-                            )}
+                            <Sparkles className="w-3 h-3 text-emerald-300" />
+                            <span>
+                              {translatingMsgId === spotlightKey
+                                ? 'অনুবাদ হচ্ছে...'
+                                : translatedMessagesMap[spotlightKey]
+                                ? 'Hide বাংলা অনুবাদ'
+                                : '🇧🇩 বাংলায় বুঝুন (Translate)'}
+                            </span>
                           </button>
                           <button
                             type="button"
-                            onClick={() => replyTextareaRef.current?.focus()}
-                            className="p-1 rounded-lg hover:bg-slate-800 text-slate-500 hover:text-cyan-400 transition cursor-pointer"
-                            title="Focus Reply Box"
+                            onClick={() => {
+                              setIsComposerMinimized(false);
+                              replyTextareaRef.current?.focus();
+                            }}
+                            className="px-2.5 py-1 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-[11px] flex items-center gap-1 cursor-pointer transition"
                           >
-                            <Reply className="w-3.5 h-3.5" />
+                            <Reply className="w-3 h-3" />
+                            <span>Write Reply</span>
                           </button>
                         </div>
                       </div>
 
-                      <div className="text-xs md:text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">
-                        {cleanedBody}
+                      <div
+                        className={`${
+                          largeReadingText ? 'text-base md:text-[17px]' : 'text-sm'
+                        } text-white font-medium whitespace-pre-wrap leading-relaxed selection:bg-emerald-500/30`}
+                      >
+                        {mainReply}
                       </div>
+
+                      {translatedMessagesMap[spotlightKey] && (
+                        <div className="mt-2 p-3 rounded-xl bg-slate-950/90 border border-emerald-500/40 text-xs md:text-sm text-emerald-200 whitespace-pre-wrap leading-relaxed">
+                          {translatedMessagesMap[spotlightKey]}
+                        </div>
+                      )}
                     </div>
                   );
-                })}
+                })()}
+
+                {(() => {
+                  const baseMessages =
+                    Array.isArray(currentThread.messages) && currentThread.messages.length > 0
+                      ? currentThread.messages
+                      : [
+                          {
+                            id: `${currentThread.id}-fallback`,
+                            sender: 'lead' as const,
+                            senderName: currentThread.leadName,
+                            senderEmail: currentThread.leadEmail,
+                            body: currentThread.lastMessage || 'No message body.',
+                            timestamp: currentThread.lastMessageDate || currentThread.updatedAt || 'Today',
+                            isRead: true
+                          }
+                        ];
+
+                  const visibleMessages = baseMessages.filter(m => {
+                    if (messageDirectionFilter === 'lead_only') return m.sender === 'lead';
+                    if (messageDirectionFilter === 'user_only') return m.sender === 'user';
+                    return true;
+                  });
+
+                  if (visibleMessages.length === 0) {
+                    return (
+                      <div className="p-8 text-center rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2">
+                        <div className="text-sm font-bold text-slate-300">
+                          {messageDirectionFilter === 'lead_only'
+                            ? 'No incoming reply from this contact yet'
+                            : 'No messages match this filter'}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setMessageDirectionFilter('all')}
+                          className="px-3 py-1.5 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-bold cursor-pointer"
+                        >
+                          Show All Messages
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  return visibleMessages.map((m, idx) => {
+                    const isLead = m.sender === 'lead';
+                    const msgKey = String(m.id || `${currentThread.id}-${idx}`);
+                    const cleanedBody = cleanBodyText(m.body, currentThread.leadCompany, currentThread.leadName);
+                    const { mainReply, quotedHistory } = splitReplyAndQuotedHistory(cleanedBody);
+                    const isQuoteExpanded = Boolean(expandedQuotesMap[msgKey]);
+
+                    return (
+                      <div
+                        key={msgKey}
+                        className={`p-4 md:p-5 rounded-2xl border space-y-3 shadow-lg transition ${
+                          isLead
+                            ? 'bg-[#0b1526] border-emerald-500/40 ring-1 ring-emerald-500/15'
+                            : 'bg-slate-900/75 border-slate-800 md:ml-8'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between border-b border-slate-800/80 pb-2.5 gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div
+                              className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs shrink-0 ${
+                                isLead ? 'bg-emerald-500 text-slate-950' : 'bg-blue-600 text-white'
+                              }`}
+                            >
+                              {isLead
+                                ? currentThread.leadName?.[0] || 'L'
+                                : currentUser.name
+                                ? currentUser.name[0]
+                                : 'U'}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-extrabold text-xs md:text-sm text-white">
+                                  {isLead ? currentThread.leadName : m.senderName || currentUser.name}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider ${
+                                    isLead
+                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                      : 'bg-blue-500/15 text-blue-300 border border-blue-500/30'
+                                  }`}
+                                >
+                                  {isLead ? '📥 Prospect Reply' : '📤 Sent by You'}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-slate-400 font-mono truncate">
+                                &lt;{isLead ? currentThread.leadEmail : m.senderEmail || currentUser.email}&gt;
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[11px] text-slate-400 font-mono mr-1">
+                              {m.timestamp || 'Just now'}
+                            </span>
+                            {isLead && (
+                              <button
+                                type="button"
+                                onClick={() => handleTranslateMessage(msgKey, mainReply)}
+                                className="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold cursor-pointer transition"
+                                title="Translate & explain this message in Bangla"
+                              >
+                                {translatingMsgId === msgKey
+                                  ? '...'
+                                  : translatedMessagesMap[msgKey]
+                                  ? 'Hide বাংলা'
+                                  : '🇧🇩 বাংলা'}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleCopyText(mainReply, `msg-${msgKey}`, 'Message Copied')}
+                              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition cursor-pointer"
+                              title="Copy message text"
+                            >
+                              {copiedTextId === `msg-${msgKey}` ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsComposerMinimized(false);
+                                replyTextareaRef.current?.focus();
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-cyan-400 transition cursor-pointer"
+                              title="Reply to this message"
+                            >
+                              <Reply className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Main Message Body with Crystal-Clear Contrast & Adjustable Size */}
+                        <div
+                          className={`${
+                            largeReadingText
+                              ? isLead
+                                ? 'text-[15px] md:text-base text-white font-medium'
+                                : 'text-sm md:text-[15px] text-slate-100'
+                              : 'text-xs md:text-sm text-slate-200'
+                          } whitespace-pre-wrap leading-relaxed`}
+                        >
+                          {mainReply}
+                        </div>
+
+                        {/* Bangla Translation Box if activated */}
+                        {translatedMessagesMap[msgKey] && (
+                          <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-xs md:text-sm text-emerald-200 whitespace-pre-wrap leading-relaxed">
+                            {translatedMessagesMap[msgKey]}
+                          </div>
+                        )}
+
+                        {/* Collapsible Quoted Email History so main reply is never cluttered */}
+                        {quotedHistory && (
+                          <div className="pt-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedQuotesMap(prev => ({
+                                  ...prev,
+                                  [msgKey]: !prev[msgKey]
+                                }))
+                              }
+                              className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-[10px] font-bold text-slate-400 hover:text-slate-200 cursor-pointer transition"
+                            >
+                              {isQuoteExpanded
+                                ? '▴ Hide Previous Quoted Email History'
+                                : '⋯ Show Previous Quoted Email History'}
+                            </button>
+                            {isQuoteExpanded && (
+                              <div className="mt-2 pl-3 border-l-2 border-slate-700 text-xs text-slate-400 whitespace-pre-wrap leading-relaxed">
+                                {quotedHistory}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  });
+                })()}
               </div>
 
-              {/* Bottom Reply & AI Draft Box */}
-              <div className="p-4 bg-slate-950/95 border-t border-slate-800 space-y-3 shrink-0">
+              {/* Bottom Reply & AI Draft Box (Collapsible so reading area can be maximized anytime) */}
+              {isComposerMinimized ? (
+                <div className="p-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-3 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsComposerMinimized(false);
+                      setTimeout(() => replyTextareaRef.current?.focus(), 50);
+                    }}
+                    className="flex-1 text-left px-4 py-2.5 rounded-2xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-400 hover:text-slate-200 transition cursor-pointer flex items-center justify-between"
+                  >
+                    <span>✍️ Click here to write a reply to {currentThread.leadName} ({currentThread.leadEmail})...</span>
+                    <span className="text-cyan-400 font-bold">Expand Reply Box ⬆️</span>
+                  </button>
+                </div>
+              ) : (
+              <div className="p-3 md:p-4 bg-slate-950/95 border-t border-slate-800 space-y-2.5 shrink-0">
                 <div className="p-3 bg-gradient-to-br from-purple-950/30 via-slate-900/90 to-indigo-950/30 rounded-2xl border border-purple-800/40 space-y-2">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-1.5">
@@ -1755,6 +2128,7 @@ export const SmartInbox: React.FC = () => {
                   </div>
                 </form>
               </div>
+              )}
             </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-3">
