@@ -1189,6 +1189,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     minedLeads,
     columnSettings,
     notificationSettings,
+    driveStorageSettings,
     lastActiveTab: activeTab,
     userProfile: {
       quotaUsed: currentUser?.quotaUsed || 0,
@@ -1215,6 +1216,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       minedLeads,
       columnSettings,
       notificationSettings,
+      driveStorageSettings,
       lastActiveTab: activeTab,
       userProfile: {
         quotaUsed: currentUser?.quotaUsed || 0,
@@ -1239,6 +1241,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     minedLeads,
     columnSettings,
     notificationSettings,
+    driveStorageSettings,
     activeTab,
     currentUser
   ]);
