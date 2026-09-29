@@ -5761,10 +5761,10 @@ async function startServer() {
     return prebuiltAppJsPath;
   };
 
-  // Ultra-fast in-memory RAM cache for raw & gzipped bundles so Hard Reloads finish in <50ms
+  // Ultra-fast in-memory RAM cache for bundles
   const memoryAssetCache = new Map<
     string,
-    { mtimeMs: number; etag: string; raw: Buffer; gzip: Buffer }
+    { mtimeMs: number; etag: string; raw: Buffer }
   >();
 
   const getCachedAsset = (filePath: string) => {
@@ -5776,20 +5776,13 @@ async function startServer() {
       return cached;
     }
     const raw = fs.readFileSync(filePath);
-    const gzPath = filePath + '.gz';
-    let gzip: Buffer;
-    if (fs.existsSync(gzPath) && fs.statSync(gzPath).mtimeMs >= mtimeMs) {
-      gzip = fs.readFileSync(gzPath);
-    } else {
-      gzip = zlib.gzipSync(raw, { level: 6 });
-    }
     const etag = `"v-${Math.floor(mtimeMs).toString(36)}-${raw.byteLength.toString(36)}"`;
-    const entry = { mtimeMs, etag, raw, gzip };
+    const entry = { mtimeMs, etag, raw };
     memoryAssetCache.set(filePath, entry);
     return entry;
   };
 
-  // Pre-warm RAM cache on startup so the very first Hard Reload has zero disk/compression latency
+  // Pre-warm RAM cache on startup
   try {
     getCachedAsset(getActiveAppJsPath());
     getCachedAsset(prebuiltAppCssPath);
@@ -5818,22 +5811,10 @@ async function startServer() {
       }
       res.setHeader('Content-Type', contentType);
       res.setHeader('ETag', asset.etag);
-      res.setHeader('Vary', 'Accept-Encoding');
-      if (req.query && req.query.v) {
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-      } else {
-        res.setHeader('Cache-Control', 'no-cache');
-      }
+      res.setHeader('Cache-Control', 'no-cache');
       if (req.headers['if-none-match'] === asset.etag) {
         return res.status(304).end();
       }
-      const acceptEncoding = String(req.headers['accept-encoding'] || '');
-      if (acceptEncoding.includes('gzip')) {
-        res.setHeader('Content-Encoding', 'gzip');
-        res.setHeader('Content-Length', String(asset.gzip.byteLength));
-        return res.status(200).end(asset.gzip);
-      }
-      res.setHeader('Content-Length', String(asset.raw.byteLength));
       return res.status(200).end(asset.raw);
     } catch {
       return res.sendFile(filePath);

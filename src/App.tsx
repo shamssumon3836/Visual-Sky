@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { LandingPage } from './components/landing/LandingPage';
 import { Navbar } from './components/layout/Navbar';
@@ -45,15 +45,6 @@ import { LogoutConfirmModal } from './components/auth/LogoutConfirmModal';
 import { ProfileModal } from './components/profile/ProfileModal';
 import { SendMailModal } from './components/mail/SendMailModal';
 import { BkashSubscriptionModal } from './components/billing/BkashSubscriptionModal';
-
-const ViewLoader: React.FC = () => (
-  <div className="flex items-center justify-center min-h-[55vh] text-slate-400">
-    <div className="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-slate-900/80 border border-slate-800 shadow-lg">
-      <div className="w-4 h-4 rounded-full border-2 border-cyan-500/30 border-t-cyan-400 animate-spin" />
-      <span className="text-xs font-bold text-slate-300 tracking-wide">Loading module...</span>
-    </div>
-  </div>
-);
 
 const MainContent: React.FC = () => {
   const { 
@@ -148,15 +139,13 @@ const MainContent: React.FC = () => {
         
         {/* Auth Modal for Sign in / Sign up / Forgot Password */}
         {isAuthOpen && (
-          <Suspense fallback={null}>
-            <AuthModal 
-              isOpen={isAuthOpen} 
-              onClose={() => setIsAuthOpen(false)}
-              initialPortal={authInitialPortal}
-              initialMode={authInitialMode}
-              initialPlan={authInitialPlan}
-            />
-          </Suspense>
+          <AuthModal 
+            isOpen={isAuthOpen} 
+            onClose={() => setIsAuthOpen(false)}
+            initialPortal={authInitialPortal}
+            initialMode={authInitialMode}
+            initialPlan={authInitialPlan}
+          />
         )}
 
         {/* Global Notifications */}
@@ -371,12 +360,10 @@ const MainContent: React.FC = () => {
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 pb-20 md:pb-6 relative">
           <div className="saas-view-enter min-h-full">
-            <Suspense fallback={<ViewLoader />}>
-              {renderActiveView()}
-              {(hasVisitedCampaigns || activeTab === 'campaigns') && (
-                <CampaignManager isHidden={activeTab !== 'campaigns' || isCampaignsRestricted} />
-              )}
-            </Suspense>
+            {renderActiveView()}
+            {(hasVisitedCampaigns || activeTab === 'campaigns') && (
+              <CampaignManager isHidden={activeTab !== 'campaigns' || isCampaignsRestricted} />
+            )}
           </div>
         </main>
       </div>
@@ -467,81 +454,69 @@ const MainContent: React.FC = () => {
 
       {/* Mobile Slide-over Full Drawer containing ALL sidebar items */}
       {isMobileDrawerOpen && (
-        <Suspense fallback={null}>
-          <MobileNavDrawer 
-            isOpen={isMobileDrawerOpen} 
-            onClose={() => setIsMobileDrawerOpen(false)}
-            onOpenSendMail={() => handleOpenSendMail()}
-            onOpenAuth={(mode, portal) => handleOpenAuth(mode || 'signin', portal || 'client')}
-            onRequestLogout={() => setIsLogoutConfirmOpen(true)}
-            onOpenProfile={() => setIsProfileOpen(true)}
-          />
-        </Suspense>
+        <MobileNavDrawer 
+          isOpen={isMobileDrawerOpen} 
+          onClose={() => setIsMobileDrawerOpen(false)}
+          onOpenSendMail={() => handleOpenSendMail()}
+          onOpenAuth={(mode, portal) => handleOpenAuth(mode || 'signin', portal || 'client')}
+          onRequestLogout={() => setIsLogoutConfirmOpen(true)}
+          onOpenProfile={() => setIsProfileOpen(true)}
+        />
       )}
 
       {/* Logout Confirmation Permission Modal */}
       {isLogoutConfirmOpen && (
-        <Suspense fallback={null}>
-          <LogoutConfirmModal
-            isOpen={isLogoutConfirmOpen}
-            onClose={() => setIsLogoutConfirmOpen(false)}
-            onConfirm={() => {
-              logout();
-              setIsLogoutConfirmOpen(false);
-              handleOpenAuth('signin', 'client');
-            }}
-            currentUser={currentUser}
-          />
-        </Suspense>
+        <LogoutConfirmModal
+          isOpen={isLogoutConfirmOpen}
+          onClose={() => setIsLogoutConfirmOpen(false)}
+          onConfirm={() => {
+            logout();
+            setIsLogoutConfirmOpen(false);
+            handleOpenAuth('signin', 'client');
+          }}
+          currentUser={currentUser}
+        />
       )}
 
       {/* Profile Modal */}
       {isProfileOpen && (
-        <Suspense fallback={null}>
-          <ProfileModal
-            isOpen={isProfileOpen}
-            onClose={() => setIsProfileOpen(false)}
-            onOpenAuth={(mode, portal) => handleOpenAuth(mode || 'signin', portal || 'client')}
-          />
-        </Suspense>
+        <ProfileModal
+          isOpen={isProfileOpen}
+          onClose={() => setIsProfileOpen(false)}
+          onOpenAuth={(mode, portal) => handleOpenAuth(mode || 'signin', portal || 'client')}
+        />
       )}
 
       {/* Auth Modal */}
       {isAuthOpen && (
-        <Suspense fallback={null}>
-          <AuthModal 
-            isOpen={isAuthOpen} 
-            onClose={() => setIsAuthOpen(false)}
-            initialPortal={authInitialPortal}
-            initialMode={authInitialMode}
-            initialPlan={authInitialPlan}
-          />
-        </Suspense>
+        <AuthModal 
+          isOpen={isAuthOpen} 
+          onClose={() => setIsAuthOpen(false)}
+          initialPortal={authInitialPortal}
+          initialMode={authInitialMode}
+          initialPlan={authInitialPlan}
+        />
       )}
 
       {/* Send Mail Cold Outreach Modal */}
       {isSendMailOpen && (
-        <Suspense fallback={null}>
-          <SendMailModal 
-            isOpen={isSendMailOpen} 
-            onClose={() => {
-              setIsSendMailOpen(false);
-              setSelectedLeadForMail(undefined);
-            }} 
-            initialLead={selectedLeadForMail}
-          />
-        </Suspense>
+        <SendMailModal 
+          isOpen={isSendMailOpen} 
+          onClose={() => {
+            setIsSendMailOpen(false);
+            setSelectedLeadForMail(undefined);
+          }} 
+          initialLead={selectedLeadForMail}
+        />
       )}
 
       {/* bKash Personal Subscription Checkout Modal */}
       {isBillingOpen && (
-        <Suspense fallback={null}>
-          <BkashSubscriptionModal
-            isOpen={isBillingOpen}
-            onClose={() => setIsBillingOpen(false)}
-            initialPlanId={authInitialPlan}
-          />
-        </Suspense>
+        <BkashSubscriptionModal
+          isOpen={isBillingOpen}
+          onClose={() => setIsBillingOpen(false)}
+          initialPlanId={authInitialPlan}
+        />
       )}
     </div>
   );

@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const zlib = require('zlib');
 
 const distDir = path.join(__dirname, '..', 'dist');
 const distAssets = path.join(distDir, 'assets');
@@ -10,7 +9,7 @@ const rootAssetsDir = path.join(__dirname, '..', 'assets');
 
 fs.mkdirSync(prebuiltDir, { recursive: true });
 
-// Clean up stale hashed .js and .css files in prebuilt/, prebuilt/assets/, and assets/
+// Clean up stale hashed .js, .css, and .gz files in prebuilt/, prebuilt/assets/, and assets/
 for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
@@ -20,9 +19,7 @@ for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
           const isPrebuiltCore =
             dir === prebuiltDir &&
             (f === 'app.js' ||
-              f === 'app.js.gz' ||
               f === 'app.css' ||
-              f === 'app.css.gz' ||
               f === 'tailwind-bundle.css' ||
               f === 'server.cjs' ||
               f === 'index.html' ||
@@ -42,7 +39,7 @@ for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
 // 1. Copy CSS from dist/assets if present
 if (fs.existsSync(distAssets)) {
   const files = fs.readdirSync(distAssets);
-  const cssFile = files.find((f) => f.startsWith('index-') && f.endsWith('.css'));
+  const cssFile = files.find((f) => f.endsWith('.css'));
   if (cssFile) {
     const cssPath = path.join(distAssets, cssFile);
     fs.copyFileSync(cssPath, path.join(prebuiltDir, 'app.css'));
@@ -76,7 +73,6 @@ try {
   const esbuild = require('esbuild');
   const mainEntry = path.join(__dirname, '..', 'src', 'main.tsx');
   const prebuiltAppJs = path.join(prebuiltDir, 'app.js');
-  const prebuiltAppCss = path.join(prebuiltDir, 'app.css');
   if (fs.existsSync(mainEntry)) {
     esbuild.buildSync({
       entryPoints: [mainEntry],
@@ -109,42 +105,56 @@ try {
         })
       }
     });
-
-    // Pre-compress app.js and app.css with max Gzip level 9 for instant <1ms RAM serving on hard reloads
-    if (fs.existsSync(prebuiltAppJs)) {
-      const jsBuf = fs.readFileSync(prebuiltAppJs);
-      const gzJs = zlib.gzipSync(jsBuf, { level: 9 });
-      fs.writeFileSync(prebuiltAppJs + '.gz', gzJs);
-      console.log(
-        `[sync-prebuilt] Built prebuilt/app.js (${Math.round(jsBuf.byteLength / 1024)}KB -> ${Math.round(
-          gzJs.byteLength / 1024
-        )}KB gzipped)`
-      );
-    }
-    if (fs.existsSync(prebuiltAppCss)) {
-      const cssBuf = fs.readFileSync(prebuiltAppCss);
-      const gzCss = zlib.gzipSync(cssBuf, { level: 9 });
-      fs.writeFileSync(prebuiltAppCss + '.gz', gzCss);
-    }
+    console.log('[sync-prebuilt] Built self-contained prebuilt/app.js');
   }
 } catch (err) {
   console.warn('[sync-prebuilt] app esbuild warning:', err && err.message);
 }
 
-// 4. Write clean prebuilt/index.html with parallel modulepreload for instant startup
+// 4. Write clean index.html and prebuilt/index.html with zero boot loader spinner
 const rootIndexHtml = path.join(__dirname, '..', 'index.html');
 const prebuiltIndexHtml = path.join(prebuiltDir, 'index.html');
-if (fs.existsSync(rootIndexHtml)) {
-  const rawHtml = fs.readFileSync(rootIndexHtml, 'utf8');
-  const prodHtml = rawHtml
-    .replace(
-      '</head>',
-      '    <link rel="stylesheet" href="/prebuilt/app.css" />\n    <link rel="modulepreload" href="/prebuilt/app.js" />\n  </head>'
-    )
-    .replace(
-      /<script type="module" src="\/src\/main\.tsx"[^>]*><\/script>/,
-      '<script type="module" src="/prebuilt/app.js"></script>'
-    );
-  fs.writeFileSync(prebuiltIndexHtml, prodHtml, 'utf8');
-  console.log('[sync-prebuilt] Wrote clean prebuilt/index.html');
-}
+const versionTag = 'v' + Math.floor(Date.now() / 1000).toString(36);
+const cleanHtml = `<!doctype html>
+<html lang="en" style="background-color: #080c14; color: #f1f5f9;">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#080c14" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VisualSky - Cold Outreach &amp; Lead Engine</title>
+    <meta name="description" content="Enterprise-grade AI lead intelligence, outbound SMTP relays, cold email sequences, multi-platform lead miner, unified inbox, and client CRM." />
+    <meta property="og:title" content="VisualSky - Cold Outreach &amp; Lead Engine" />
+    <meta property="og:description" content="Enterprise-grade AI lead intelligence, outbound SMTP relays, cold email sequences, multi-platform lead miner, unified inbox, and client CRM." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <style>
+      .vs-auth-popup-window {
+        width: 100% !important;
+        max-width: 420px !important;
+        max-height: 88vh !important;
+        overflow-y: auto !important;
+        margin: auto !important;
+        border-radius: 16px !important;
+      }
+      .vs-legal-popup-window {
+        width: 100% !important;
+        max-width: 460px !important;
+        max-height: 82vh !important;
+        margin: auto !important;
+        border-radius: 16px !important;
+      }
+    </style>
+    <link rel="stylesheet" href="/prebuilt/app.css?v=${versionTag}" />
+  </head>
+  <body style="background-color: #080c14; color: #f1f5f9; margin: 0; min-height: 100vh;">
+    <div id="root"></div>
+    <script type="module" src="/prebuilt/app.js?v=${versionTag}"></script>
+  </body>
+</html>
+`;
+
+fs.writeFileSync(rootIndexHtml, cleanHtml, 'utf8');
+fs.writeFileSync(prebuiltIndexHtml, cleanHtml, 'utf8');
+console.log('[sync-prebuilt] Wrote clean index.html & prebuilt/index.html (loader removed)');
