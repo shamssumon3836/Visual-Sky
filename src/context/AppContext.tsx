@@ -1285,6 +1285,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     currentUser
   ]);
 
+  const lastLocalMutationMsRef = useRef<number>(0);
+  const syncedUpdatedAtRef = useRef<string>((() => {
+    try {
+      return localStorage.getItem('visualsky_workspace_updated_at') || '';
+    } catch {
+      return '';
+    }
+  })());
+  const isCrossDevicePollingRef = useRef<boolean>(false);
+
+  const markLocalWorkspaceMutated = (): string => {
+    const nowIso = new Date().toISOString();
+    lastLocalMutationMsRef.current = Date.now();
+    syncedUpdatedAtRef.current = nowIso;
+    try {
+      localStorage.setItem('visualsky_workspace_updated_at', nowIso);
+    } catch {}
+    return nowIso;
+  };
+
   // Silent background workspace save to database (never triggers UI re-renders or page refreshes)
   const saveWorkspaceToDatabase = async (): Promise<boolean> => {
     if (!isAuthenticated || !currentUser?.email) return false;
@@ -1292,6 +1312,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const cleanEmail = currentUser.email.trim().toLowerCase();
     const cleanUserId = (currentUser.id || currentUser.supabaseId || '').trim();
+    const nowIso = markLocalWorkspaceMutated();
 
     try {
       const permDeleted = getPermanentlyDeletedSet();
@@ -1325,6 +1346,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         permanentlyDeletedIds: deletedThreadIds,
         userDeletedCampaigns: userDeletedCampaignsRef.current,
         sentEmails: finalSent,
+        updatedAt: nowIso,
         userProfile: {
           quotaUsed: currentUser.quotaUsed,
           quotaLimit: currentUser.quotaLimit,
@@ -1344,6 +1366,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (res.success) {
+        if (res.updatedAt) {
+          syncedUpdatedAtRef.current = res.updatedAt;
+          try {
+            localStorage.setItem('visualsky_workspace_updated_at', res.updatedAt);
+          } catch {}
+        }
         loadedWorkspaceEmailRef.current = cleanEmail;
         loadedWorkspaceUserIdRef.current = cleanUserId;
         return true;
@@ -1357,6 +1385,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Direct Central Database resource persistence helper (Silent, Synchronous LocalStorage + Zero-Reload)
   const persistResourceDirectly = async (resource: string, items: any[]) => {
+    const nowIso = markLocalWorkspaceMutated();
+
     // 1. Immediately update in ref and localStorage synchronously so even an instant Hard Reload (Ctrl+Shift+R) sees the exact state
     (latestWorkspaceRef.current as any)[resource] = items;
     const storageKeyMap: Record<string, string> = {
@@ -1368,7 +1398,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       templateCategories: 'visualsky_tmpl_categories',
       threads: 'visualsky_threads',
       sentEmails: 'visualsky_sent_emails',
-      minedLeads: 'visualsky_mined_leads'
+      minedLeads: 'visualsky_mined_leads',
+      columnSettings: 'visualsky_cols'
     };
     const targetStorageKey = storageKeyMap[resource];
     if (targetStorageKey) {
@@ -1391,6 +1422,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         },
         body: JSON.stringify({
           items,
+          userId: cleanUserId,
+          updatedAt: nowIso,
           permanentlyDeletedIds: allDeletedIds,
           deletedThreadIds: allDeletedIds,
           userDeletedCampaigns: userDeletedCampaignsRef.current
@@ -1403,6 +1436,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         email: cleanEmail,
         data: {
           ...latestWorkspaceRef.current,
+          updatedAt: nowIso,
           deletedThreadIds: allDeletedIds,
           permanentlyDeletedIds: allDeletedIds,
           userDeletedCampaigns: userDeletedCampaignsRef.current,
@@ -1414,13 +1448,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Load user workspace once on login/initial mount without resetting active tab or resurrecting deleted items
-  const loadUserWorkspace = async (userEmail?: string, userId?: string, seedWorkspaceData?: any): Promise<boolean> => {
+  // Load user workspace on login, initial mount, or real-time cross-device background poll
+  const loadUserWorkspace = async (
+    userEmail?: string,
+    userId?: string,
+    seedWorkspaceData?: any,
+    isBackgroundPoll = false
+  ): Promise<boolean> => {
     const cleanEmail = (userEmail || currentUser?.email || '').trim().toLowerCase();
     const cleanUserId = (userId || currentUser?.id || currentUser?.supabaseId || '').trim();
     if (!cleanEmail && !cleanUserId) return false;
 
-    isHydratingRef.current = true;
+    // If this is a background cross-device poll and the user just mutated data on this device < 3.5s ago, skip so we never interrupt local edits
+    if (isBackgroundPoll) {
+      if (isCrossDevicePollingRef.current || isHydratingRef.current) return false;
+      if (Date.now() - lastLocalMutationMsRef.current < 3500) return false;
+      isCrossDevicePollingRef.current = true;
+    } else {
+      isHydratingRef.current = true;
+    }
 
     try {
       let result = await queryUserWorkspace({ userId: cleanUserId, email: cleanEmail });
@@ -1432,6 +1478,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (result.success && result.data && typeof result.data === 'object') {
         const data = result.data;
+
+        // If background polling and the server timestamp hasn't changed since our last sync, do nothing (zero re-render)
+        if (
+          isBackgroundPoll &&
+          data.updatedAt &&
+          syncedUpdatedAtRef.current &&
+          data.updatedAt === syncedUpdatedAtRef.current
+        ) {
+          return true;
+        }
+
+        // Re-check that no local mutation happened while the network fetch was in flight
+        if (isBackgroundPoll && Date.now() - lastLocalMutationMsRef.current < 3500) {
+          return false;
+        }
+
+        isHydratingRef.current = true;
 
         // 0. Sync all permanent deletion tombstones FIRST before hydrating any collection
         const incomingTombstones: string[] = [
@@ -1450,7 +1513,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         const permDeletedSet = getPermanentlyDeletedSet();
 
-        const mergeById = <T extends { id?: string; name?: string }>(remoteArr: T[], localArr: T[], demoSet: Set<string>): T[] => {
+        // Determine if server state is authoritative (always true on cross-device poll or when server updatedAt >= local updatedAt)
+        const remoteTimeMs = data.updatedAt ? new Date(data.updatedAt).getTime() : 0;
+        let localTimeMs = 0;
+        try {
+          const savedLocalTs = localStorage.getItem('visualsky_workspace_updated_at');
+          if (savedLocalTs) localTimeMs = new Date(savedLocalTs).getTime();
+        } catch {}
+
+        // Server is authoritative unless this exact browser made an offline/interrupted edit within the last 3 seconds that is newer than the server
+        const isLocalStrictlyNewer =
+          !isBackgroundPoll &&
+          localTimeMs > 0 &&
+          remoteTimeMs > 0 &&
+          localTimeMs > remoteTimeMs + 1500 &&
+          Date.now() - localTimeMs < 10000;
+
+        const resolveCollection = <T extends { id?: string; name?: string }>(
+          remoteArr: T[],
+          localArr: T[],
+          demoSet: Set<string>
+        ): T[] => {
           const isAllowed = (item: any) => {
             if (!item || !item.id) return false;
             const idStr = String(item.id);
@@ -1459,27 +1542,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return true;
           };
           const cleanRemote = (Array.isArray(remoteArr) ? remoteArr : []).filter(isAllowed);
+          if (!isLocalStrictlyNewer) {
+            // Server is authoritative across devices & browsers! Any deletion, trash move, or edit on another device is reflected 1:1.
+            return cleanRemote;
+          }
           const cleanLocal = (Array.isArray(localArr) ? localArr : []).filter(isAllowed);
-          if (cleanRemote.length === 0 && cleanLocal.length === 0) return [];
-          if (cleanRemote.length === 0) return cleanLocal;
-          if (cleanLocal.length === 0) return cleanRemote;
-          const map = new Map<string, T>();
-          for (const item of cleanRemote) {
-            if (item && item.id) map.set(String(item.id), item);
-          }
-          for (const item of cleanLocal) {
-            if (item && item.id) {
-              const existing = map.get(String(item.id));
-              // Prefer local item state (e.g. if local moved item to trash or edited it)
-              map.set(String(item.id), existing ? { ...existing, ...item } : item);
-            }
-          }
-          return Array.from(map.values());
+          return cleanLocal;
         };
 
-        // 1. Leads Hydration with LocalStorage smart merge (strip legacy demo IDs & permanently deleted IDs)
+        // 1. Leads Hydration (Authoritative cross-device sync)
         if (Array.isArray(data.leads)) {
-          const liveLeads = mergeById(data.leads, latestWorkspaceRef.current.leads || [], DEMO_LEAD_IDS);
+          const liveLeads = resolveCollection(data.leads, latestWorkspaceRef.current.leads || [], DEMO_LEAD_IDS);
           setLeads(liveLeads);
           try { localStorage.setItem('visualsky_leads', JSON.stringify(liveLeads)); } catch {}
           (latestWorkspaceRef.current as any).leads = liveLeads;
@@ -1498,25 +1571,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (latestWorkspaceRef.current as any).leadTags = cleanTags;
         }
         
-        // 3. SMTP Accounts Hydration (strip legacy demo IDs & permanently deleted IDs)
+        // 3. SMTP Accounts Hydration (Authoritative cross-device sync)
         if (Array.isArray(data.smtpAccounts)) {
-          const liveSmtp = mergeById(data.smtpAccounts, latestWorkspaceRef.current.smtpAccounts || [], DEMO_SMTP_IDS);
+          const liveSmtp = resolveCollection(data.smtpAccounts, latestWorkspaceRef.current.smtpAccounts || [], DEMO_SMTP_IDS);
           setSmtpAccounts(liveSmtp);
           try { localStorage.setItem('visualsky_smtp', JSON.stringify(liveSmtp)); } catch {}
           (latestWorkspaceRef.current as any).smtpAccounts = liveSmtp;
         }
         
-        // 4. Campaigns Hydration (strip legacy demo IDs & permanently deleted IDs)
+        // 4. Campaigns Hydration (Authoritative cross-device sync)
         if (Array.isArray(data.campaigns)) {
-          const liveCampaigns = mergeById(data.campaigns, latestWorkspaceRef.current.campaigns || [], DEMO_CAMPAIGN_IDS);
+          const liveCampaigns = resolveCollection(data.campaigns, latestWorkspaceRef.current.campaigns || [], DEMO_CAMPAIGN_IDS);
           setCampaigns(liveCampaigns);
           try { localStorage.setItem('visualsky_campaigns', JSON.stringify(liveCampaigns)); } catch {}
           (latestWorkspaceRef.current as any).campaigns = liveCampaigns;
         }
         
-        // 5. Email Templates Hydration (respect empty array and permanently deleted templates)
+        // 5. Email Templates Hydration (Authoritative cross-device sync)
         if (Array.isArray(data.emailTemplates)) {
-          const liveTemplates = mergeById(data.emailTemplates, latestWorkspaceRef.current.emailTemplates || [], new Set());
+          const liveTemplates = resolveCollection(data.emailTemplates, latestWorkspaceRef.current.emailTemplates || [], new Set());
           setEmailTemplates(liveTemplates);
           try { localStorage.setItem('visualsky_templates', JSON.stringify(liveTemplates)); } catch {}
           (latestWorkspaceRef.current as any).emailTemplates = liveTemplates;
@@ -1532,25 +1605,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
         
-        // 7. Threads Hydration (strip legacy demo IDs and permanently deleted threads)
+        // 7. Threads Hydration (Authoritative cross-device sync)
         if (Array.isArray(data.threads)) {
-          const mergedThreads = mergeById(data.threads, latestWorkspaceRef.current.threads || [], DEMO_THREAD_IDS);
-          const liveThreads = sanitizeThreadsArray(mergedThreads);
+          const resolvedThreads = resolveCollection(data.threads, latestWorkspaceRef.current.threads || [], DEMO_THREAD_IDS);
+          const liveThreads = sanitizeThreadsArray(resolvedThreads);
           setThreads(liveThreads);
           try { localStorage.setItem('visualsky_threads', JSON.stringify(liveThreads)); } catch {}
           (latestWorkspaceRef.current as any).threads = liveThreads;
         }
         
-        // 8. Sent Emails Hydration (strip legacy demo IDs & permanently deleted logs)
+        // 8. Sent Emails Hydration (Authoritative cross-device sync)
         if (Array.isArray(data.sentEmails)) {
-          const liveSent = mergeById(data.sentEmails, latestWorkspaceRef.current.sentEmails || [], DEMO_SENT_IDS);
+          const liveSent = resolveCollection(data.sentEmails, latestWorkspaceRef.current.sentEmails || [], DEMO_SENT_IDS);
           setSentEmails(liveSent);
           try { localStorage.setItem('visualsky_sent_emails', JSON.stringify(liveSent)); } catch {}
           (latestWorkspaceRef.current as any).sentEmails = liveSent;
         }
         
         // 9. Mined Leads Hydration
-        if (Array.isArray(data.minedLeads) && data.minedLeads.length > 0) {
+        if (Array.isArray(data.minedLeads)) {
           const cleanMined = data.minedLeads.filter((m: any) => m && !permDeletedSet.has(String(m.id)));
           setMinedLeads(cleanMined);
           try { localStorage.setItem('visualsky_mined_leads', JSON.stringify(cleanMined)); } catch {}
@@ -1560,6 +1633,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // 10. Column Settings Hydration
         if (Array.isArray(data.columnSettings) && data.columnSettings.length > 0) {
           setColumnSettings(data.columnSettings);
+          try { localStorage.setItem('visualsky_cols', JSON.stringify(data.columnSettings)); } catch {}
           (latestWorkspaceRef.current as any).columnSettings = data.columnSettings;
         }
         
@@ -1581,12 +1655,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setCurrentUserState(prev => ({ ...prev, ...data.userProfile }));
         }
 
+        if (data.updatedAt) {
+          syncedUpdatedAtRef.current = data.updatedAt;
+          if (!isLocalStrictlyNewer) {
+            try {
+              localStorage.setItem('visualsky_workspace_updated_at', data.updatedAt);
+            } catch {}
+          }
+        }
+
         loadedWorkspaceEmailRef.current = cleanEmail;
         loadedWorkspaceUserIdRef.current = cleanUserId;
 
-        // If local browser has permanent deletion tombstones not yet stored on server, persist immediately
+        // If local browser had a strictly newer interrupted edit or tombstones not yet on server, push to server
         const remotePermCount = Array.isArray(data.permanentlyDeletedIds) ? data.permanentlyDeletedIds.length : 0;
-        if (permDeletedSet.size > remotePermCount) {
+        if (isLocalStrictlyNewer || permDeletedSet.size > remotePermCount) {
           setTimeout(() => {
             saveWorkspaceToDatabase().catch(() => {});
           }, 300);
@@ -1594,29 +1677,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         return true;
       } else {
-        // If remote has no record yet, only persist if local has genuine content
-        const hasLocalData = (latestWorkspaceRef.current.leads && latestWorkspaceRef.current.leads.length > 0) ||
-                             (latestWorkspaceRef.current.campaigns && latestWorkspaceRef.current.campaigns.length > 0) ||
-                             (latestWorkspaceRef.current.smtpAccounts && latestWorkspaceRef.current.smtpAccounts.length > 0);
-        if (hasLocalData) {
-          await persistUserWorkspace({
-            userId: cleanUserId,
-            email: cleanEmail,
-            data: latestWorkspaceRef.current
-          });
+        if (!isBackgroundPoll) {
+          // If remote has no record yet, only persist if local has genuine content
+          const hasLocalData = (latestWorkspaceRef.current.leads && latestWorkspaceRef.current.leads.length > 0) ||
+                               (latestWorkspaceRef.current.campaigns && latestWorkspaceRef.current.campaigns.length > 0) ||
+                               (latestWorkspaceRef.current.smtpAccounts && latestWorkspaceRef.current.smtpAccounts.length > 0);
+          if (hasLocalData) {
+            await persistUserWorkspace({
+              userId: cleanUserId,
+              email: cleanEmail,
+              data: latestWorkspaceRef.current
+            });
+          }
+          loadedWorkspaceEmailRef.current = cleanEmail;
+          loadedWorkspaceUserIdRef.current = cleanUserId;
         }
-
-        loadedWorkspaceEmailRef.current = cleanEmail;
-        loadedWorkspaceUserIdRef.current = cleanUserId;
         return true;
       }
     } catch (err) {
-      console.warn('Server workspace sync error:', err);
+      if (!isBackgroundPoll) {
+        console.warn('Server workspace sync error:', err);
+      }
       return false;
     } finally {
+      isCrossDevicePollingRef.current = false;
       setTimeout(() => {
         isHydratingRef.current = false;
-        setHydrationTick(t => t + 1);
+        if (!isBackgroundPoll) {
+          setHydrationTick(t => t + 1);
+        }
       }, 250);
     }
   };
@@ -1691,31 +1780,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     hasMountedStorageRef.current = true;
   }, []);
 
-  // Silent debounced database workspace persistence (never flips UI state or reloads page)
+  // Real-Time Cross-Device & Cross-Browser Live Workspace Synchronization Poller
+  // Whenever the same account deletes, trashes, restores, or edits data on another device or browser,
+  // this poller automatically syncs the changes within 2.5 seconds (and immediately on tab focus/visibility)!
   useEffect(() => {
     if (!isAuthenticated || !currentUser?.email) return;
-    if (isHydratingRef.current) return;
 
-    const timer = setTimeout(() => {
-      saveWorkspaceToDatabase();
-    }, 1500);
+    const cleanEmail = currentUser.email.trim().toLowerCase();
+    const cleanUserId = (currentUser.id || currentUser.supabaseId || '').trim();
 
-    return () => clearTimeout(timer);
-  }, [
-    isAuthenticated,
-    currentUser?.email,
-    leads,
-    leadTags,
-    smtpAccounts,
-    campaigns,
-    emailTemplates,
-    templateCategories,
-    threads,
-    sentEmails,
-    minedLeads,
-    columnSettings,
-    notificationSettings
-  ]);
+    const syncFromRemote = () => {
+      if (Date.now() - lastLocalMutationMsRef.current < 3500) return;
+      loadUserWorkspace(cleanEmail, cleanUserId, undefined, true).catch(() => {});
+      fetch(`/api/users/registry?_t=${Date.now()}`, { cache: 'no-store' })
+        .then(r => safeParseResponse(r, 'Registry poll failed'))
+        .then(parsed => {
+          const d = parsed.data || {};
+          if (parsed.ok && d.success && Array.isArray(d.users)) {
+            const cleanServerUsers = filterLiveUsersClient(d.users);
+            setAllUsers(cleanServerUsers);
+            try {
+              localStorage.setItem('visualsky_users', JSON.stringify(cleanServerUsers));
+            } catch {}
+          }
+        })
+        .catch(() => {});
+    };
+
+    const pollTimer = setInterval(syncFromRemote, 2500);
+
+    const handleFocusOrVisible = () => {
+      if (document.visibilityState === 'visible') {
+        syncFromRemote();
+      }
+    };
+
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (!e.key || !e.newValue) return;
+      try {
+        if (e.key === 'visualsky_leads') setLeads(JSON.parse(e.newValue));
+        else if (e.key === 'visualsky_tags') setLeadTags(JSON.parse(e.newValue));
+        else if (e.key === 'visualsky_campaigns') setCampaigns(JSON.parse(e.newValue));
+        else if (e.key === 'visualsky_smtp') setSmtpAccounts(JSON.parse(e.newValue));
+        else if (e.key === 'visualsky_templates') setEmailTemplates(JSON.parse(e.newValue));
+        else if (e.key === 'visualsky_tmpl_categories') setTemplateCategories(JSON.parse(e.newValue));
+        else if (e.key === 'visualsky_threads') setThreads(JSON.parse(e.newValue));
+        else if (e.key === 'visualsky_sent_emails') setSentEmails(JSON.parse(e.newValue));
+        else if (e.key === 'visualsky_drive_storage_settings') setDriveStorageSettings(JSON.parse(e.newValue));
+      } catch {}
+    };
+
+    window.addEventListener('focus', handleFocusOrVisible);
+    document.addEventListener('visibilitychange', handleFocusOrVisible);
+    window.addEventListener('storage', handleStorageEvent);
+
+    return () => {
+      clearInterval(pollTimer);
+      window.removeEventListener('focus', handleFocusOrVisible);
+      document.removeEventListener('visibilitychange', handleFocusOrVisible);
+      window.removeEventListener('storage', handleStorageEvent);
+    };
+  }, [isAuthenticated, currentUser?.email, currentUser?.id, currentUser?.supabaseId]);
 
   // Play notification audio using Web Audio API or custom audio
   const playNotificationSound = (overridePreset?: string) => {
@@ -1729,7 +1854,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateNotificationSettings = (updates: Partial<NotificationSettings>) => {
-    setNotificationSettings(prev => ({ ...prev, ...updates }));
+    setNotificationSettings(prev => {
+      const next = { ...prev, ...updates };
+      (latestWorkspaceRef.current as any).notificationSettings = next;
+      setTimeout(() => {
+        saveWorkspaceToDatabase().catch(() => {});
+      }, 100);
+      return next;
+    });
     if (updates.soundEnabled !== undefined) {
       setSoundEnabled(updates.soundEnabled);
     }
@@ -1916,7 +2048,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const unreadNotificationCount = notifications.filter(n => !n.isRead).length;
 
   const toggleColumnSetting = (id: string) => {
-    setColumnSettings(prev => prev.map(c => c.id === id ? { ...c, visible: !c.visible } : c));
+    setColumnSettings(prev => {
+      const next = prev.map(c => c.id === id ? { ...c, visible: !c.visible } : c);
+      persistResourceDirectly('columnSettings', next);
+      return next;
+    });
   };
 
   // Lead Tag Methods
@@ -3217,7 +3353,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (smtpChanged) {
         setSmtpAccounts(nextSmtps);
         (latestWorkspaceRef.current as any).smtpAccounts = nextSmtps;
-        persistResourceDirectly('smtpAccounts', nextSmtps);
       }
     }
 
@@ -3471,7 +3606,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (campChanged) {
         setCampaigns(updatedCampaigns);
         (latestWorkspaceRef.current as any).campaigns = updatedCampaigns;
-        persistResourceDirectly('campaigns', updatedCampaigns);
       }
     }
   }, [sentEmails.length, smtpAccounts.length, campaigns.length, leads.length, threads.length, hydrationTick]);
@@ -4565,7 +4699,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateUserPermissions = (userId: string, permissions: any) => {
-    setAllUsers(prev => prev.map(u => u.id === userId ? { ...u, permissions: { ...u.permissions, ...permissions } } : u));
+    setAllUsers(prev => {
+      const target = prev.find(u => u.id === userId);
+      const next = prev.map(u => u.id === userId ? { ...u, permissions: { ...u.permissions, ...permissions } } : u);
+      try { localStorage.setItem('visualsky_users', JSON.stringify(next)); } catch {}
+      fetch('/api/users/admin-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, email: target?.email, updates: { permissions } })
+      }).catch(() => {});
+      return next;
+    });
   };
 
   const resetUserPasswordByEmail = (email: string, newPass: string): boolean => {
@@ -4670,7 +4814,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteUserAccount = (userId: string) => {
-    setAllUsers(prev => prev.filter(u => u.id !== userId));
+    setAllUsers(prev => {
+      const target = prev.find(u => u.id === userId);
+      const next = prev.filter(u => u.id !== userId);
+      try { localStorage.setItem('visualsky_users', JSON.stringify(next)); } catch {}
+      fetch('/api/users/admin-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, email: target?.email, deleteAccount: true })
+      }).catch(() => {});
+      return next;
+    });
     addNotification({
       title: 'Customer Account Deleted 🗑️',
       message: 'The customer account and all portal access have been completely removed.',

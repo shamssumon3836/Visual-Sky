@@ -3047,38 +3047,63 @@ function getDefaultWorkspaceForUser(email: string, userId?: string): any {
   };
 }
 
-function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null {
-  try {
-    const candidates = [primaryId, secondaryId].filter(Boolean) as string[];
-    
-    // Also resolve email <-> userId from users registry
-    let existingUsers: any[] = [];
-    if (fs.existsSync(USERS_LIST_FILE)) {
-      try {
-        existingUsers = JSON.parse(fs.readFileSync(USERS_LIST_FILE, 'utf-8'));
-      } catch {}
-    }
+function resolveUserAliasCandidates(primaryId?: string, secondaryId?: string, extraEmail?: string, extraUserId?: string): string[] {
+  const rawList = [primaryId, secondaryId, extraEmail, extraUserId].filter(Boolean) as string[];
+  const candidates = new Set<string>();
 
-    for (const id of [primaryId, secondaryId].filter(Boolean) as string[]) {
-      const clean = id.trim().toLowerCase();
-      const matched = existingUsers.find(
-        (u: any) =>
-          u.email?.toLowerCase() === clean ||
-          u.id?.toLowerCase() === clean ||
-          u.supabaseId?.toLowerCase() === clean
-      );
-      if (matched) {
-        if (matched.id) candidates.push(matched.id);
-        if (matched.email) candidates.push(matched.email);
-        if (matched.supabaseId) candidates.push(matched.supabaseId);
+  let existingUsers: any[] = [];
+  if (fs.existsSync(USERS_LIST_FILE)) {
+    try {
+      existingUsers = JSON.parse(fs.readFileSync(USERS_LIST_FILE, 'utf-8'));
+    } catch {}
+  }
+
+  for (const item of rawList) {
+    const clean = String(item).trim().toLowerCase();
+    if (!clean) continue;
+    candidates.add(clean);
+
+    if (clean.includes('@')) {
+      candidates.add(`usr-${clean.replace(/[^a-z0-9]/g, '-')}`);
+      if (clean === 'rafiqulvisualsky@gmail.com' || clean === 'sojibdaridro123@gmail.com') {
+        candidates.add('user-agency-1');
       }
     }
 
-    const uniqueCandidates = Array.from(new Set(candidates.map(c => c.trim().toLowerCase())));
+    const matched = existingUsers.find(
+      (u: any) =>
+        u.email?.toLowerCase() === clean ||
+        u.id?.toLowerCase() === clean ||
+        u.supabaseId?.toLowerCase() === clean ||
+        (u.email && `usr-${String(u.email).toLowerCase().replace(/[^a-z0-9]/g, '-')}` === clean)
+    );
+    if (matched) {
+      if (matched.id) candidates.add(String(matched.id).toLowerCase());
+      if (matched.email) {
+        const em = String(matched.email).toLowerCase();
+        candidates.add(em);
+        candidates.add(`usr-${em.replace(/[^a-z0-9]/g, '-')}`);
+        if (matched.role === 'agency' || matched.isOwner) {
+          candidates.add('user-agency-1');
+        }
+      }
+      if (matched.supabaseId) candidates.add(String(matched.supabaseId).toLowerCase());
+    }
+  }
 
-    // Check all workspace_{id}.json and user_{email}.json files and consolidate
-    let mergedWorkspace: any = null;
-    let newestTime = 0;
+  return Array.from(candidates);
+}
+
+function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null {
+  try {
+    const uniqueCandidates = resolveUserAliasCandidates(primaryId, secondaryId);
+
+    // Check all workspace_{id}.json and user_{email}.json files and pick the newest updatedAt record while unioning tombstones
+    let newestWorkspace: any = null;
+    let newestTime = -1;
+    const allPermDeleted = new Set<string>();
+    const allThreadDeleted = new Set<string>();
+    let anyUserDeletedCampaigns = false;
 
     for (const cand of uniqueCandidates) {
       const pathsToCheck = [
@@ -3092,18 +3117,37 @@ function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null
             const content = fs.readFileSync(p, 'utf-8');
             const parsed = JSON.parse(content);
             if (parsed && typeof parsed === 'object') {
+              if (Array.isArray(parsed.permanentlyDeletedIds)) {
+                for (const id of parsed.permanentlyDeletedIds) if (id) allPermDeleted.add(String(id));
+              }
+              if (Array.isArray(parsed.deletedThreadIds)) {
+                for (const id of parsed.deletedThreadIds) if (id) allThreadDeleted.add(String(id));
+              }
+              if (parsed.userDeletedCampaigns) {
+                anyUserDeletedCampaigns = true;
+              }
               const parsedTime = parsed.updatedAt ? new Date(parsed.updatedAt).getTime() : stat.mtimeMs;
-              if (!mergedWorkspace || parsedTime >= newestTime) {
-                mergedWorkspace = mergedWorkspace ? smartMergeWorkspaces(mergedWorkspace, parsed) : parsed;
-                newestTime = Math.max(newestTime, parsedTime || 0);
-              } else {
-                mergedWorkspace = smartMergeWorkspaces(parsed, mergedWorkspace);
+              const validTime = Number.isFinite(parsedTime) ? parsedTime : stat.mtimeMs;
+              if (!newestWorkspace || validTime >= newestTime) {
+                newestWorkspace = newestWorkspace ? smartMergeWorkspaces(newestWorkspace, parsed) : parsed;
+                newestTime = validTime;
               }
             }
           } catch {}
         }
       }
     }
+
+    if (newestWorkspace && typeof newestWorkspace === 'object') {
+      for (const id of allThreadDeleted) allPermDeleted.add(id);
+      newestWorkspace.permanentlyDeletedIds = Array.from(allPermDeleted).slice(-5000);
+      newestWorkspace.deletedThreadIds = Array.from(allThreadDeleted).slice(-4000);
+      if (anyUserDeletedCampaigns) {
+        newestWorkspace.userDeletedCampaigns = true;
+      }
+    }
+
+    const mergedWorkspace = newestWorkspace;
 
     // Strip legacy demo IDs if present so they never clobber real user collections
     const DEMO_IDS = new Set([
@@ -3155,30 +3199,9 @@ function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null
 
 function writeUserWorkspace(primaryId: string, data: any, secondaryId?: string): boolean {
   try {
-    const idsToWrite = new Set<string>();
-    if (primaryId) idsToWrite.add(primaryId.trim().toLowerCase());
-    if (secondaryId) idsToWrite.add(secondaryId.trim().toLowerCase());
-    if (data?.email) idsToWrite.add(String(data.email).trim().toLowerCase());
-    if (data?.userId) idsToWrite.add(String(data.userId).trim().toLowerCase());
-
-    // Also look up registry to add all aliases (e.g. user-agency-1 <-> rafiqulvisualsky@gmail.com)
-    if (fs.existsSync(USERS_LIST_FILE)) {
-      try {
-        const users = JSON.parse(fs.readFileSync(USERS_LIST_FILE, 'utf-8'));
-        for (const id of Array.from(idsToWrite)) {
-          const match = users.find((u: any) => 
-            u.email?.toLowerCase() === id || 
-            u.id?.toLowerCase() === id || 
-            u.supabaseId?.toLowerCase() === id
-          );
-          if (match) {
-            if (match.email) idsToWrite.add(match.email.toLowerCase());
-            if (match.id) idsToWrite.add(match.id.toLowerCase());
-            if (match.supabaseId) idsToWrite.add(match.supabaseId.toLowerCase());
-          }
-        }
-      } catch {}
-    }
+    const idsToWrite = new Set<string>(
+      resolveUserAliasCandidates(primaryId, secondaryId, data?.email, data?.userId)
+    );
 
     const dir = DATA_DIR;
     if (!fs.existsSync(dir)) {
@@ -3350,12 +3373,12 @@ app.post('/api/user-data/:email/resource/:resource', (req, res) => {
     if (!email) return res.status(400).json({ success: false, error: 'Email is required' });
     if (!resource) return res.status(400).json({ success: false, error: 'Resource name is required' });
 
-    const { items, permanentlyDeletedIds, deletedThreadIds, userDeletedCampaigns } = req.body;
+    const { items, permanentlyDeletedIds, deletedThreadIds, userDeletedCampaigns, updatedAt, userId } = req.body;
     if (!Array.isArray(items)) {
       return res.status(400).json({ success: false, error: `Payload 'items' must be an array for resource ${resource}` });
     }
 
-    const workspace = readUserWorkspace(email) || {
+    const workspace = readUserWorkspace(email, userId) || {
       leads: [],
       leadTags: [],
       campaigns: [],
@@ -3388,9 +3411,10 @@ app.post('/api/user-data/:email/resource/:resource', (req, res) => {
       return !mergedPermDeleted.has(idStr) && !mergedThreadDeleted.has(idStr) && !mergedThreadDeleted.has(`thread:${idStr}`);
     });
     workspace.email = email;
-    workspace.updatedAt = new Date().toISOString();
+    if (userId) workspace.userId = userId;
+    workspace.updatedAt = updatedAt || new Date().toISOString();
 
-    const written = writeUserWorkspace(email, workspace);
+    const written = writeUserWorkspace(email, workspace, userId || workspace.userId);
     if (!written) {
       return res.status(500).json({ success: false, error: `Failed persisting ${resource} to database` });
     }

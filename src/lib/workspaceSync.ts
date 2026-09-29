@@ -132,13 +132,16 @@ export async function queryUserWorkspace(identifiers: {
       bestData = {
         ...candidate,
         leads: filterAlive(candidate.leads),
+        leadTags: Array.isArray(candidate.leadTags) ? candidate.leadTags.filter(isAlive) : undefined,
         campaigns: filterAlive(candidate.campaigns),
         smtpAccounts: filterAlive(candidate.smtpAccounts),
         emailTemplates: Array.isArray(candidate.emailTemplates) ? filterAlive(candidate.emailTemplates) : undefined,
+        templateCategories: Array.isArray(candidate.templateCategories) ? candidate.templateCategories.filter(isAlive) : undefined,
         threads: filterAlive(candidate.threads).filter(
           (t: any) => !deletedSet.has(`thread:${String(t.id).replace(/-split-\d+$/, '')}`)
         ),
         sentEmails: filterAlive(candidate.sentEmails),
+        minedLeads: Array.isArray(candidate.minedLeads) ? filterAlive(candidate.minedLeads) : undefined,
         deletedThreadIds: Array.from(deletedSet),
         permanentlyDeletedIds: Array.from(deletedSet)
       };
@@ -147,7 +150,7 @@ export async function queryUserWorkspace(identifiers: {
       return;
     }
 
-    // Always prefer backend-db or the newer timestamp as authoritative so deleted items in older cloud backups never resurrect
+    // Always prefer backend-db or the newer timestamp as authoritative so deleted/changed items in older cloud backups never overwrite newer state
     const isNewer = source === 'backend-db' ? ts >= bestTimestamp - 5000 : ts > bestTimestamp;
     const primary = isNewer ? candidate : bestData;
     const secondary = isNewer ? bestData : candidate;
@@ -166,7 +169,11 @@ export async function queryUserWorkspace(identifiers: {
       ...secondary,
       ...primary,
       leads: pickAuthoritative(primary.leads, secondary.leads),
-      leadTags: mergeArraysById(primary.leadTags, secondary.leadTags, 'name'),
+      leadTags: Array.isArray(primary.leadTags)
+        ? primary.leadTags.filter(isAlive)
+        : Array.isArray(secondary.leadTags)
+        ? secondary.leadTags.filter(isAlive)
+        : undefined,
       campaigns: pickAuthoritative(primary.campaigns, secondary.campaigns),
       smtpAccounts: pickAuthoritative(primary.smtpAccounts, secondary.smtpAccounts),
       emailTemplates: Array.isArray(primary.emailTemplates)
@@ -174,13 +181,17 @@ export async function queryUserWorkspace(identifiers: {
         : Array.isArray(secondary.emailTemplates)
         ? filterAlive(secondary.emailTemplates)
         : undefined,
-      templateCategories: mergeArraysById(primary.templateCategories, secondary.templateCategories, 'name'),
+      templateCategories: Array.isArray(primary.templateCategories)
+        ? primary.templateCategories.filter(isAlive)
+        : Array.isArray(secondary.templateCategories)
+        ? secondary.templateCategories.filter(isAlive)
+        : undefined,
       threads: cleanThreads,
       deletedThreadIds: Array.from(deletedSet),
       permanentlyDeletedIds: Array.from(deletedSet),
       userDeletedCampaigns: Boolean(primary.userDeletedCampaigns || secondary.userDeletedCampaigns),
       sentEmails: pickAuthoritative(primary.sentEmails, secondary.sentEmails),
-      minedLeads: mergeArraysById(primary.minedLeads, secondary.minedLeads, 'email').filter(isAlive),
+      minedLeads: pickAuthoritative(primary.minedLeads, secondary.minedLeads),
       userProfile: {
         ...(secondary.userProfile || {}),
         ...(primary.userProfile || {})
@@ -208,9 +219,11 @@ export async function queryUserWorkspace(identifiers: {
         const queryParams = new URLSearchParams();
         if (cleanUserId) queryParams.set('userId', cleanUserId);
         if (cleanEmail) queryParams.set('email', cleanEmail);
+        queryParams.set('_t', String(Date.now()));
 
         const fetchUrl = `/api/user-data/fetch?${queryParams.toString()}`;
         const res = await fetch(fetchUrl, {
+          cache: 'no-store',
           headers: {
             'Cache-Control': 'no-cache, no-store, must-revalidate',
             'Pragma': 'no-cache',
@@ -227,7 +240,8 @@ export async function queryUserWorkspace(identifiers: {
 
         const fallbackId = cleanUserId || cleanEmail;
         if (fallbackId) {
-          const res2 = await fetch(`/api/user-data/${encodeURIComponent(fallbackId)}`, {
+          const res2 = await fetch(`/api/user-data/${encodeURIComponent(fallbackId)}?_t=${Date.now()}`, {
+            cache: 'no-store',
             headers: {
               'Cache-Control': 'no-cache, no-store, must-revalidate',
               'Pragma': 'no-cache',
@@ -258,7 +272,10 @@ export async function queryUserWorkspace(identifiers: {
           query = query.ilike('email', cleanEmail);
         }
 
-        const { data: supaRows, error: supaErr } = await withTimeout(query.limit(1) as any, 2000) as any;
+        const { data: supaRows, error: supaErr } = await withTimeout(
+          query.order('updated_at', { ascending: false }).limit(1) as any,
+          2000
+        ) as any;
         if (!supaErr && Array.isArray(supaRows) && supaRows.length > 0 && supaRows[0]?.data) {
           const raw = supaRows[0].data;
           const workspaceObj = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -296,7 +313,7 @@ export async function persistUserWorkspace(params: {
     return { success: false, error: 'User identifier required for persistence' };
   }
 
-  const nowIso = new Date().toISOString();
+  const nowIso = data.updatedAt || new Date().toISOString();
   const payloadToSave: WorkspaceData = {
     ...data,
     userId: cleanUserId,
