@@ -2656,6 +2656,9 @@ function smartMergeWorkspaces(existing: any, incoming: any): any {
   const isNotDeleted = (item: any) => {
     if (!item || !item.id) return false;
     const idStr = String(item.id);
+    if (idStr.startsWith('camp-live-') || idStr.startsWith('camp-restored-')) {
+      return false;
+    }
     if (permanentlyDeletedIds.has(idStr) || deletedThreadIds.has(idStr) || deletedThreadIds.has(`thread:${idStr}`)) {
       return false;
     }
@@ -2685,17 +2688,17 @@ function smartMergeWorkspaces(existing: any, incoming: any): any {
     ...e,
     ...inc,
     leads: pickCollection(inc.leads, e.leads),
-    leadTags: Array.isArray(inc.leadTags) ? inc.leadTags : (Array.isArray(e.leadTags) ? e.leadTags : []),
+    leadTags: (Array.isArray(inc.leadTags) ? inc.leadTags : (Array.isArray(e.leadTags) ? e.leadTags : [])).filter(isNotDeleted),
     campaigns: pickCollection(inc.campaigns, e.campaigns),
     smtpAccounts: pickCollection(inc.smtpAccounts, e.smtpAccounts),
     emailTemplates: pickCollection(inc.emailTemplates, e.emailTemplates),
-    templateCategories: Array.isArray(inc.templateCategories) ? inc.templateCategories : (Array.isArray(e.templateCategories) ? e.templateCategories : []),
+    templateCategories: (Array.isArray(inc.templateCategories) ? inc.templateCategories : (Array.isArray(e.templateCategories) ? e.templateCategories : [])).filter(isNotDeleted),
     threads: cleanThreads,
     deletedThreadIds: Array.from(deletedThreadIds).slice(-4000),
     permanentlyDeletedIds: Array.from(permanentlyDeletedIds).slice(-5000),
     userDeletedCampaigns: Boolean(inc.userDeletedCampaigns ?? e.userDeletedCampaigns),
     sentEmails: pickCollection(inc.sentEmails, e.sentEmails),
-    minedLeads: Array.isArray(inc.minedLeads) ? inc.minedLeads : (Array.isArray(e.minedLeads) ? e.minedLeads : []),
+    minedLeads: (Array.isArray(inc.minedLeads) ? inc.minedLeads : (Array.isArray(e.minedLeads) ? e.minedLeads : [])).filter(isNotDeleted),
     columnSettings: Array.isArray(inc.columnSettings) && inc.columnSettings.length > 0 ? inc.columnSettings : (Array.isArray(e.columnSettings) && e.columnSettings.length > 0 ? e.columnSettings : []),
     notificationSettings: {
       ...(e.notificationSettings || {}),
@@ -2708,7 +2711,7 @@ function smartMergeWorkspaces(existing: any, incoming: any): any {
     userId: inc.userId || e.userId,
     email: inc.email || e.email,
     lastActiveTab: inc.lastActiveTab || e.lastActiveTab || 'dashboard',
-    updatedAt: new Date().toISOString()
+    updatedAt: inc.updatedAt || e.updatedAt || new Date().toISOString()
   };
 }
 
@@ -3166,6 +3169,7 @@ function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null
       const keepAlive = (i: any) => {
         if (!i || !i.id) return false;
         const idStr = String(i.id);
+        if (idStr.startsWith('camp-live-') || idStr.startsWith('camp-restored-')) return false;
         if (tombstones.has(idStr) || tombstones.has(`thread:${idStr}`)) return false;
         if (i.name && tombstones.has(`camp-name:${String(i.name).trim().toLowerCase()}`)) return false;
         return true;
@@ -3405,11 +3409,21 @@ app.post('/api/user-data/:email/resource/:resource', (req, res) => {
       workspace.userDeletedCampaigns = Boolean(userDeletedCampaigns || workspace.userDeletedCampaigns);
     }
 
-    workspace[resource] = items.filter((item: any) => {
+    const isAliveItem = (item: any) => {
       if (!item || !item.id) return false;
       const idStr = String(item.id);
-      return !mergedPermDeleted.has(idStr) && !mergedThreadDeleted.has(idStr) && !mergedThreadDeleted.has(`thread:${idStr}`);
-    });
+      if (idStr.startsWith('camp-live-') || idStr.startsWith('camp-restored-')) return false;
+      if (mergedPermDeleted.has(idStr) || mergedThreadDeleted.has(idStr) || mergedThreadDeleted.has(`thread:${idStr}`)) return false;
+      if (item.name && mergedPermDeleted.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) return false;
+      return true;
+    };
+
+    workspace[resource] = items.filter(isAliveItem);
+    for (const col of ['leads', 'campaigns', 'smtpAccounts', 'emailTemplates', 'threads', 'sentEmails', 'leadTags', 'templateCategories', 'minedLeads']) {
+      if (Array.isArray(workspace[col])) {
+        workspace[col] = workspace[col].filter(isAliveItem);
+      }
+    }
     workspace.email = email;
     if (userId) workspace.userId = userId;
     workspace.updatedAt = updatedAt || new Date().toISOString();
@@ -3423,7 +3437,7 @@ app.post('/api/user-data/:email/resource/:resource', (req, res) => {
       success: true,
       email,
       resource,
-      count: items.length,
+      count: workspace[resource].length,
       savedAt: workspace.updatedAt
     });
   } catch (err: any) {

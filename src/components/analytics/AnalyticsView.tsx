@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { DeliverabilityRadarChart } from './DeliverabilityRadarChart';
 import { OutboundVelocityCurve } from './OutboundVelocityCurve';
@@ -29,7 +29,12 @@ import {
 import confetti from 'canvas-confetti';
 
 export const AnalyticsView: React.FC = () => {
-  const { leads, campaigns, smtpAccounts, threads, sentEmails } = useApp();
+  const { leads: rawLeads, campaigns: rawCampaigns, smtpAccounts: rawSmtps, threads: rawThreads, sentEmails: rawSentEmails } = useApp();
+  const leads = useMemo(() => rawLeads.filter(l => l && !l.isTrash), [rawLeads]);
+  const campaigns = useMemo(() => rawCampaigns.filter(c => c && !c.isTrash), [rawCampaigns]);
+  const smtpAccounts = useMemo(() => rawSmtps.filter(s => s && !s.isTrash), [rawSmtps]);
+  const threads = useMemo(() => rawThreads.filter(t => t && !t.isTrash), [rawThreads]);
+  const sentEmails = useMemo(() => (rawSentEmails || []).filter(s => s && !s.isTrash), [rawSentEmails]);
   const [timeRange, setTimeRange] = useState<'7d' | '30d' | '90d' | 'all'>('30d');
   const [chartMode, setChartMode] = useState<'area' | 'bars'>('area');
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);

@@ -21,7 +21,7 @@ import {
 import confetti from 'canvas-confetti';
 import { audioEngine } from '../utils/audioPlayer';
 import { supabase, isSupabaseConfigured, signOutSupabase } from '../lib/supabase';
-import { queryUserWorkspace, persistUserWorkspace, WorkspaceData } from '../lib/workspaceSync';
+import { queryUserWorkspace, persistUserWorkspace, subscribeToUserWorkspace, WorkspaceData } from '../lib/workspaceSync';
 import { safeParseResponse } from '../lib/safeFetch';
 
 // Helper to calculate automatic 4-Week SMTP Warm-up Schedule limits:
@@ -1004,7 +1004,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
 
-  // Campaigns (Filter out legacy demo IDs and permanently deleted IDs)
+  // Campaigns (Filter out legacy demo IDs, ghost synthesized IDs, and permanently deleted IDs)
   const [campaigns, setCampaigns] = useState<Campaign[]>(() => {
     try {
       const permDeleted = getPermanentlyDeletedSet();
@@ -1015,6 +1015,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? parsed.filter(
               (c) =>
                 c &&
+                c.id &&
+                !String(c.id).startsWith('camp-live-') &&
+                !String(c.id).startsWith('camp-restored-') &&
                 !DEMO_CAMPAIGN_IDS.has(c.id) &&
                 !permDeleted.has(String(c.id)) &&
                 !permDeleted.has(`camp-name:${String(c.name || '').trim().toLowerCase()}`)
@@ -1296,7 +1299,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const isCrossDevicePollingRef = useRef<boolean>(false);
 
   const markLocalWorkspaceMutated = (): string => {
-    const nowIso = new Date().toISOString();
+    const lastKnownMs = syncedUpdatedAtRef.current ? new Date(syncedUpdatedAtRef.current).getTime() : 0;
+    const nextMs = Math.max(Date.now(), (Number.isFinite(lastKnownMs) ? lastKnownMs : 0) + 1);
+    const nowIso = new Date(nextMs).toISOString();
     lastLocalMutationMsRef.current = Date.now();
     syncedUpdatedAtRef.current = nowIso;
     try {
@@ -1321,6 +1326,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (item: any) =>
             item &&
             item.id &&
+            !String(item.id).startsWith('camp-live-') &&
+            !String(item.id).startsWith('camp-restored-') &&
             !permDeleted.has(String(item.id)) &&
             !(item.name && permDeleted.has(`camp-name:${String(item.name).trim().toLowerCase()}`))
         );
@@ -1414,38 +1421,213 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const allDeletedIds = Array.from(getPermanentlyDeletedSet());
 
     try {
-      await fetch(`/api/user-data/${encodeURIComponent(cleanEmail)}/resource/${encodeURIComponent(resource)}`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store'
-        },
-        body: JSON.stringify({
-          items,
-          userId: cleanUserId,
-          updatedAt: nowIso,
-          permanentlyDeletedIds: allDeletedIds,
-          deletedThreadIds: allDeletedIds,
-          userDeletedCampaigns: userDeletedCampaignsRef.current
-        })
-      });
+      const snapshotData = {
+        ...latestWorkspaceRef.current,
+        updatedAt: nowIso,
+        deletedThreadIds: allDeletedIds,
+        permanentlyDeletedIds: allDeletedIds,
+        userDeletedCampaigns: userDeletedCampaignsRef.current,
+        [resource]: items
+      };
 
-      // Also persist to full workspace record with the new items and tombstones included
-      await persistUserWorkspace({
-        userId: cleanUserId,
-        email: cleanEmail,
-        data: {
-          ...latestWorkspaceRef.current,
-          updatedAt: nowIso,
-          deletedThreadIds: allDeletedIds,
-          permanentlyDeletedIds: allDeletedIds,
-          userDeletedCampaigns: userDeletedCampaignsRef.current,
-          [resource]: items
-        }
-      });
+      await Promise.allSettled([
+        fetch(`/api/user-data/${encodeURIComponent(cleanEmail)}/resource/${encodeURIComponent(resource)}`, {
+          method: 'POST',
+          keepalive: true,
+          headers: { 
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store'
+          },
+          body: JSON.stringify({
+            items,
+            userId: cleanUserId,
+            updatedAt: nowIso,
+            permanentlyDeletedIds: allDeletedIds,
+            deletedThreadIds: allDeletedIds,
+            userDeletedCampaigns: userDeletedCampaignsRef.current
+          })
+        }),
+        persistUserWorkspace({
+          userId: cleanUserId,
+          email: cleanEmail,
+          data: snapshotData
+        })
+      ]);
     } catch (e) {
       console.warn(`Direct database persistence error for ${resource}:`, e);
     }
+  };
+
+  const applyRemoteWorkspaceSnapshot = (data: WorkspaceData, isBackgroundPoll: boolean): boolean => {
+    if (!data || typeof data !== 'object') return false;
+
+    if (
+      isBackgroundPoll &&
+      data.updatedAt &&
+      syncedUpdatedAtRef.current &&
+      data.updatedAt === syncedUpdatedAtRef.current
+    ) {
+      return true;
+    }
+
+    if (isBackgroundPoll && Date.now() - lastLocalMutationMsRef.current < 2500) {
+      return false;
+    }
+
+    isHydratingRef.current = true;
+
+    // 0. Sync all permanent deletion tombstones FIRST before hydrating any collection
+    const incomingTombstones: string[] = [
+      ...(Array.isArray(data.permanentlyDeletedIds) ? data.permanentlyDeletedIds.map(String) : []),
+      ...(Array.isArray(data.deletedThreadIds) ? data.deletedThreadIds.map(String) : [])
+    ];
+    if (incomingTombstones.length > 0) {
+      recordPermanentlyDeletedIds(incomingTombstones);
+    }
+    if (data.userDeletedCampaigns) {
+      userDeletedCampaignsRef.current = true;
+      try {
+        localStorage.setItem('visualsky_user_deleted_campaigns', 'true');
+      } catch {}
+    }
+
+    const permDeletedSet = getPermanentlyDeletedSet();
+
+    const resolveCollection = <T extends { id?: string; name?: string }>(
+      remoteArr: T[],
+      demoSet: Set<string>
+    ): T[] => {
+      const isAllowed = (item: any) => {
+        if (!item || !item.id) return false;
+        const idStr = String(item.id);
+        if (idStr.startsWith('camp-live-') || idStr.startsWith('camp-restored-')) return false;
+        if (demoSet.has(idStr) || permDeletedSet.has(idStr) || permDeletedSet.has(`thread:${idStr}`)) return false;
+        if (item.name && permDeletedSet.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) return false;
+        return true;
+      };
+      return (Array.isArray(remoteArr) ? remoteArr : []).filter(isAllowed);
+    };
+
+    // 1. Leads Hydration (Authoritative cross-device sync)
+    if (Array.isArray(data.leads)) {
+      const liveLeads = resolveCollection(data.leads, DEMO_LEAD_IDS);
+      setLeads(liveLeads);
+      try { localStorage.setItem('visualsky_leads', JSON.stringify(liveLeads)); } catch {}
+      (latestWorkspaceRef.current as any).leads = liveLeads;
+    }
+
+    // 2. Lead Tags Hydration (strip permanently deleted tags)
+    if (Array.isArray(data.leadTags)) {
+      const cleanTags = data.leadTags.filter(
+        (t: any) =>
+          t &&
+          !permDeletedSet.has(String(t.id)) &&
+          !(t.name && permDeletedSet.has(`tag-name:${String(t.name).trim().toLowerCase()}`))
+      );
+      setLeadTags(cleanTags);
+      try { localStorage.setItem('visualsky_tags', JSON.stringify(cleanTags)); } catch {}
+      (latestWorkspaceRef.current as any).leadTags = cleanTags;
+    }
+
+    // 3. SMTP Accounts Hydration (Authoritative cross-device sync)
+    if (Array.isArray(data.smtpAccounts)) {
+      const liveSmtp = resolveCollection(data.smtpAccounts, DEMO_SMTP_IDS);
+      setSmtpAccounts(liveSmtp);
+      try { localStorage.setItem('visualsky_smtp', JSON.stringify(liveSmtp)); } catch {}
+      (latestWorkspaceRef.current as any).smtpAccounts = liveSmtp;
+    }
+
+    // 4. Campaigns Hydration (Authoritative cross-device sync)
+    if (Array.isArray(data.campaigns)) {
+      const liveCampaigns = resolveCollection(data.campaigns, DEMO_CAMPAIGN_IDS);
+      setCampaigns(liveCampaigns);
+      try { localStorage.setItem('visualsky_campaigns', JSON.stringify(liveCampaigns)); } catch {}
+      (latestWorkspaceRef.current as any).campaigns = liveCampaigns;
+    }
+
+    // 5. Email Templates Hydration (Authoritative cross-device sync)
+    if (Array.isArray(data.emailTemplates)) {
+      const liveTemplates = resolveCollection(data.emailTemplates, new Set());
+      setEmailTemplates(liveTemplates);
+      try { localStorage.setItem('visualsky_templates', JSON.stringify(liveTemplates)); } catch {}
+      (latestWorkspaceRef.current as any).emailTemplates = liveTemplates;
+    }
+
+    // 6. Template Categories Hydration (strip permanently deleted categories)
+    if (Array.isArray(data.templateCategories)) {
+      const cleanCats = data.templateCategories.filter((c: any) => c && !permDeletedSet.has(String(c.id)));
+      if (cleanCats.length > 0) {
+        setTemplateCategories(cleanCats);
+        try { localStorage.setItem('visualsky_tmpl_categories', JSON.stringify(cleanCats)); } catch {}
+        (latestWorkspaceRef.current as any).templateCategories = cleanCats;
+      }
+    }
+
+    // 7. Threads Hydration (Authoritative cross-device sync)
+    if (Array.isArray(data.threads)) {
+      const resolvedThreads = resolveCollection(data.threads, DEMO_THREAD_IDS);
+      const liveThreads = sanitizeThreadsArray(resolvedThreads);
+      setThreads(liveThreads);
+      try { localStorage.setItem('visualsky_threads', JSON.stringify(liveThreads)); } catch {}
+      (latestWorkspaceRef.current as any).threads = liveThreads;
+    }
+
+    // 8. Sent Emails Hydration (Authoritative cross-device sync)
+    if (Array.isArray(data.sentEmails)) {
+      const liveSent = resolveCollection(data.sentEmails, DEMO_SENT_IDS);
+      setSentEmails(liveSent);
+      try { localStorage.setItem('visualsky_sent_emails', JSON.stringify(liveSent)); } catch {}
+      (latestWorkspaceRef.current as any).sentEmails = liveSent;
+    }
+
+    // 9. Mined Leads Hydration
+    if (Array.isArray(data.minedLeads)) {
+      const cleanMined = data.minedLeads.filter((m: any) => m && !permDeletedSet.has(String(m.id)));
+      setMinedLeads(cleanMined);
+      try { localStorage.setItem('visualsky_mined_leads', JSON.stringify(cleanMined)); } catch {}
+      (latestWorkspaceRef.current as any).minedLeads = cleanMined;
+    }
+
+    // 10. Column Settings Hydration
+    if (Array.isArray(data.columnSettings) && data.columnSettings.length > 0) {
+      setColumnSettings(data.columnSettings);
+      try { localStorage.setItem('visualsky_cols', JSON.stringify(data.columnSettings)); } catch {}
+      (latestWorkspaceRef.current as any).columnSettings = data.columnSettings;
+    }
+
+    // 11. Notification Settings & Google Drive Storage Settings Hydration
+    if (data.notificationSettings && typeof data.notificationSettings === 'object') {
+      setNotificationSettings(data.notificationSettings);
+      (latestWorkspaceRef.current as any).notificationSettings = data.notificationSettings;
+    }
+    if (data.driveStorageSettings && typeof data.driveStorageSettings === 'object') {
+      setDriveStorageSettings(data.driveStorageSettings);
+      try {
+        localStorage.setItem('visualsky_drive_storage_settings', JSON.stringify(data.driveStorageSettings));
+      } catch {}
+      (latestWorkspaceRef.current as any).driveStorageSettings = data.driveStorageSettings;
+    }
+
+    // 12. User Profile Hydration
+    if (data.userProfile && typeof data.userProfile === 'object') {
+      setCurrentUserState(prev => ({ ...prev, ...data.userProfile }));
+    }
+
+    if (data.updatedAt) {
+      syncedUpdatedAtRef.current = data.updatedAt;
+      try {
+        localStorage.setItem('visualsky_workspace_updated_at', data.updatedAt);
+      } catch {}
+    }
+
+    setTimeout(() => {
+      isHydratingRef.current = false;
+      if (!isBackgroundPoll) {
+        setHydrationTick(t => t + 1);
+      }
+    }, 180);
+
+    return true;
   };
 
   // Load user workspace on login, initial mount, or real-time cross-device background poll
@@ -1459,10 +1641,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cleanUserId = (userId || currentUser?.id || currentUser?.supabaseId || '').trim();
     if (!cleanEmail && !cleanUserId) return false;
 
-    // If this is a background cross-device poll and the user just mutated data on this device < 3.5s ago, skip so we never interrupt local edits
     if (isBackgroundPoll) {
       if (isCrossDevicePollingRef.current || isHydratingRef.current) return false;
-      if (Date.now() - lastLocalMutationMsRef.current < 3500) return false;
+      if (Date.now() - lastLocalMutationMsRef.current < 2500) return false;
       isCrossDevicePollingRef.current = true;
     } else {
       isHydratingRef.current = true;
@@ -1471,214 +1652,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       let result = await queryUserWorkspace({ userId: cleanUserId, email: cleanEmail });
       
-      // If no remote record but seed data was passed (e.g. from user_metadata)
       if ((!result.success || !result.data) && seedWorkspaceData && typeof seedWorkspaceData === 'object') {
         result = { success: true, data: seedWorkspaceData, source: 'supabase-auth' };
       }
 
       if (result.success && result.data && typeof result.data === 'object') {
-        const data = result.data;
-
-        // If background polling and the server timestamp hasn't changed since our last sync, do nothing (zero re-render)
-        if (
-          isBackgroundPoll &&
-          data.updatedAt &&
-          syncedUpdatedAtRef.current &&
-          data.updatedAt === syncedUpdatedAtRef.current
-        ) {
-          return true;
-        }
-
-        // Re-check that no local mutation happened while the network fetch was in flight
-        if (isBackgroundPoll && Date.now() - lastLocalMutationMsRef.current < 3500) {
-          return false;
-        }
-
-        isHydratingRef.current = true;
-
-        // 0. Sync all permanent deletion tombstones FIRST before hydrating any collection
-        const incomingTombstones: string[] = [
-          ...(Array.isArray(data.permanentlyDeletedIds) ? data.permanentlyDeletedIds.map(String) : []),
-          ...(Array.isArray(data.deletedThreadIds) ? data.deletedThreadIds.map(String) : [])
-        ];
-        if (incomingTombstones.length > 0) {
-          recordPermanentlyDeletedIds(incomingTombstones);
-        }
-        if (data.userDeletedCampaigns) {
-          userDeletedCampaignsRef.current = true;
-          try {
-            localStorage.setItem('visualsky_user_deleted_campaigns', 'true');
-          } catch {}
-        }
-
-        const permDeletedSet = getPermanentlyDeletedSet();
-
-        // Determine if server state is authoritative (always true on cross-device poll or when server updatedAt >= local updatedAt)
-        const remoteTimeMs = data.updatedAt ? new Date(data.updatedAt).getTime() : 0;
-        let localTimeMs = 0;
-        try {
-          const savedLocalTs = localStorage.getItem('visualsky_workspace_updated_at');
-          if (savedLocalTs) localTimeMs = new Date(savedLocalTs).getTime();
-        } catch {}
-
-        // Server is authoritative unless this exact browser made an offline/interrupted edit within the last 3 seconds that is newer than the server
-        const isLocalStrictlyNewer =
-          !isBackgroundPoll &&
-          localTimeMs > 0 &&
-          remoteTimeMs > 0 &&
-          localTimeMs > remoteTimeMs + 1500 &&
-          Date.now() - localTimeMs < 10000;
-
-        const resolveCollection = <T extends { id?: string; name?: string }>(
-          remoteArr: T[],
-          localArr: T[],
-          demoSet: Set<string>
-        ): T[] => {
-          const isAllowed = (item: any) => {
-            if (!item || !item.id) return false;
-            const idStr = String(item.id);
-            if (demoSet.has(idStr) || permDeletedSet.has(idStr) || permDeletedSet.has(`thread:${idStr}`)) return false;
-            if (item.name && permDeletedSet.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) return false;
-            return true;
-          };
-          const cleanRemote = (Array.isArray(remoteArr) ? remoteArr : []).filter(isAllowed);
-          if (!isLocalStrictlyNewer) {
-            // Server is authoritative across devices & browsers! Any deletion, trash move, or edit on another device is reflected 1:1.
-            return cleanRemote;
-          }
-          const cleanLocal = (Array.isArray(localArr) ? localArr : []).filter(isAllowed);
-          return cleanLocal;
-        };
-
-        // 1. Leads Hydration (Authoritative cross-device sync)
-        if (Array.isArray(data.leads)) {
-          const liveLeads = resolveCollection(data.leads, latestWorkspaceRef.current.leads || [], DEMO_LEAD_IDS);
-          setLeads(liveLeads);
-          try { localStorage.setItem('visualsky_leads', JSON.stringify(liveLeads)); } catch {}
-          (latestWorkspaceRef.current as any).leads = liveLeads;
-        }
-        
-        // 2. Lead Tags Hydration (strip permanently deleted tags)
-        if (Array.isArray(data.leadTags)) {
-          const cleanTags = data.leadTags.filter(
-            (t: any) =>
-              t &&
-              !permDeletedSet.has(String(t.id)) &&
-              !(t.name && permDeletedSet.has(`tag-name:${String(t.name).trim().toLowerCase()}`))
-          );
-          setLeadTags(cleanTags);
-          try { localStorage.setItem('visualsky_tags', JSON.stringify(cleanTags)); } catch {}
-          (latestWorkspaceRef.current as any).leadTags = cleanTags;
-        }
-        
-        // 3. SMTP Accounts Hydration (Authoritative cross-device sync)
-        if (Array.isArray(data.smtpAccounts)) {
-          const liveSmtp = resolveCollection(data.smtpAccounts, latestWorkspaceRef.current.smtpAccounts || [], DEMO_SMTP_IDS);
-          setSmtpAccounts(liveSmtp);
-          try { localStorage.setItem('visualsky_smtp', JSON.stringify(liveSmtp)); } catch {}
-          (latestWorkspaceRef.current as any).smtpAccounts = liveSmtp;
-        }
-        
-        // 4. Campaigns Hydration (Authoritative cross-device sync)
-        if (Array.isArray(data.campaigns)) {
-          const liveCampaigns = resolveCollection(data.campaigns, latestWorkspaceRef.current.campaigns || [], DEMO_CAMPAIGN_IDS);
-          setCampaigns(liveCampaigns);
-          try { localStorage.setItem('visualsky_campaigns', JSON.stringify(liveCampaigns)); } catch {}
-          (latestWorkspaceRef.current as any).campaigns = liveCampaigns;
-        }
-        
-        // 5. Email Templates Hydration (Authoritative cross-device sync)
-        if (Array.isArray(data.emailTemplates)) {
-          const liveTemplates = resolveCollection(data.emailTemplates, latestWorkspaceRef.current.emailTemplates || [], new Set());
-          setEmailTemplates(liveTemplates);
-          try { localStorage.setItem('visualsky_templates', JSON.stringify(liveTemplates)); } catch {}
-          (latestWorkspaceRef.current as any).emailTemplates = liveTemplates;
-        }
-        
-        // 6. Template Categories Hydration (strip permanently deleted categories)
-        if (Array.isArray(data.templateCategories)) {
-          const cleanCats = data.templateCategories.filter((c: any) => c && !permDeletedSet.has(String(c.id)));
-          if (cleanCats.length > 0) {
-            setTemplateCategories(cleanCats);
-            try { localStorage.setItem('visualsky_tmpl_categories', JSON.stringify(cleanCats)); } catch {}
-            (latestWorkspaceRef.current as any).templateCategories = cleanCats;
-          }
-        }
-        
-        // 7. Threads Hydration (Authoritative cross-device sync)
-        if (Array.isArray(data.threads)) {
-          const resolvedThreads = resolveCollection(data.threads, latestWorkspaceRef.current.threads || [], DEMO_THREAD_IDS);
-          const liveThreads = sanitizeThreadsArray(resolvedThreads);
-          setThreads(liveThreads);
-          try { localStorage.setItem('visualsky_threads', JSON.stringify(liveThreads)); } catch {}
-          (latestWorkspaceRef.current as any).threads = liveThreads;
-        }
-        
-        // 8. Sent Emails Hydration (Authoritative cross-device sync)
-        if (Array.isArray(data.sentEmails)) {
-          const liveSent = resolveCollection(data.sentEmails, latestWorkspaceRef.current.sentEmails || [], DEMO_SENT_IDS);
-          setSentEmails(liveSent);
-          try { localStorage.setItem('visualsky_sent_emails', JSON.stringify(liveSent)); } catch {}
-          (latestWorkspaceRef.current as any).sentEmails = liveSent;
-        }
-        
-        // 9. Mined Leads Hydration
-        if (Array.isArray(data.minedLeads)) {
-          const cleanMined = data.minedLeads.filter((m: any) => m && !permDeletedSet.has(String(m.id)));
-          setMinedLeads(cleanMined);
-          try { localStorage.setItem('visualsky_mined_leads', JSON.stringify(cleanMined)); } catch {}
-          (latestWorkspaceRef.current as any).minedLeads = cleanMined;
-        }
-        
-        // 10. Column Settings Hydration
-        if (Array.isArray(data.columnSettings) && data.columnSettings.length > 0) {
-          setColumnSettings(data.columnSettings);
-          try { localStorage.setItem('visualsky_cols', JSON.stringify(data.columnSettings)); } catch {}
-          (latestWorkspaceRef.current as any).columnSettings = data.columnSettings;
-        }
-        
-        // 11. Notification Settings & Google Drive Storage Settings Hydration
-        if (data.notificationSettings && typeof data.notificationSettings === 'object') {
-          setNotificationSettings(data.notificationSettings);
-          (latestWorkspaceRef.current as any).notificationSettings = data.notificationSettings;
-        }
-        if (data.driveStorageSettings && typeof data.driveStorageSettings === 'object') {
-          setDriveStorageSettings(data.driveStorageSettings);
-          try {
-            localStorage.setItem('visualsky_drive_storage_settings', JSON.stringify(data.driveStorageSettings));
-          } catch {}
-          (latestWorkspaceRef.current as any).driveStorageSettings = data.driveStorageSettings;
-        }
-        
-        // 12. User Profile Hydration
-        if (data.userProfile && typeof data.userProfile === 'object') {
-          setCurrentUserState(prev => ({ ...prev, ...data.userProfile }));
-        }
-
-        if (data.updatedAt) {
-          syncedUpdatedAtRef.current = data.updatedAt;
-          if (!isLocalStrictlyNewer) {
-            try {
-              localStorage.setItem('visualsky_workspace_updated_at', data.updatedAt);
-            } catch {}
-          }
-        }
-
+        const applied = applyRemoteWorkspaceSnapshot(result.data, isBackgroundPoll);
         loadedWorkspaceEmailRef.current = cleanEmail;
         loadedWorkspaceUserIdRef.current = cleanUserId;
-
-        // If local browser had a strictly newer interrupted edit or tombstones not yet on server, push to server
-        const remotePermCount = Array.isArray(data.permanentlyDeletedIds) ? data.permanentlyDeletedIds.length : 0;
-        if (isLocalStrictlyNewer || permDeletedSet.size > remotePermCount) {
-          setTimeout(() => {
-            saveWorkspaceToDatabase().catch(() => {});
-          }, 300);
-        }
-
-        return true;
+        return applied;
       } else {
         if (!isBackgroundPoll) {
-          // If remote has no record yet, only persist if local has genuine content
           const hasLocalData = (latestWorkspaceRef.current.leads && latestWorkspaceRef.current.leads.length > 0) ||
                                (latestWorkspaceRef.current.campaigns && latestWorkspaceRef.current.campaigns.length > 0) ||
                                (latestWorkspaceRef.current.smtpAccounts && latestWorkspaceRef.current.smtpAccounts.length > 0);
@@ -1703,10 +1687,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isCrossDevicePollingRef.current = false;
       setTimeout(() => {
         isHydratingRef.current = false;
-        if (!isBackgroundPoll) {
-          setHydrationTick(t => t + 1);
-        }
-      }, 250);
+      }, 200);
     }
   };
 
@@ -1790,7 +1771,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cleanUserId = (currentUser.id || currentUser.supabaseId || '').trim();
 
     const syncFromRemote = () => {
-      if (Date.now() - lastLocalMutationMsRef.current < 3500) return;
+      if (Date.now() - lastLocalMutationMsRef.current < 2500) return;
       loadUserWorkspace(cleanEmail, cleanUserId, undefined, true).catch(() => {});
       fetch(`/api/users/registry?_t=${Date.now()}`, { cache: 'no-store' })
         .then(r => safeParseResponse(r, 'Registry poll failed'))
@@ -1806,6 +1787,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         })
         .catch(() => {});
     };
+
+    // Real-time Firestore WebSocket listener (< 150ms cross-device & cross-browser sync)
+    const unsubscribeFirestore = subscribeToUserWorkspace(
+      { userId: cleanUserId, email: cleanEmail },
+      (remoteData) => {
+        if (Date.now() - lastLocalMutationMsRef.current < 2500) return;
+        applyRemoteWorkspaceSnapshot(remoteData, true);
+      }
+    );
 
     const pollTimer = setInterval(syncFromRemote, 2500);
 
@@ -1835,6 +1825,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     window.addEventListener('storage', handleStorageEvent);
 
     return () => {
+      unsubscribeFirestore();
       clearInterval(pollTimer);
       window.removeEventListener('focus', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);
@@ -2200,8 +2191,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateLead = (id: string, updates: Partial<Lead>) => {
     setLeads(prev => {
-      const base = prev.length >= (latestWorkspaceRef.current.leads?.length || 0) ? prev : (latestWorkspaceRef.current.leads || prev);
-      const updatedLeads = base.map(l => l.id === id ? { ...l, ...updates } : l);
+      const updatedLeads = prev.map(l => l.id === id ? { ...l, ...updates } : l);
       (latestWorkspaceRef.current as any).leads = updatedLeads;
       persistResourceDirectly('leads', updatedLeads);
       return updatedLeads;
@@ -2635,9 +2625,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const permanentDeleteThread = (threadId: string) => {
+    const toDelete = (latestWorkspaceRef.current.threads || threads).filter(t => t.id === threadId);
+    recordPermanentlyDeletedThreads(toDelete.length > 0 ? toDelete : [{ id: threadId } as EmailThread]);
     setThreads(prev => {
-      const toDelete = prev.filter(t => t.id === threadId);
-      recordPermanentlyDeletedThreads(toDelete);
       const next = prev.filter(t => t.id !== threadId);
       (latestWorkspaceRef.current as any).threads = next;
       persistResourceDirectly('threads', next);
@@ -2668,9 +2658,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const bulkPermanentDeleteThreads = (threadIds: string[]) => {
+    const toDelete = (latestWorkspaceRef.current.threads || threads).filter(t => threadIds.includes(t.id));
+    recordPermanentlyDeletedThreads(toDelete);
+    recordPermanentlyDeletedIds(threadIds.flatMap(id => [id, `thread:${id}`]));
     setThreads(prev => {
-      const toDelete = prev.filter(t => threadIds.includes(t.id));
-      recordPermanentlyDeletedThreads(toDelete);
       const next = prev.filter(t => !threadIds.includes(t.id));
       (latestWorkspaceRef.current as any).threads = next;
       persistResourceDirectly('threads', next);
@@ -2718,36 +2709,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateCampaign = (id: string, updates: Partial<Campaign>) => {
     setCampaigns(prev => {
-      const refList = latestWorkspaceRef.current.campaigns || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const exists = base.some(c => c && c.id === id);
-      let updated: Campaign[];
-      if (exists) {
-        updated = base.map(c => c.id === id ? { ...c, ...updates } : c);
-      } else {
-        const synthesized: Campaign = {
-          id,
-          name: updates.name || 'Live Outbound Sequence',
-          niche: updates.niche || 'B2B Outbound',
-          status: updates.status || 'running',
-          totalLeads: updates.totalLeads ?? (updates.leadIds?.length || 1),
-          sentCount: updates.sentCount ?? 0,
-          openCount: updates.openCount ?? 0,
-          replyCount: updates.replyCount ?? 0,
-          bounceCount: updates.bounceCount ?? 0,
-          leadIds: updates.leadIds || [],
-          steps: updates.steps || [],
-          sendMode: updates.sendMode || 'instant',
-          sendingIntervalSec: updates.sendingIntervalSec || 15,
-          assignedSmtpId: updates.assignedSmtpId || 'round_robin',
-          assignedSmtpIds: updates.assignedSmtpIds,
-          createdAt: new Date().toISOString().split('T')[0],
-          lastRunAt: new Date().toISOString().split('T')[0],
-          isTrash: false,
-          ...updates
-        };
-        updated = [synthesized, ...base];
-      }
+      const updated = prev.map(c => c.id === id ? { ...c, ...updates } : c);
       (latestWorkspaceRef.current as any).campaigns = updated;
       persistResourceDirectly('campaigns', updated);
       return updated;
@@ -2756,46 +2718,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const toggleCampaignStatus = (id: string) => {
     setCampaigns(prev => {
-      const refList = latestWorkspaceRef.current.campaigns || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const exists = base.some(c => c && c.id === id);
-      let updated: Campaign[];
-      if (exists) {
-        updated = base.map(c => {
-          if (c.id === id) {
-            const nextStatus: Campaign['status'] = c.status === 'running' ? 'paused' : 'running';
-            addNotification({
-              title: `Campaign ${nextStatus === 'running' ? 'Resumed ▶️' : 'Paused ⏸️'}`,
-              message: `Campaign "${c.name}" is now ${nextStatus}.`,
-              type: 'campaign',
-              linkTab: 'campaigns'
-            });
-            return { ...c, status: nextStatus };
-          }
-          return c;
-        });
-      } else {
-        const synthesized: Campaign = {
-          id,
-          name: 'Active Outbound Sequence',
-          niche: 'B2B Outbound',
-          status: 'paused',
-          totalLeads: leads.filter(l => !l.isTrash).length || 1,
-          sentCount: sentEmails.filter(s => !s.isTrash && s.status !== 'failed').length,
-          openCount: sentEmails.filter(s => !s.isTrash && (s.openCount || 0) > 0).length,
-          replyCount: sentEmails.filter(s => !s.isTrash && s.status === 'replied').length,
-          bounceCount: 0,
-          leadIds: leads.filter(l => !l.isTrash).map(l => l.id),
-          steps: [],
-          sendMode: 'instant',
-          sendingIntervalSec: 15,
-          assignedSmtpId: smtpAccounts.find(s => !s.isTrash)?.id || 'round_robin',
-          createdAt: new Date().toISOString().split('T')[0],
-          lastRunAt: new Date().toISOString().split('T')[0],
-          isTrash: false
-        };
-        updated = [synthesized, ...base];
-      }
+      const updated = prev.map(c => {
+        if (c.id === id) {
+          const nextStatus: Campaign['status'] = c.status === 'running' ? 'paused' : 'running';
+          addNotification({
+            title: `Campaign ${nextStatus === 'running' ? 'Resumed ▶️' : 'Paused ⏸️'}`,
+            message: `Campaign "${c.name}" is now ${nextStatus}.`,
+            type: 'campaign',
+            linkTab: 'campaigns'
+          });
+          return { ...c, status: nextStatus };
+        }
+        return c;
+      });
       (latestWorkspaceRef.current as any).campaigns = updated;
       persistResourceDirectly('campaigns', updated);
       return updated;
@@ -2856,9 +2791,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('visualsky_user_deleted_campaigns', 'true');
     } catch {}
     setCampaigns(prev => {
-      const refList = latestWorkspaceRef.current.campaigns || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const updated = base.map(c => c.id === id ? { ...c, isTrash: true, deletedAt: new Date().toISOString() } : c);
+      const updated = prev
+        .filter(c => c && !String(c.id).startsWith('camp-live-') && !String(c.id).startsWith('camp-restored-'))
+        .map(c => c.id === id ? { ...c, isTrash: true, deletedAt: new Date().toISOString() } : c);
       (latestWorkspaceRef.current as any).campaigns = updated;
       persistResourceDirectly('campaigns', updated);
       return updated;
@@ -2873,9 +2808,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const restoreCampaign = (id: string) => {
     setCampaigns(prev => {
-      const refList = latestWorkspaceRef.current.campaigns || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const updated = base.map(c => c.id === id ? { ...c, isTrash: false, deletedAt: undefined } : c);
+      const updated = prev.map(c => c.id === id ? { ...c, isTrash: false, deletedAt: undefined } : c);
       (latestWorkspaceRef.current as any).campaigns = updated;
       persistResourceDirectly('campaigns', updated);
       return updated;
@@ -2889,12 +2822,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const permanentDeleteCampaign = (id: string) => {
+    const sourceList = latestWorkspaceRef.current.campaigns || campaigns || [];
+    const toDelete = sourceList.filter(c => c && c.id === id);
+    recordCampaignTombstones(toDelete.length > 0 ? toDelete : [{ id } as Campaign]);
     setCampaigns(prev => {
-      const refList = latestWorkspaceRef.current.campaigns || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const toDelete = base.filter(c => c.id === id);
-      recordCampaignTombstones(toDelete.length > 0 ? toDelete : [{ id } as Campaign]);
-      const updated = base.filter(c => c.id !== id);
+      const permDeleted = getPermanentlyDeletedSet();
+      const updated = prev.filter(
+        c =>
+          c &&
+          c.id !== id &&
+          !permDeleted.has(String(c.id)) &&
+          !String(c.id).startsWith('camp-live-') &&
+          !String(c.id).startsWith('camp-restored-')
+      );
       (latestWorkspaceRef.current as any).campaigns = updated;
       persistResourceDirectly('campaigns', updated);
       return updated;
@@ -2916,10 +2856,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const bulkPermanentDeleteCampaigns = (ids: string[]) => {
+    const sourceList = latestWorkspaceRef.current.campaigns || campaigns || [];
+    const toDelete = sourceList.filter(c => c && ids.includes(c.id));
+    recordCampaignTombstones(toDelete);
+    recordPermanentlyDeletedIds(ids);
     setCampaigns(prev => {
-      const toDelete = prev.filter(c => ids.includes(c.id));
-      recordCampaignTombstones(toDelete);
-      const updated = prev.filter(c => !ids.includes(c.id));
+      const permDeleted = getPermanentlyDeletedSet();
+      const updated = prev.filter(
+        c =>
+          c &&
+          !ids.includes(c.id) &&
+          !permDeleted.has(String(c.id)) &&
+          !String(c.id).startsWith('camp-live-') &&
+          !String(c.id).startsWith('camp-restored-')
+      );
       (latestWorkspaceRef.current as any).campaigns = updated;
       persistResourceDirectly('campaigns', updated);
       return updated;
@@ -3022,15 +2972,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateEmailTemplate = (id: string, updates: Partial<EmailTemplate>) => {
-    const updatedTemplates = emailTemplates.map(t => t.id === id ? { ...t, ...updates } : t);
-    setEmailTemplates(updatedTemplates);
-    persistResourceDirectly('emailTemplates', updatedTemplates);
+    setEmailTemplates(prev => {
+      const updatedTemplates = prev.map(t => t.id === id ? { ...t, ...updates } : t);
+      (latestWorkspaceRef.current as any).emailTemplates = updatedTemplates;
+      persistResourceDirectly('emailTemplates', updatedTemplates);
+      return updatedTemplates;
+    });
   };
 
   const deleteEmailTemplate = (id: string) => {
-    const updatedTemplates = emailTemplates.map(t => t.id === id ? { ...t, isTrash: true, deletedAt: new Date().toISOString() } : t);
-    setEmailTemplates(updatedTemplates);
-    persistResourceDirectly('emailTemplates', updatedTemplates);
+    setEmailTemplates(prev => {
+      const updatedTemplates = prev.map(t => t.id === id ? { ...t, isTrash: true, deletedAt: new Date().toISOString() } : t);
+      (latestWorkspaceRef.current as any).emailTemplates = updatedTemplates;
+      persistResourceDirectly('emailTemplates', updatedTemplates);
+      return updatedTemplates;
+    });
     addNotification({
       title: 'Template Moved to Trash 🗑️',
       message: 'Template moved to Trash. You can restore it anytime.',
@@ -3040,9 +2996,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const restoreEmailTemplate = (id: string) => {
-    const updatedTemplates = emailTemplates.map(t => t.id === id ? { ...t, isTrash: false, deletedAt: undefined } : t);
-    setEmailTemplates(updatedTemplates);
-    persistResourceDirectly('emailTemplates', updatedTemplates);
+    setEmailTemplates(prev => {
+      const updatedTemplates = prev.map(t => t.id === id ? { ...t, isTrash: false, deletedAt: undefined } : t);
+      (latestWorkspaceRef.current as any).emailTemplates = updatedTemplates;
+      persistResourceDirectly('emailTemplates', updatedTemplates);
+      return updatedTemplates;
+    });
     addNotification({
       title: 'Template Restored 📝',
       message: 'Template returned to active library.',
@@ -3055,6 +3014,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     recordPermanentlyDeletedIds([id]);
     setEmailTemplates(prev => {
       const updatedTemplates = prev.filter(t => t.id !== id);
+      (latestWorkspaceRef.current as any).emailTemplates = updatedTemplates;
       persistResourceDirectly('emailTemplates', updatedTemplates);
       return updatedTemplates;
     });
@@ -3075,9 +3035,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isTrash: false,
     };
     setSmtpAccounts(prev => {
-      const refList = latestWorkspaceRef.current.smtpAccounts || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const updatedSmtp = [newAcc, ...base.filter(s => s.id !== newAcc.id)];
+      const updatedSmtp = [newAcc, ...prev.filter(s => s.id !== newAcc.id)];
       (latestWorkspaceRef.current as any).smtpAccounts = updatedSmtp;
       persistResourceDirectly('smtpAccounts', updatedSmtp);
       return updatedSmtp;
@@ -3093,9 +3051,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateSMTPAccount = (id: string, updates: Partial<SMTPAccount>) => {
     setSmtpAccounts(prev => {
-      const refList = latestWorkspaceRef.current.smtpAccounts || [];
-      const base = prev.length >= refList.length ? prev : refList;
-      const updatedSmtp = base.map(s => s.id === id ? { ...s, ...updates } : s);
+      const updatedSmtp = prev.map(s => s.id === id ? { ...s, ...updates } : s);
       (latestWorkspaceRef.current as any).smtpAccounts = updatedSmtp;
       persistResourceDirectly('smtpAccounts', updatedSmtp);
       return updatedSmtp;
@@ -3103,9 +3059,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteSMTPAccount = (id: string) => {
-    const updatedSmtp = smtpAccounts.map(s => s.id === id ? { ...s, isTrash: true, deletedAt: new Date().toISOString() } : s);
-    setSmtpAccounts(updatedSmtp);
-    persistResourceDirectly('smtpAccounts', updatedSmtp);
+    setSmtpAccounts(prev => {
+      const updatedSmtp = prev.map(s => s.id === id ? { ...s, isTrash: true, deletedAt: new Date().toISOString() } : s);
+      (latestWorkspaceRef.current as any).smtpAccounts = updatedSmtp;
+      persistResourceDirectly('smtpAccounts', updatedSmtp);
+      return updatedSmtp;
+    });
     addNotification({
       title: 'SMTP Account Moved to Trash 🗑️',
       message: 'You can restore it anytime.',
@@ -3115,9 +3074,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const restoreSMTPAccount = (id: string) => {
-    const updatedSmtp = smtpAccounts.map(s => s.id === id ? { ...s, isTrash: false, deletedAt: undefined } : s);
-    setSmtpAccounts(updatedSmtp);
-    persistResourceDirectly('smtpAccounts', updatedSmtp);
+    setSmtpAccounts(prev => {
+      const updatedSmtp = prev.map(s => s.id === id ? { ...s, isTrash: false, deletedAt: undefined } : s);
+      (latestWorkspaceRef.current as any).smtpAccounts = updatedSmtp;
+      persistResourceDirectly('smtpAccounts', updatedSmtp);
+      return updatedSmtp;
+    });
     addNotification({
       title: 'SMTP Account Restored ⚡',
       message: 'Relay account restored to active outbound pool.',
@@ -3356,200 +3318,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 2. Reconstruct any running campaign from sentEmails, leads.sentCampaigns, or connected SMTP relays (strictly skipping deleted/trashed campaigns!)
-    const permDeletedSet = getPermanentlyDeletedSet();
-    const existingCampIds = new Set(campaigns.filter(Boolean).map(c => c.id));
-    // Include ALL campaigns (active and trashed) so moving a campaign to Trash never causes a duplicate active campaign to be recreated
-    const existingCampNames = new Set(
-      campaigns.filter(Boolean).map(c => (c.name || '').trim().toLowerCase())
+    // 2. Purge any legacy ghost camp-live-* or camp-restored-* campaigns if present, and never auto-synthesize fake campaigns!
+    const hasGhostCampaigns = campaigns.some(
+      c => !c || String(c.id || '').startsWith('camp-live-') || String(c.id || '').startsWith('camp-restored-')
     );
-    const logsByCamp = new Map<string, { name: string; logs: SentEmailLog[]; leadList: Lead[] }>();
-
-    if (!userDeletedCampaignsRef.current) {
-      for (const log of activeSent) {
-        const rawName = (log.campaignName || '').trim();
-        const cName =
-          !rawName || rawName === 'Direct Outreach Mailer' || rawName === 'Smart Inbox Reply'
-            ? 'Live Outbound Sequence'
-            : rawName;
-        const cId = log.campaignId || `camp-restored-${cName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-        if (
-          existingCampIds.has(cId) ||
-          existingCampNames.has(cName.toLowerCase()) ||
-          permDeletedSet.has(cId) ||
-          permDeletedSet.has(`camp-name:${cName.toLowerCase()}`)
-        ) {
-          continue;
-        }
-        const entry = logsByCamp.get(cId) || { name: cName, logs: [], leadList: [] };
-        entry.logs.push(log);
-        logsByCamp.set(cId, entry);
-      }
-
-      for (const lead of activeLeads) {
-        if (Array.isArray(lead.sentCampaigns)) {
-          for (const rawCampName of lead.sentCampaigns) {
-            const cName = (rawCampName || '').trim();
-            if (!cName) continue;
-            const cId = `camp-restored-${cName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-            if (
-              existingCampIds.has(cId) ||
-              existingCampNames.has(cName.toLowerCase()) ||
-              permDeletedSet.has(cId) ||
-              permDeletedSet.has(`camp-name:${cName.toLowerCase()}`)
-            ) {
-              continue;
-            }
-            const entry = logsByCamp.get(cId) || { name: cName, logs: [], leadList: [] };
-            entry.leadList.push(lead);
-            logsByCamp.set(cId, entry);
-          }
-        }
-      }
-    }
-
-    const restoredCampaigns: Campaign[] = [];
-    for (const [cId, group] of logsByCamp.entries()) {
-      const { name, logs, leadList } = group;
-      const sample = logs[0];
-      const sentCount = Math.max(
-        logs.filter(l => l.status !== 'failed' && l.status !== 'bounced').length,
-        leadList.length,
-        1
+    if (hasGhostCampaigns) {
+      const cleaned = campaigns.filter(
+        c => c && !String(c.id || '').startsWith('camp-live-') && !String(c.id || '').startsWith('camp-restored-')
       );
-      const openCount = Math.max(
-        logs.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length,
-        leadList.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length
-      );
-      const replyCount = Math.max(
-        logs.filter(l => l.status === 'replied').length,
-        leadList.filter(l => l.isReplied || l.status === 'replied').length
-      );
-      const bounceCount = logs.filter(l => l.status === 'failed' || l.status === 'bounced').length;
-      const matchedLeadIds = Array.from(
-        new Set([
-          ...leadList.map(l => l.id),
-          ...(logs
-            .map(l => leads.find(ld => ld.email?.toLowerCase() === l.recipientEmail?.toLowerCase())?.id)
-            .filter(Boolean) as string[])
-        ])
-      );
-
-      restoredCampaigns.push({
-        id: cId,
-        name: name || 'Active Outreach Sequence',
-        niche: activeLeads[0]?.niche || 'B2B Outreach Sequence',
-        status: 'running',
-        totalLeads: Math.max(matchedLeadIds.length, logs.length, activeLeads.length || 1),
-        leadIds: matchedLeadIds.length > 0 ? matchedLeadIds : activeLeads.map(l => l.id),
-        sentCount,
-        openCount,
-        replyCount,
-        bounceCount,
-        assignedSmtpId: sample?.smtpAccountId || activeSmtps[0]?.id || 'round_robin',
-        sendMode: 'instant',
-        sendingIntervalSec: 15,
-        createdAt: sample?.sentAt ? sample.sentAt.split('T')[0] : new Date().toISOString().split('T')[0],
-        lastRunAt: sample?.sentAt ? sample.sentAt.split('T')[0] : new Date().toISOString().split('T')[0],
-        isTrash: false,
-        steps: [
-          {
-            stepNumber: 1,
-            delayDays: 0,
-            subject: sample?.subject || name || 'Outreach Sequence for {{company}}',
-            body: sample?.body || `Hi {{first_name}},\n\nI came across {{company}} and wanted to share a quick outreach idea.\n\nBest regards,\n${activeSmtps[0]?.fromName || currentUser.name || 'Outreach Team'}`,
-            triggerCondition: 'all'
-          }
-        ]
-      });
-    }
-
-    // 3. If there are 0 campaigns in state (including Trash) and the user has NOT manually deleted campaigns,
-    // and the user has connected SMTP relays or active leads, automatically provision their active running sequence!
-    const activeExistingCampaigns = campaigns.filter(c => c && !c.isTrash);
-    const primarySmtp = activeSmtps[0];
-    const candidateLiveId = `camp-live-${primarySmtp?.id || 'sequence'}`;
-    if (
-      campaigns.length === 0 &&
-      restoredCampaigns.length === 0 &&
-      !userDeletedCampaignsRef.current &&
-      !permDeletedSet.has(candidateLiveId) &&
-      !permDeletedSet.has('camp-live-sequence') &&
-      (activeSmtps.length > 0 || activeLeads.length > 0)
-    ) {
-      const primaryTag = activeLeads[0]?.tags?.[0] || activeLeads[0]?.niche || 'B2B Outbound';
-      const contactedLeads = activeLeads.filter(l => l.status !== 'new' || (l.openCount || 0) > 0 || l.isReplied);
-      const smtpSentSum = activeSmtps.reduce((sum, s) => sum + (Number(s.sentToday) || 0), 0);
-      const totalSent = Math.max(
-        activeSent.filter(l => l.status !== 'failed' && l.status !== 'bounced').length,
-        contactedLeads.length,
-        smtpSentSum
-      );
-      const totalOpened = Math.max(
-        activeSent.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length,
-        activeLeads.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length
-      );
-      const totalReplied = Math.max(
-        activeSent.filter(l => l.status === 'replied').length,
-        activeLeads.filter(l => l.isReplied || l.status === 'replied').length,
-        activeThreads.filter(t => Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead')).length
-      );
-      const firstTemplate = emailTemplates.find(t => !t.isTrash);
-
-      restoredCampaigns.push({
-        id: `camp-live-${primarySmtp?.id || 'sequence'}`,
-        name: primarySmtp
-          ? `${primarySmtp.name || primarySmtp.fromName || 'Primary Relay'} — Live Outbound Sequence`
-          : `${primaryTag} — Active Sequence`,
-        niche: primaryTag,
-        status: 'running',
-        totalLeads: Math.max(activeLeads.length, totalSent, 1),
-        leadIds: activeLeads.map(l => l.id),
-        sentCount: totalSent,
-        openCount: totalOpened,
-        replyCount: totalReplied,
-        bounceCount: 0,
-        assignedSmtpId: primarySmtp?.id || 'round_robin',
-        sendMode: 'instant',
-        sendingIntervalSec: 15,
-        createdAt: new Date().toISOString().split('T')[0],
-        lastRunAt: new Date().toISOString().split('T')[0],
-        isTrash: false,
-        steps: [
-          {
-            stepNumber: 1,
-            delayDays: 0,
-            subject: firstTemplate?.subject || 'Quick question regarding {{company}}',
-            body:
-              firstTemplate?.body ||
-              `Hi {{first_name}},\n\nI came across {{company}} and wanted to share a quick idea on scaling your outbound pipeline.\n\nWould you be open to a quick 5-minute chat this week?\n\nBest regards,\n${primarySmtp?.fromName || currentUser.name || 'Outreach Team'}`,
-            triggerCondition: 'all'
-          },
-          {
-            stepNumber: 2,
-            delayDays: 3,
-            subject: 'Re: Quick question regarding {{company}}',
-            body: `Hi {{first_name}},\n\nJust floating this to the top of your inbox in case you missed my previous note regarding {{company}}.\n\nBest,\n${primarySmtp?.fromName || currentUser.name || 'Outreach Team'}`,
-            triggerCondition: 'no_reply_7d'
-          }
-        ]
-      });
-    }
-
-    if (restoredCampaigns.length > 0) {
-      setCampaigns(prev => {
-        const pIds = new Set(prev.filter(Boolean).map(c => c.id));
-        const uniqueRestored = restoredCampaigns.filter(rc => !pIds.has(rc.id));
-        if (uniqueRestored.length === 0) return prev;
-        const merged = [...uniqueRestored, ...prev];
-        (latestWorkspaceRef.current as any).campaigns = merged;
-        persistResourceDirectly('campaigns', merged);
-        return merged;
-      });
+      setCampaigns(cleaned);
+      (latestWorkspaceRef.current as any).campaigns = cleaned;
+      persistResourceDirectly('campaigns', cleaned);
       return;
     }
 
-    // 4. Synchronize live metrics on existing campaigns so sentCount/openCount/replyCount are always accurate
+    const activeExistingCampaigns = campaigns.filter(c => c && !c.isTrash);
+
+    // 3. Synchronize live metrics on existing user-created campaigns so sentCount/openCount/replyCount are always accurate
     if (activeExistingCampaigns.length > 0) {
       let campChanged = false;
       const updatedCampaigns = campaigns.map(c => {
@@ -4066,11 +3851,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
 
           // Deduplicate strictly by unique IMAP UID / Message-ID and ignore permanently deleted messages
-          let permanentlyDeletedSet = new Set<string>();
-          try {
-            const rawDel = localStorage.getItem('visualsky_deleted_imap_msgs');
-            if (rawDel) permanentlyDeletedSet = new Set<string>(JSON.parse(rawDel));
-          } catch {}
+          const permanentlyDeletedSet = getPermanentlyDeletedSet();
 
           if (permanentlyDeletedSet.has(msgUniqueId)) {
             continue;

@@ -129,67 +129,8 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   // Step 2: Select SMTP (with Multi-tag, Provider Filter & Multi-mailbox Selection)
   const activeSmtps = useMemo(() => smtpAccounts.filter(s => !s.isTrash), [smtpAccounts]);
   const activeCampaigns = useMemo(() => {
-    const stored = campaigns.filter(c => c && !c.isTrash);
-    if (stored.length > 0) return stored;
-
-    // Fallback: if campaigns state hasn't hydrated yet or is empty while user has active SMTP relays, sentEmails, or leads,
-    // synthesize the live running campaign sequence immediately so "Running & Active Campaign Sequences" is never blank!
-    const nonTrashLeads = leads.filter(l => l && !l.isTrash);
-    const nonTrashSent = (sentEmails || []).filter(s => s && !s.isTrash && s.status !== 'failed' && s.status !== 'bounced');
-    if (activeSmtps.length === 0 && nonTrashLeads.length === 0 && nonTrashSent.length === 0) {
-      return [];
-    }
-    const primarySmtp = activeSmtps[0];
-    const primaryTag = nonTrashLeads[0]?.tags?.[0] || nonTrashLeads[0]?.niche || 'B2B Outbound';
-    const contactedLeads = nonTrashLeads.filter(l => l.status !== 'new' || (l.openCount || 0) > 0 || l.isReplied);
-    const smtpSentSum = activeSmtps.reduce((sum, s) => sum + (Number(s.sentToday) || 0), 0);
-    const totalSent = Math.max(nonTrashSent.length, contactedLeads.length, smtpSentSum);
-    const totalOpened = Math.max(
-      nonTrashSent.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length,
-      nonTrashLeads.filter(l => (l.openCount || 0) > 0 || l.status === 'opened' || l.status === 'replied').length
-    );
-    const totalReplied = Math.max(
-      nonTrashSent.filter(l => l.status === 'replied').length,
-      nonTrashLeads.filter(l => l.isReplied || l.status === 'replied').length
-    );
-    const firstTemplate = emailTemplates.find(t => !t.isTrash);
-
-    const fallbackCamp: Campaign = {
-      id: `camp-live-${primarySmtp?.id || 'sequence'}`,
-      name:
-        nonTrashSent[0]?.campaignName && nonTrashSent[0].campaignName !== 'Direct Outreach Mailer'
-          ? nonTrashSent[0].campaignName
-          : primarySmtp
-          ? `${primarySmtp.name || primarySmtp.fromName || 'Primary Relay'} — Live Outbound Sequence`
-          : `${primaryTag} — Active Sequence`,
-      niche: primaryTag,
-      status: 'running',
-      totalLeads: Math.max(nonTrashLeads.length, totalSent, 1),
-      leadIds: nonTrashLeads.map(l => l.id),
-      sentCount: totalSent,
-      openCount: totalOpened,
-      replyCount: totalReplied,
-      bounceCount: 0,
-      assignedSmtpId: primarySmtp?.id || 'round_robin',
-      sendMode: 'instant',
-      sendingIntervalSec: 15,
-      createdAt: new Date().toISOString().split('T')[0],
-      lastRunAt: new Date().toISOString().split('T')[0],
-      isTrash: false,
-      steps: [
-        {
-          stepNumber: 1,
-          delayDays: 0,
-          subject: firstTemplate?.subject || 'Quick question regarding {{company}}',
-          body:
-            firstTemplate?.body ||
-            `Hi {{first_name}},\n\nI came across {{company}} and wanted to share a quick idea on scaling your outbound pipeline.\n\nWould you be open to a quick 5-minute chat this week?\n\nBest regards,\n${primarySmtp?.fromName || currentUser.name || 'Outreach Team'}`,
-          triggerCondition: 'all'
-        }
-      ]
-    };
-    return [fallbackCamp];
-  }, [campaigns, activeSmtps, leads, sentEmails, emailTemplates, currentUser.name]);
+    return campaigns.filter(c => c && !c.isTrash);
+  }, [campaigns]);
   const [selectedSmtpIds, setSelectedSmtpIds] = useState<string[]>(() => {
     return activeSmtps.length > 0 ? [activeSmtps[0].id] : [];
   });

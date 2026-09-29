@@ -52,11 +52,11 @@ interface MainDashboardProps {
 export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, onOpenLeadModal }) => {
   const { 
     leads, 
-    campaigns, 
+    campaigns: rawCampaigns, 
     smtpAccounts, 
     threads, 
-    sentEmails,
-    emailTemplates,
+    sentEmails: rawSentEmails,
+    emailTemplates: rawEmailTemplates,
     setActiveTab, 
     openFollowUpCohortModal,
     currentUser,
@@ -65,6 +65,10 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
     driveStorageSettings,
     updateDriveStorageSettings
   } = useApp();
+
+  const campaigns = useMemo(() => rawCampaigns.filter(c => c && !c.isTrash), [rawCampaigns]);
+  const sentEmails = useMemo(() => (rawSentEmails || []).filter(s => s && !s.isTrash), [rawSentEmails]);
+  const emailTemplates = useMemo(() => (rawEmailTemplates || []).filter(t => t && !t.isTrash), [rawEmailTemplates]);
 
   const [quickDriveUrl, setQuickDriveUrl] = useState<string>(driveStorageSettings?.folderUrl || '');
   const [isEditingQuickDrive, setIsEditingQuickDrive] = useState<boolean>(false);

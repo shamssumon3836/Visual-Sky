@@ -232,6 +232,23 @@ export const TrashManager: React.FC = () => {
                     Deleted Campaign Sequences ({trashCampaigns.length})
                   </h3>
                 </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      trashCampaigns.forEach(c => restoreCampaign(c.id));
+                      confetti({ particleCount: 50, spread: 60 });
+                    }}
+                    className="flex items-center gap-1 text-xs font-bold text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Restore All Campaigns
+                  </button>
+                  <button
+                    onClick={() => trashCampaigns.forEach(c => permanentDeleteCampaign(c.id))}
+                    className="flex items-center gap-1 text-xs font-bold text-rose-400 hover:text-rose-300 transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Delete All Permanently
+                  </button>
+                </div>
               </div>
 
               <div className="divide-y divide-slate-800/60">
@@ -279,6 +296,23 @@ export const TrashManager: React.FC = () => {
                   <h3 className="font-bold text-sm text-slate-200">
                     Deleted Email Templates ({trashTemplates.length})
                   </h3>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      trashTemplates.forEach(t => restoreEmailTemplate(t.id));
+                      confetti({ particleCount: 50, spread: 60 });
+                    }}
+                    className="flex items-center gap-1 text-xs font-bold text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Restore All Templates
+                  </button>
+                  <button
+                    onClick={() => trashTemplates.forEach(t => permanentDeleteEmailTemplate(t.id))}
+                    className="flex items-center gap-1 text-xs font-bold text-rose-400 hover:text-rose-300 transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Delete All Permanently
+                  </button>
                 </div>
               </div>
 
@@ -328,6 +362,23 @@ export const TrashManager: React.FC = () => {
                     Deleted Sent Outbox Logs ({trashSentEmails.length})
                   </h3>
                 </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      trashSentEmails.forEach(m => restoreSentEmail(m.id));
+                      confetti({ particleCount: 50, spread: 60 });
+                    }}
+                    className="flex items-center gap-1 text-xs font-bold text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Restore All Sent Mails
+                  </button>
+                  <button
+                    onClick={() => trashSentEmails.forEach(m => permanentDeleteSentEmail(m.id))}
+                    className="flex items-center gap-1 text-xs font-bold text-rose-400 hover:text-rose-300 transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Delete All Permanently
+                  </button>
+                </div>
               </div>
 
               <div className="divide-y divide-slate-800/60">
@@ -376,12 +427,20 @@ export const TrashManager: React.FC = () => {
                     Deleted Email Threads ({trashThreads.length})
                   </h3>
                 </div>
-                <button
-                  onClick={handleRestoreAllThreads}
-                  className="flex items-center gap-1 text-xs font-bold text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" /> Restore All Threads
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleRestoreAllThreads}
+                    className="flex items-center gap-1 text-xs font-bold text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Restore All Threads
+                  </button>
+                  <button
+                    onClick={() => bulkPermanentDeleteThreads(trashThreads.map(t => t.id))}
+                    className="flex items-center gap-1 text-xs font-bold text-rose-400 hover:text-rose-300 transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Delete All Permanently
+                  </button>
+                </div>
               </div>
 
               <div className="divide-y divide-slate-800/60">
@@ -430,16 +489,25 @@ export const TrashManager: React.FC = () => {
                     Deleted SMTP Accounts ({trashSmtp.length})
                   </h3>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    trashSmtp.forEach(s => restoreSMTPAccount(s.id));
-                    confetti({ particleCount: 50, spread: 60 });
-                  }}
-                  className="flex items-center gap-1 text-xs font-bold text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" /> Restore All Relays
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      trashSmtp.forEach(s => restoreSMTPAccount(s.id));
+                      confetti({ particleCount: 50, spread: 60 });
+                    }}
+                    className="flex items-center gap-1 text-xs font-bold text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Restore All Relays
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => trashSmtp.forEach(s => permanentDeleteSMTPAccount(s.id))}
+                    className="flex items-center gap-1 text-xs font-bold text-rose-400 hover:text-rose-300 transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Delete All Permanently
+                  </button>
+                </div>
               </div>
 
               <div className="divide-y divide-slate-800/60">
