@@ -29,21 +29,6 @@
         border-radius: 16px !important;
       }
     </style>
-    <script>
-      window.__vsLoadPrebuiltFallback = function () {
-        if (document.getElementById('vs-prebuilt-bundle')) return;
-        var v = Date.now();
-        var link = document.createElement('link');
-        link.rel = 'stylesheet';
-        link.href = '/prebuilt/app.css?v=' + v;
-        document.head.appendChild(link);
-        var script = document.createElement('script');
-        script.id = 'vs-prebuilt-bundle';
-        script.type = 'module';
-        script.src = '/prebuilt/app.js?v=' + v;
-        document.body.appendChild(script);
-      };
-    </script>
   </head>
   <body style="background-color: #080c14; color: #f1f5f9; margin: 0; min-height: 100vh;">
     <div id="root">
@@ -53,6 +38,6 @@
       </div>
       <style>@keyframes vsSpin { to { transform: rotate(360deg); } }</style>
     </div>
-    <script type="module" src="/src/main.tsx" onerror="window.__vsLoadPrebuiltFallback && window.__vsLoadPrebuiltFallback()"></script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

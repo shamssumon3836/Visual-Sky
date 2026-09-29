@@ -8,9 +8,8 @@ const prebuiltAssetsDir = path.join(prebuiltDir, 'assets');
 const rootAssetsDir = path.join(__dirname, '..', 'assets');
 
 fs.mkdirSync(prebuiltDir, { recursive: true });
-fs.mkdirSync(rootAssetsDir, { recursive: true });
 
-// Clean up stale hashed .js and .css files in prebuilt/, prebuilt/assets/, and assets/ so random-hash files never cause git conflicts on cPanel
+// Clean up stale hashed .js and .css files in prebuilt/, prebuilt/assets/, and assets/ so random-hash files never cause git conflicts or serve old chunks
 for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
@@ -37,86 +36,94 @@ for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
   }
 }
 
-// 1. Sync dist/server.cjs -> prebuilt/server.cjs so prebuilt bundle is never stale
-const distServer = path.join(distDir, 'server.cjs');
-const prebuiltServer = path.join(prebuiltDir, 'server.cjs');
-if (fs.existsSync(distServer)) {
-  fs.copyFileSync(distServer, prebuiltServer);
-  console.log('[sync-prebuilt] Synced dist/server.cjs -> prebuilt/server.cjs');
-}
-
+// 1. Copy CSS from dist/assets if present
 if (fs.existsSync(distAssets)) {
   const files = fs.readdirSync(distAssets);
   const cssFile = files.find((f) => f.startsWith('index-') && f.endsWith('.css'));
-
   if (cssFile) {
     const cssPath = path.join(distAssets, cssFile);
     fs.copyFileSync(cssPath, path.join(prebuiltDir, 'app.css'));
     fs.copyFileSync(cssPath, path.join(prebuiltDir, 'tailwind-bundle.css'));
-    console.log(
-      '[sync-prebuilt] Copied',
-      cssFile,
-      '-> prebuilt/app.css & prebuilt/tailwind-bundle.css'
-    );
-  }
-
-  // Compile self-contained single-file bundle into prebuilt/app.js with fixed filename (no random hashes in git)
-  try {
-    const esbuild = require('esbuild');
-    const mainEntry = path.join(__dirname, '..', 'src', 'main.tsx');
-    const prebuiltAppJs = path.join(prebuiltDir, 'app.js');
-    const prebuiltAppCss = path.join(prebuiltDir, 'app.css');
-    if (fs.existsSync(mainEntry)) {
-      esbuild.buildSync({
-        entryPoints: [mainEntry],
-        bundle: true,
-        minify: true,
-        format: 'esm',
-        platform: 'browser',
-        target: ['es2020'],
-        outfile: prebuiltAppJs,
-        loader: {
-          '.css': 'empty',
-          '.svg': 'dataurl',
-          '.png': 'dataurl',
-          '.jpg': 'dataurl',
-          '.jpeg': 'dataurl',
-          '.gif': 'dataurl',
-          '.woff': 'dataurl',
-          '.woff2': 'dataurl'
-        },
-        define: {
-          'process.env.NODE_ENV': '"production"',
-          'import.meta.env': JSON.stringify({
-            MODE: 'production',
-            PROD: true,
-            DEV: false,
-            SSR: false,
-            VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || '',
-            VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY || ''
-          })
-        }
-      });
-      if (fs.existsSync(prebuiltAppCss) && fs.existsSync(prebuiltAppJs)) {
-        const extraPopupCss =
-          '\n.vs-auth-popup-window{width:100%!important;max-width:420px!important;max-height:88vh!important;overflow-y:auto!important;margin:auto!important;border-radius:16px!important;}.vs-legal-popup-window{width:100%!important;max-width:460px!important;max-height:82vh!important;margin:auto!important;border-radius:16px!important;}\n';
-        const cssContent = fs.readFileSync(prebuiltAppCss, 'utf8') + extraPopupCss;
-        const jsContent = fs.readFileSync(prebuiltAppJs, 'utf8');
-        if (!jsContent.includes('vs-tailwind-inline')) {
-          const styleInjector = `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-tailwind-inline')){var s=document.createElement('style');s.id='vs-tailwind-inline';s.textContent=${JSON.stringify(
-            cssContent
-          )};document.head.appendChild(s);}})();\n`;
-          fs.writeFileSync(prebuiltAppJs, styleInjector + jsContent, 'utf8');
-        }
-      }
-      console.log('[sync-prebuilt] Built self-contained prebuilt/app.js');
-    }
-  } catch (err) {
-    console.warn('[sync-prebuilt] esbuild warning:', err && err.message);
+    console.log('[sync-prebuilt] Copied', cssFile, '-> prebuilt/app.css');
   }
 }
 
-// Write clean prebuilt/index.html that references fixed /prebuilt/app.css and /prebuilt/app.js
+// 2. Always compile latest server.ts -> prebuilt/server.cjs using esbuild
+try {
+  const esbuild = require('esbuild');
+  const serverEntry = path.join(__dirname, '..', 'server.ts');
+  const prebuiltServer = path.join(prebuiltDir, 'server.cjs');
+  if (fs.existsSync(serverEntry)) {
+    esbuild.buildSync({
+      entryPoints: [serverEntry],
+      bundle: true,
+      platform: 'node',
+      format: 'cjs',
+      packages: 'external',
+      outfile: prebuiltServer
+    });
+    console.log('[sync-prebuilt] Compiled server.ts -> prebuilt/server.cjs');
+  }
+} catch (err) {
+  console.warn('[sync-prebuilt] server esbuild warning:', err && err.message);
+}
+
+// 3. Always compile self-contained single-file bundle from src/main.tsx -> prebuilt/app.js (even if dist/ does not exist)
+try {
+  const esbuild = require('esbuild');
+  const mainEntry = path.join(__dirname, '..', 'src', 'main.tsx');
+  const prebuiltAppJs = path.join(prebuiltDir, 'app.js');
+  const prebuiltAppCss = path.join(prebuiltDir, 'app.css');
+  if (fs.existsSync(mainEntry)) {
+    esbuild.buildSync({
+      entryPoints: [mainEntry],
+      bundle: true,
+      minify: true,
+      format: 'esm',
+      platform: 'browser',
+      target: ['es2020'],
+      outfile: prebuiltAppJs,
+      loader: {
+        '.css': 'empty',
+        '.svg': 'dataurl',
+        '.png': 'dataurl',
+        '.jpg': 'dataurl',
+        '.jpeg': 'dataurl',
+        '.gif': 'dataurl',
+        '.woff': 'dataurl',
+        '.woff2': 'dataurl'
+      },
+      define: {
+        'process.env.NODE_ENV': '"production"',
+        'import.meta.env': JSON.stringify({
+          MODE: 'production',
+          PROD: true,
+          DEV: false,
+          SSR: false,
+          VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || '',
+          VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY || ''
+        })
+      }
+    });
+    if (fs.existsSync(prebuiltAppCss) && fs.existsSync(prebuiltAppJs)) {
+      const extraPopupCss =
+        '\n.vs-auth-popup-window{width:100%!important;max-width:420px!important;max-height:88vh!important;overflow-y:auto!important;margin:auto!important;border-radius:16px!important;}.vs-legal-popup-window{width:100%!important;max-width:460px!important;max-height:82vh!important;margin:auto!important;border-radius:16px!important;}\n';
+      const cssContent = fs.readFileSync(prebuiltAppCss, 'utf8') + extraPopupCss;
+      const jsContent = fs.readFileSync(prebuiltAppJs, 'utf8');
+      if (!jsContent.includes('vs-tailwind-inline')) {
+        const styleInjector = `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-tailwind-inline')){var s=document.createElement('style');s.id='vs-tailwind-inline';s.textContent=${JSON.stringify(
+          cssContent
+        )};document.head.appendChild(s);}})();\n`;
+        fs.writeFileSync(prebuiltAppJs, styleInjector + jsContent, 'utf8');
+      }
+    }
+    console.log('[sync-prebuilt] Built self-contained prebuilt/app.js');
+  }
+} catch (err) {
+  console.warn('[sync-prebuilt] app esbuild warning:', err && err.message);
+}
+
+// 4. Write clean prebuilt/index.html that references fixed /prebuilt/app.css and /prebuilt/app.js
 const rootIndexHtml = path.join(__dirname, '..', 'index.html');
 const prebuiltIndexHtml = path.join(prebuiltDir, 'index.html');
 if (fs.existsSync(rootIndexHtml)) {
@@ -133,4 +140,3 @@ if (fs.existsSync(rootIndexHtml)) {
   fs.writeFileSync(prebuiltIndexHtml, prodHtml, 'utf8');
   console.log('[sync-prebuilt] Wrote clean prebuilt/index.html');
 }
-

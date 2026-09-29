@@ -149,15 +149,19 @@ try {
 }
 
 try {
-  if (fs.existsSync(runtimeServer)) {
-    require(runtimeServer);
-  } else if (fs.existsSync(distServer)) {
-    require(distServer);
-  } else if (fs.existsSync(prebuiltServer)) {
-    require(prebuiltServer);
-  } else {
-    throw new Error('Neither runtimeServer, dist/server.cjs, nor prebuilt/server.cjs exists.');
+  const candidates = [prebuiltServer, runtimeServer, distServer].filter((p) => fs.existsSync(p));
+  if (candidates.length === 0) {
+    throw new Error('Neither prebuilt/server.cjs, runtimeServer, nor dist/server.cjs exists.');
   }
+  candidates.sort((a, b) => {
+    try {
+      return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+    } catch (_e) {
+      return 0;
+    }
+  });
+  console.log('[Bootstrap] Starting newest server bundle:', candidates[0]);
+  require(candidates[0]);
 } catch (startErr) {
   console.error('[Bootstrap] Server startup error:', startErr);
   const http = require('http');

@@ -5728,6 +5728,21 @@ async function startServer() {
   const prebuiltAppCssPath = path.join(prebuiltCandidate, 'app.css');
   const runtimeAppJsCandidate = path.join(DATA_DIR, 'runtime-app.js');
 
+  const isDevTsx =
+    Boolean(process.argv[1] && process.argv[1].endsWith('server.ts')) &&
+    process.env.NODE_ENV !== 'production';
+  const isProdServer = !isDevTsx;
+
+  // Always refresh prebuilt/app.js, prebuilt/index.html, and prebuilt/server.cjs on dev startup
+  if (isDevTsx) {
+    try {
+      const cp = await import('child_process');
+      cp.execSync('node scripts/sync-prebuilt.cjs', { cwd: process.cwd(), stdio: 'inherit' });
+    } catch (e) {
+      console.warn('[Server Startup] sync-prebuilt warning:', e);
+    }
+  }
+
   const getActiveAppJsPath = () => {
     const hasPrebuilt = fs.existsSync(prebuiltAppJsPath);
     const hasRuntime = fs.existsSync(runtimeAppJsCandidate);
@@ -5773,8 +5788,6 @@ async function startServer() {
   });
 
   app.use('/prebuilt', express.static(prebuiltCandidate, { etag: false, lastModified: false }));
-  app.use('/assets', express.static(path.join(process.cwd(), 'dist', 'assets'), { etag: false }));
-  app.use('/assets', express.static(path.join(process.cwd(), 'assets'), { etag: false }));
 
   const sendFreshIndexHtml = (res: express.Response) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -5799,17 +5812,12 @@ async function startServer() {
     }
   };
 
-  // Serve ultra-fast prebuilt/index.html with dynamic mtime cache-busting on '/' and '/index.html' if prebuilt/app.js exists
   app.get(['/', '/index.html'], (_req, res, next) => {
     if (fs.existsSync(prebuiltAppJsPath) && fs.existsSync(path.join(prebuiltCandidate, 'index.html'))) {
       return sendFreshIndexHtml(res);
     }
     return next();
   });
-
-  const isProdServer =
-    process.env.NODE_ENV === 'production' ||
-    Boolean(process.argv[1] && (process.argv[1].includes('server.cjs') || process.argv[1].includes('server.runtime.cjs')));
 
   if (!isProdServer) {
     const { createServer: createViteServer } = await import('vite');

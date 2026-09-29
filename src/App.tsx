@@ -26,25 +26,25 @@ import {
   CheckCircle2
 } from 'lucide-react';
 
-// Code-split heavy views and modals so initial page load & reload are ultra-fast
-const SmartInbox = React.lazy(() => import('./components/inbox/SmartInbox').then(m => ({ default: m.SmartInbox })));
-const CampaignManager = React.lazy(() => import('./components/campaigns/CampaignManager').then(m => ({ default: m.CampaignManager })));
-const LeadDirectory = React.lazy(() => import('./components/leads/LeadDirectory').then(m => ({ default: m.LeadDirectory })));
-const AILeadGenerator = React.lazy(() => import('./components/leads/AILeadGenerator').then(m => ({ default: m.AILeadGenerator })));
-const TemplateManager = React.lazy(() => import('./components/templates/TemplateManager').then(m => ({ default: m.TemplateManager })));
-const AnalyticsView = React.lazy(() => import('./components/analytics/AnalyticsView').then(m => ({ default: m.AnalyticsView })));
-const SMTPManager = React.lazy(() => import('./components/smtp/SMTPManager').then(m => ({ default: m.SMTPManager })));
-const SentMailsTracker = React.lazy(() => import('./components/sent/SentMailsTracker').then(m => ({ default: m.SentMailsTracker })));
-const GeminiAssistant = React.lazy(() => import('./components/ai/GeminiAssistant').then(m => ({ default: m.GeminiAssistant })));
-const OwnerPanel = React.lazy(() => import('./components/owner/OwnerPanel').then(m => ({ default: m.OwnerPanel })));
-const TrashManager = React.lazy(() => import('./components/trash/TrashManager').then(m => ({ default: m.TrashManager })));
-const GoogleDriveStorageView = React.lazy(() => import('./components/drive/GoogleDriveStorageView').then(m => ({ default: m.GoogleDriveStorageView })));
-const MobileNavDrawer = React.lazy(() => import('./components/layout/MobileNavDrawer').then(m => ({ default: m.MobileNavDrawer })));
-const AuthModal = React.lazy(() => import('./components/auth/AuthModal').then(m => ({ default: m.AuthModal })));
-const LogoutConfirmModal = React.lazy(() => import('./components/auth/LogoutConfirmModal').then(m => ({ default: m.LogoutConfirmModal })));
-const ProfileModal = React.lazy(() => import('./components/profile/ProfileModal').then(m => ({ default: m.ProfileModal })));
-const SendMailModal = React.lazy(() => import('./components/mail/SendMailModal').then(m => ({ default: m.SendMailModal })));
-const BkashSubscriptionModal = React.lazy(() => import('./components/billing/BkashSubscriptionModal').then(m => ({ default: m.BkashSubscriptionModal })));
+// Static imports so all views and modals bundle into a single self-contained file with zero stale chunk requests
+import { SmartInbox } from './components/inbox/SmartInbox';
+import { CampaignManager } from './components/campaigns/CampaignManager';
+import { LeadDirectory } from './components/leads/LeadDirectory';
+import { AILeadGenerator } from './components/leads/AILeadGenerator';
+import { TemplateManager } from './components/templates/TemplateManager';
+import { AnalyticsView } from './components/analytics/AnalyticsView';
+import { SMTPManager } from './components/smtp/SMTPManager';
+import { SentMailsTracker } from './components/sent/SentMailsTracker';
+import { GeminiAssistant } from './components/ai/GeminiAssistant';
+import { OwnerPanel } from './components/owner/OwnerPanel';
+import { TrashManager } from './components/trash/TrashManager';
+import { GoogleDriveStorageView } from './components/drive/GoogleDriveStorageView';
+import { MobileNavDrawer } from './components/layout/MobileNavDrawer';
+import { AuthModal } from './components/auth/AuthModal';
+import { LogoutConfirmModal } from './components/auth/LogoutConfirmModal';
+import { ProfileModal } from './components/profile/ProfileModal';
+import { SendMailModal } from './components/mail/SendMailModal';
+import { BkashSubscriptionModal } from './components/billing/BkashSubscriptionModal';
 
 const ViewLoader: React.FC = () => (
   <div className="flex items-center justify-center min-h-[55vh] text-slate-400">
