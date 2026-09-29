@@ -1286,30 +1286,30 @@ export const SmartInbox: React.FC = () => {
         </div>
 
         {/* 3. GMAIL READING PANE & THREAD CONVERSATION (Right Column) */}
-        <div className={`flex-1 min-w-0 bg-slate-900/90 border border-slate-800 rounded-3xl flex flex-col justify-between overflow-hidden shadow-2xl ${
+        <div className={`flex-1 min-w-0 bg-slate-900/90 border border-slate-800 rounded-2xl flex flex-col justify-between overflow-hidden shadow-2xl ${
           mobileShowChat ? 'flex' : 'hidden md:flex'
         }`}>
           {currentThread ? (
             <>
-              {/* Message Header */}
-              <div className="p-4 border-b border-slate-800 bg-slate-950/80 backdrop-blur-md flex flex-col gap-2.5 shrink-0">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
+              {/* Compact Message Header */}
+              <div className="px-3.5 py-2 border-b border-slate-800 bg-slate-950/90 backdrop-blur-md flex flex-col gap-1.5 shrink-0">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
                     <button
                       type="button"
                       onClick={() => setMobileShowChat(false)}
-                      className="p-1.5 rounded-xl bg-slate-800 text-slate-300 md:hidden cursor-pointer"
+                      className="p-1 rounded-lg bg-slate-800 text-slate-300 md:hidden cursor-pointer"
                     >
-                      <ArrowLeft className="w-4 h-4" />
+                      <ArrowLeft className="w-3.5 h-3.5" />
                     </button>
 
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h2 className="text-base font-black text-slate-100 truncate">{currentThread.subject}</h2>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <h2 className="text-sm md:text-[15px] font-black text-slate-100 truncate">{currentThread.subject}</h2>
                         {currentThread.labels && currentThread.labels.map((lbl, idx) => (
                           <span
                             key={idx}
-                            className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 flex items-center gap-1"
+                            className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 flex items-center gap-1"
                           >
                             <span>{lbl}</span>
                             <button
@@ -1323,7 +1323,7 @@ export const SmartInbox: React.FC = () => {
                           </span>
                         ))}
                       </div>
-                      <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap mt-0.5">
+                      <div className="text-[11px] text-slate-400 flex items-center gap-1.5 flex-wrap">
                         <span className="font-bold text-slate-200">{currentThread.leadName}</span>
                         <span>&bull;</span>
                         <button
@@ -1334,28 +1334,28 @@ export const SmartInbox: React.FC = () => {
                         >
                           <span>{currentThread.leadEmail}</span>
                           {copiedTextId === 'header-email' ? (
-                            <Check className="w-3 h-3 text-emerald-400" />
+                            <Check className="w-2.5 h-2.5 text-emerald-400" />
                           ) : (
-                            <Copy className="w-3 h-3 opacity-70" />
+                            <Copy className="w-2.5 h-2.5 opacity-70" />
                           )}
                         </button>
                         <span>&bull;</span>
-                        <span className="text-slate-300">{currentThread.leadCompany}</span>
+                        <span className="text-slate-300 truncate">{currentThread.leadCompany}</span>
                       </div>
                     </div>
                   </div>
 
                   {/* Quick Actions */}
-                  <div className="flex items-center gap-1.5 shrink-0 relative">
+                  <div className="flex items-center gap-1 shrink-0 relative">
                     {/* AI Thread Summary Button */}
                     <button
                       type="button"
                       onClick={handleAnalyzeThreadIntent}
                       disabled={isAnalyzingThread}
-                      className="px-2.5 py-1.5 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition disabled:opacity-50"
+                      className="px-2 py-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition disabled:opacity-50"
                       title="AI Thread Summary & Recommended Action"
                     >
-                      <BrainCircuit className={`w-3.5 h-3.5 text-purple-300 ${isAnalyzingThread ? 'animate-spin' : ''}`} />
+                      <BrainCircuit className={`w-3 h-3 text-purple-300 ${isAnalyzingThread ? 'animate-spin' : ''}`} />
                       <span className="hidden xl:inline">{isAnalyzingThread ? 'Analyzing...' : 'AI Summary'}</span>
                     </button>
 
@@ -1364,24 +1364,24 @@ export const SmartInbox: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setShowLeadCrmCard(prev => !prev)}
-                        className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer transition ${
+                        className={`px-2 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 cursor-pointer transition ${
                           showLeadCrmCard
                             ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
                             : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
                         }`}
                         title="View & Edit Lead CRM Profile and Notes"
                       >
-                        <User className="w-3.5 h-3.5 text-cyan-400" />
+                        <User className="w-3 h-3 text-cyan-400" />
                         <span className="hidden xl:inline">CRM Info</span>
                       </button>
                     ) : (
                       <button
                         type="button"
                         onClick={handleSaveCurrentSenderToLeads}
-                        className="px-2.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition"
+                        className="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
                         title="Save this contact to your Leads Directory"
                       >
-                        <UserPlus className="w-3.5 h-3.5 text-emerald-400" />
+                        <UserPlus className="w-3 h-3 text-emerald-400" />
                         <span className="hidden xl:inline">Save Lead</span>
                       </button>
                     )}
@@ -1392,10 +1392,10 @@ export const SmartInbox: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => setShowLabelMenu(prev => !prev)}
-                          className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-cyan-400 cursor-pointer"
+                          className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-cyan-400 cursor-pointer"
                           title="Assign Label"
                         >
-                          <Tag className="w-4 h-4" />
+                          <Tag className="w-3.5 h-3.5" />
                         </button>
                         {showLabelMenu && (
                           <div className="absolute right-0 mt-2 w-52 bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl p-2.5 z-30 space-y-2">
@@ -1451,10 +1451,10 @@ export const SmartInbox: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => restoreThread(currentThread.id)}
-                        className="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
                         title="Restore to Inbox"
                       >
-                        <CornerUpLeft className="w-3.5 h-3.5" />
+                        <CornerUpLeft className="w-3 h-3" />
                         <span>Restore</span>
                       </button>
                     )}
@@ -1462,10 +1462,10 @@ export const SmartInbox: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => toggleThreadStar(currentThread.id)}
-                      className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-amber-400 cursor-pointer"
+                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-amber-400 cursor-pointer"
                       title="Star conversation"
                     >
-                      <Star className={`w-4 h-4 ${currentThread.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
+                      <Star className={`w-3.5 h-3.5 ${currentThread.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
                     </button>
                     <button
                       type="button"
@@ -1476,17 +1476,17 @@ export const SmartInbox: React.FC = () => {
                           deleteThreadToTrash(currentThread.id);
                         }
                       }}
-                      className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 cursor-pointer"
+                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 cursor-pointer"
                       title={currentThread.isTrash ? 'Delete Permanently' : 'Move to Trash'}
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
 
                 {/* Collapsible Lead CRM Context & Quick Notes Panel */}
                 {showLeadCrmCard && matchedCrmLead && (
-                  <div className="p-3 rounded-2xl bg-slate-900/95 border border-cyan-500/30 space-y-2.5 animate-in fade-in">
+                  <div className="p-2.5 rounded-xl bg-slate-900/95 border border-cyan-500/30 space-y-2 animate-in fade-in">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-3 flex-wrap text-xs">
                         <span className="font-bold text-cyan-300 flex items-center gap-1">
@@ -1517,7 +1517,7 @@ export const SmartInbox: React.FC = () => {
                         <select
                           value={matchedCrmLead.status}
                           onChange={(e) => updateLead(matchedCrmLead.id, { status: e.target.value as LeadStatus })}
-                          className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-[11px] font-bold text-emerald-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                          className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5 text-[11px] font-bold text-emerald-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
                         >
                           <option value="new">New Lead</option>
                           <option value="contacted">Contacted</option>
@@ -1541,13 +1541,13 @@ export const SmartInbox: React.FC = () => {
                         type="text"
                         value={leadNoteDraft}
                         onChange={(e) => setLeadNoteDraft(e.target.value)}
-                        placeholder="Add private CRM notes about this lead (e.g. Budget $5k/mo, follow up Friday)..."
-                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                        placeholder="Add private CRM notes about this lead..."
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
                       />
                       <button
                         type="button"
                         onClick={handleSaveLeadNote}
-                        className="px-3 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold cursor-pointer shrink-0"
+                        className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold cursor-pointer shrink-0"
                       >
                         Save Note
                       </button>
@@ -1557,10 +1557,10 @@ export const SmartInbox: React.FC = () => {
 
                 {/* Collapsible AI Thread Summary & Deal Intelligence Banner */}
                 {threadAiSummary && threadAiSummary.threadId === currentThread.id && (
-                  <div className="p-3 rounded-2xl bg-gradient-to-r from-purple-950/60 via-slate-900 to-indigo-950/60 border border-purple-500/40 space-y-2 animate-in fade-in">
+                  <div className="p-2.5 rounded-xl bg-gradient-to-r from-purple-950/60 via-slate-900 to-indigo-950/60 border border-purple-500/40 space-y-1.5 animate-in fade-in">
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
-                        <BrainCircuit className="w-4 h-4 text-purple-300" />
+                        <BrainCircuit className="w-3.5 h-3.5 text-purple-300" />
                         <span className="text-xs font-black text-purple-200">{threadAiSummary.intent}</span>
                       </div>
                       <div className="flex items-center gap-2">
@@ -1570,7 +1570,7 @@ export const SmartInbox: React.FC = () => {
                             setReplyText(threadAiSummary.suggestedReply);
                             replyTextareaRef.current?.focus();
                           }}
-                          className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-bold cursor-pointer"
+                          className="px-2 py-0.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-bold cursor-pointer"
                         >
                           ✨ Use Suggested Reply
                         </button>
@@ -1587,45 +1587,42 @@ export const SmartInbox: React.FC = () => {
                   </div>
                 )}
 
-                {/* User-Friendly Reading Controls Bar: Filter Client Replies Only, Text Size, & Maximize View */}
+                {/* Compact Reading Controls Bar: Filter Client Replies Only, Text Size, & Maximize View */}
                 {(() => {
                   const allMsgs = Array.isArray(currentThread.messages) ? currentThread.messages : [];
                   const leadRepliesCount = allMsgs.filter(m => m.sender === 'lead').length;
                   const sentMsgsCount = allMsgs.filter(m => m.sender === 'user').length;
                   return (
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80 text-[11px]">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mr-1">
-                          Show:
-                        </span>
+                    <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1 border-t border-slate-800/80 text-[10px]">
+                      <div className="flex items-center gap-1 flex-wrap">
                         <button
                           type="button"
                           onClick={() => setMessageDirectionFilter('all')}
-                          className={`px-2.5 py-1 rounded-xl font-bold transition cursor-pointer ${
+                          className={`px-2 py-0.5 rounded-lg font-bold transition cursor-pointer ${
                             messageDirectionFilter === 'all'
                               ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
                               : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
                           }`}
                         >
-                          All Messages ({allMsgs.length || 1})
+                          All ({allMsgs.length || 1})
                         </button>
                         <button
                           type="button"
                           onClick={() => setMessageDirectionFilter('lead_only')}
-                          className={`px-2.5 py-1 rounded-xl font-bold flex items-center gap-1 transition cursor-pointer ${
+                          className={`px-2 py-0.5 rounded-lg font-bold flex items-center gap-1 transition cursor-pointer ${
                             messageDirectionFilter === 'lead_only'
-                              ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-500/50 shadow-sm'
+                              ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-500/50'
                               : 'bg-slate-900 text-emerald-400/90 hover:text-emerald-300 border border-slate-800'
                           }`}
                           title="Show only what the other person replied"
                         >
-                          <span>📥 Client Replies Only ({leadRepliesCount})</span>
+                          <span>📥 Client Replies ({leadRepliesCount})</span>
                         </button>
                         {sentMsgsCount > 0 && (
                           <button
                             type="button"
                             onClick={() => setMessageDirectionFilter('user_only')}
-                            className={`px-2.5 py-1 rounded-xl font-bold transition cursor-pointer ${
+                            className={`px-2 py-0.5 rounded-lg font-bold transition cursor-pointer ${
                               messageDirectionFilter === 'user_only'
                                 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
                                 : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
@@ -1636,30 +1633,30 @@ export const SmartInbox: React.FC = () => {
                         )}
                       </div>
 
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1">
                         <button
                           type="button"
                           onClick={() => setLargeReadingText(prev => !prev)}
-                          className={`px-2.5 py-1 rounded-xl font-bold border transition cursor-pointer ${
+                          className={`px-2 py-0.5 rounded-lg font-bold border transition cursor-pointer ${
                             largeReadingText
                               ? 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
                               : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
                           }`}
                           title="Toggle Larger Clear Font for Easy Reading"
                         >
-                          {largeReadingText ? '🔍 Large Clear Text: ON' : '🔍 Normal Text'}
+                          {largeReadingText ? '🔍 Large Text: ON' : '🔍 Normal Text'}
                         </button>
                         <button
                           type="button"
                           onClick={() => setIsComposerMinimized(prev => !prev)}
-                          className={`px-2.5 py-1 rounded-xl font-bold border transition cursor-pointer ${
+                          className={`px-2 py-0.5 rounded-lg font-bold border transition cursor-pointer ${
                             isComposerMinimized
                               ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                               : 'bg-slate-900 text-slate-300 border-slate-800 hover:text-white'
                           }`}
                           title="Minimize or Expand bottom reply box to see more of the conversation"
                         >
-                          {isComposerMinimized ? '⬆️ Show Reply Box' : '⬇️ Full Reading Space'}
+                          {isComposerMinimized ? '⬆️ Show Reply Box' : '⬇️ Hide Reply Box'}
                         </button>
                       </div>
                     </div>
@@ -1667,16 +1664,16 @@ export const SmartInbox: React.FC = () => {
                 })()}
               </div>
 
-              {/* Scrollable Messages Stream */}
+              {/* Scrollable Messages Stream - Maximum Vertical Space for Reading */}
               <div
                 ref={messagesScrollRef}
-                className="flex-1 overflow-y-auto p-3 md:p-5 space-y-4 min-h-0 bg-gradient-to-b from-slate-950/40 to-slate-900/40"
+                className="flex-1 overflow-y-auto p-2.5 md:p-4 space-y-3 min-h-0 bg-gradient-to-b from-slate-950/40 to-slate-900/40"
               >
-                {/* Pinned Latest Client Reply Spotlight Banner so user immediately sees what the other side replied */}
+                {/* Sleek Latest Reply Quick-Translate & Highlight Bar (Only shown when thread has multiple messages so it never duplicates single-message threads) */}
                 {(() => {
                   const allMsgs = Array.isArray(currentThread.messages) ? currentThread.messages : [];
                   const latestLeadMsg = [...allMsgs].reverse().find(m => m.sender === 'lead');
-                  if (!latestLeadMsg || messageDirectionFilter === 'user_only') return null;
+                  if (!latestLeadMsg || messageDirectionFilter === 'user_only' || allMsgs.length <= 1) return null;
                   const cleanedSpotlight = cleanBodyText(
                     latestLeadMsg.body,
                     currentThread.leadCompany,
@@ -1686,13 +1683,13 @@ export const SmartInbox: React.FC = () => {
                   const spotlightKey = `spotlight-${latestLeadMsg.id || currentThread.id}`;
 
                   return (
-                    <div className="p-4 md:p-5 rounded-2xl bg-gradient-to-br from-emerald-950/60 via-slate-900/95 to-cyan-950/50 border-2 border-emerald-500/50 shadow-xl shadow-emerald-950/30 space-y-2.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-500/25 pb-2">
-                        <div className="flex items-center gap-2">
-                          <span className="px-2.5 py-0.5 rounded-full bg-emerald-500 text-slate-950 font-black text-[10px] uppercase tracking-wider">
+                    <div className="p-2.5 md:p-3 rounded-xl bg-gradient-to-r from-emerald-950/60 via-slate-900/95 to-cyan-950/50 border border-emerald-500/40 space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-slate-950 font-black text-[9px] uppercase tracking-wider shrink-0">
                             📩 Latest Reply From {currentThread.leadName}
                           </span>
-                          <span className="text-xs font-mono text-emerald-300/90">
+                          <span className="text-[11px] font-mono text-emerald-300/90 shrink-0">
                             {latestLeadMsg.timestamp || currentThread.lastMessageDate || 'Recent'}
                           </span>
                         </div>
@@ -1700,9 +1697,9 @@ export const SmartInbox: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => handleTranslateMessage(spotlightKey, mainReply)}
-                            className="px-2.5 py-1 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
+                            className="px-2 py-0.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 text-[10px] font-bold flex items-center gap-1 cursor-pointer transition"
                           >
-                            <Sparkles className="w-3 h-3 text-emerald-300" />
+                            <Sparkles className="w-2.5 h-2.5 text-emerald-300" />
                             <span>
                               {translatingMsgId === spotlightKey
                                 ? 'অনুবাদ হচ্ছে...'
@@ -1717,24 +1714,20 @@ export const SmartInbox: React.FC = () => {
                               setIsComposerMinimized(false);
                               replyTextareaRef.current?.focus();
                             }}
-                            className="px-2.5 py-1 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-[11px] flex items-center gap-1 cursor-pointer transition"
+                            className="px-2 py-0.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-[10px] flex items-center gap-1 cursor-pointer transition"
                           >
-                            <Reply className="w-3 h-3" />
+                            <Reply className="w-2.5 h-2.5" />
                             <span>Write Reply</span>
                           </button>
                         </div>
                       </div>
 
-                      <div
-                        className={`${
-                          largeReadingText ? 'text-base md:text-[17px]' : 'text-sm'
-                        } text-white font-medium whitespace-pre-wrap leading-relaxed selection:bg-emerald-500/30`}
-                      >
+                      <div className="text-xs md:text-sm text-emerald-50 font-medium line-clamp-2 leading-snug">
                         {mainReply}
                       </div>
 
                       {translatedMessagesMap[spotlightKey] && (
-                        <div className="mt-2 p-3 rounded-xl bg-slate-950/90 border border-emerald-500/40 text-xs md:text-sm text-emerald-200 whitespace-pre-wrap leading-relaxed">
+                        <div className="mt-1.5 p-2.5 rounded-xl bg-slate-950/90 border border-emerald-500/40 text-xs text-emerald-200 whitespace-pre-wrap leading-relaxed">
                           {translatedMessagesMap[spotlightKey]}
                         </div>
                       )}
@@ -1793,16 +1786,16 @@ export const SmartInbox: React.FC = () => {
                     return (
                       <div
                         key={msgKey}
-                        className={`p-4 md:p-5 rounded-2xl border space-y-3 shadow-lg transition ${
+                        className={`p-3 md:p-4 rounded-2xl border space-y-2 shadow-md transition ${
                           isLead
                             ? 'bg-[#0b1526] border-emerald-500/40 ring-1 ring-emerald-500/15'
-                            : 'bg-slate-900/75 border-slate-800 md:ml-8'
+                            : 'bg-slate-900/80 border-blue-500/25 md:ml-6'
                         }`}
                       >
-                        <div className="flex flex-wrap items-center justify-between border-b border-slate-800/80 pb-2.5 gap-2">
-                          <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="flex flex-wrap items-center justify-between border-b border-slate-800/80 pb-1.5 gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
                             <div
-                              className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs shrink-0 ${
+                              className={`w-7 h-7 rounded-lg flex items-center justify-center font-black text-xs shrink-0 ${
                                 isLead ? 'bg-emerald-500 text-slate-950' : 'bg-blue-600 text-white'
                               }`}
                             >
@@ -1812,36 +1805,34 @@ export const SmartInbox: React.FC = () => {
                                 ? currentUser.name[0]
                                 : 'U'}
                             </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-extrabold text-xs md:text-sm text-white">
-                                  {isLead ? currentThread.leadName : m.senderName || currentUser.name}
-                                </span>
-                                <span
-                                  className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider ${
-                                    isLead
-                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                                      : 'bg-blue-500/15 text-blue-300 border border-blue-500/30'
-                                  }`}
-                                >
-                                  {isLead ? '📥 Prospect Reply' : '📤 Sent by You'}
-                                </span>
-                              </div>
-                              <div className="text-[11px] text-slate-400 font-mono truncate">
+                            <div className="min-w-0 flex items-center gap-1.5 flex-wrap">
+                              <span className="font-extrabold text-xs md:text-sm text-white">
+                                {isLead ? currentThread.leadName : m.senderName || currentUser.name}
+                              </span>
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                                  isLead
+                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                    : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                }`}
+                              >
+                                {isLead ? '📥 Prospect Reply' : '📤 Sent by You'}
+                              </span>
+                              <span className="text-[11px] text-slate-400 font-mono truncate hidden sm:inline">
                                 &lt;{isLead ? currentThread.leadEmail : m.senderEmail || currentUser.email}&gt;
-                              </div>
+                              </span>
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <span className="text-[11px] text-slate-400 font-mono mr-1">
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span className="text-[10px] text-slate-400 font-mono mr-1">
                               {m.timestamp || 'Just now'}
                             </span>
                             {isLead && (
                               <button
                                 type="button"
                                 onClick={() => handleTranslateMessage(msgKey, mainReply)}
-                                className="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold cursor-pointer transition"
+                                className="px-2 py-0.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold cursor-pointer transition"
                                 title="Translate & explain this message in Bangla"
                               >
                                 {translatingMsgId === msgKey
@@ -1854,13 +1845,13 @@ export const SmartInbox: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => handleCopyText(mainReply, `msg-${msgKey}`, 'Message Copied')}
-                              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition cursor-pointer"
+                              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition cursor-pointer"
                               title="Copy message text"
                             >
                               {copiedTextId === `msg-${msgKey}` ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                <Check className="w-3 h-3 text-emerald-400" />
                               ) : (
-                                <Copy className="w-3.5 h-3.5" />
+                                <Copy className="w-3 h-3" />
                               )}
                             </button>
                             <button
@@ -1869,10 +1860,10 @@ export const SmartInbox: React.FC = () => {
                                 setIsComposerMinimized(false);
                                 replyTextareaRef.current?.focus();
                               }}
-                              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-cyan-400 transition cursor-pointer"
+                              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-cyan-400 transition cursor-pointer"
                               title="Reply to this message"
                             >
-                              <Reply className="w-3.5 h-3.5" />
+                              <Reply className="w-3 h-3" />
                             </button>
                           </div>
                         </div>
@@ -1892,14 +1883,14 @@ export const SmartInbox: React.FC = () => {
 
                         {/* Bangla Translation Box if activated */}
                         {translatedMessagesMap[msgKey] && (
-                          <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-xs md:text-sm text-emerald-200 whitespace-pre-wrap leading-relaxed">
+                          <div className="p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-xs md:text-sm text-emerald-200 whitespace-pre-wrap leading-relaxed">
                             {translatedMessagesMap[msgKey]}
                           </div>
                         )}
 
                         {/* Collapsible Quoted Email History so main reply is never cluttered */}
                         {quotedHistory && (
-                          <div className="pt-1">
+                          <div className="pt-0.5">
                             <button
                               type="button"
                               onClick={() =>
@@ -1908,14 +1899,14 @@ export const SmartInbox: React.FC = () => {
                                   [msgKey]: !prev[msgKey]
                                 }))
                               }
-                              className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-[10px] font-bold text-slate-400 hover:text-slate-200 cursor-pointer transition"
+                              className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-[10px] font-bold text-slate-400 hover:text-slate-200 cursor-pointer transition"
                             >
                               {isQuoteExpanded
                                 ? '▴ Hide Previous Quoted Email History'
                                 : '⋯ Show Previous Quoted Email History'}
                             </button>
                             {isQuoteExpanded && (
-                              <div className="mt-2 pl-3 border-l-2 border-slate-700 text-xs text-slate-400 whitespace-pre-wrap leading-relaxed">
+                              <div className="mt-1.5 pl-3 border-l-2 border-slate-700 text-xs text-slate-400 whitespace-pre-wrap leading-relaxed">
                                 {quotedHistory}
                               </div>
                             )}
@@ -1927,85 +1918,84 @@ export const SmartInbox: React.FC = () => {
                 })()}
               </div>
 
-              {/* Bottom Reply & AI Draft Box (Collapsible so reading area can be maximized anytime) */}
+              {/* Bottom Reply & AI Draft Box (Compact by default + Collapsible so reading area stays huge) */}
               {isComposerMinimized ? (
-                <div className="p-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-3 shrink-0">
+                <div className="px-3 py-2 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={() => {
                       setIsComposerMinimized(false);
                       setTimeout(() => replyTextareaRef.current?.focus(), 50);
                     }}
-                    className="flex-1 text-left px-4 py-2.5 rounded-2xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-400 hover:text-slate-200 transition cursor-pointer flex items-center justify-between"
+                    className="flex-1 text-left px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 hover:text-white transition cursor-pointer flex items-center justify-between"
                   >
                     <span>✍️ Click here to write a reply to {currentThread.leadName} ({currentThread.leadEmail})...</span>
                     <span className="text-cyan-400 font-bold">Expand Reply Box ⬆️</span>
                   </button>
                 </div>
               ) : (
-              <div className="p-3 md:p-4 bg-slate-950/95 border-t border-slate-800 space-y-2.5 shrink-0">
-                <div className="p-3 bg-gradient-to-br from-purple-950/30 via-slate-900/90 to-indigo-950/30 rounded-2xl border border-purple-800/40 space-y-2">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div className="flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
-                      <span className="text-[11px] font-black uppercase tracking-wider text-purple-300">
-                        Gemini AI 1-Click Draft Copilot:
+              <div className="px-3 py-2 bg-slate-950/95 border-t border-slate-800 space-y-1.5 shrink-0">
+                {/* Single-Row Sleek AI Copilot Bar */}
+                <div className="px-2.5 py-1.5 bg-gradient-to-r from-purple-950/30 via-slate-900/90 to-indigo-950/30 rounded-xl border border-purple-800/40 space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5 overflow-x-auto no-scrollbar">
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Sparkles className="w-3 h-3 text-purple-400 animate-pulse" />
+                      <span className="text-[10px] font-black uppercase tracking-wider text-purple-300 mr-1">
+                        AI Draft:
                       </span>
+                      {[
+                        { id: 'demo', label: '📅 Book 15m Demo' },
+                        { id: 'pricing', label: '💰 Share Pricing & ROI' },
+                        { id: 'objection', label: '🛡️ Handle Objection' },
+                        { id: 'agreement', label: '⚡ Agree & Schedule' },
+                        { id: 'friendly', label: '🤝 Friendly Video Intro' },
+                      ].map(btn => (
+                        <button
+                          key={btn.id}
+                          type="button"
+                          disabled={isGeneratingAiReply}
+                          onClick={() => handleAiDraft(btn.id as any)}
+                          className="px-2 py-0.5 rounded-lg bg-purple-950/60 hover:bg-purple-900 text-purple-200 border border-purple-700/60 text-[10px] font-bold whitespace-nowrap transition cursor-pointer disabled:opacity-50"
+                        >
+                          {btn.label}
+                        </button>
+                      ))}
                     </div>
-                    <div className="flex items-center gap-1.5">
+
+                    <div className="flex items-center gap-1 shrink-0">
                       <button
                         type="button"
                         disabled={isGeneratingAiReply || !replyText.trim()}
                         onClick={handlePolishReply}
-                        className="px-2 py-0.5 rounded-lg bg-emerald-950/50 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-40"
+                        className="px-2 py-0.5 rounded-lg bg-emerald-950/50 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-40 whitespace-nowrap"
                         title="Polish grammar, tone, and eliminate spam triggers"
                       >
-                        <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                        <span>✨ AI Polish & Proofread</span>
+                        <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" />
+                        <span>✨ AI Polish</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => setIsAiCopilotExpanded(prev => !prev)}
-                        className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
-                        title={isAiCopilotExpanded ? 'Minimize AI Copilot for more reading space' : 'Expand AI Copilot'}
+                        className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[10px] font-bold flex items-center gap-0.5 cursor-pointer whitespace-nowrap"
+                        title={isAiCopilotExpanded ? 'Minimize Custom AI Prompt' : 'Open Custom AI Prompt'}
                       >
                         {isAiCopilotExpanded ? (
                           <>
-                            <ChevronDown className="w-3 h-3" />
+                            <ChevronDown className="w-2.5 h-2.5" />
                             <span>Compact</span>
                           </>
                         ) : (
                           <>
-                            <ChevronUp className="w-3 h-3" />
-                            <span>Expand AI</span>
+                            <ChevronUp className="w-2.5 h-2.5" />
+                            <span>Custom AI</span>
                           </>
                         )}
                       </button>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-                    {[
-                      { id: 'demo', label: '📅 Book 15m Demo' },
-                      { id: 'pricing', label: '💰 Share Pricing & ROI' },
-                      { id: 'objection', label: '🛡️ Handle Objection' },
-                      { id: 'agreement', label: '⚡ Agree & Schedule' },
-                      { id: 'friendly', label: '🤝 Friendly Video Intro' },
-                    ].map(btn => (
-                      <button
-                        key={btn.id}
-                        type="button"
-                        disabled={isGeneratingAiReply}
-                        onClick={() => handleAiDraft(btn.id as any)}
-                        className="px-2.5 py-1 rounded-xl bg-purple-950/60 hover:bg-purple-900 text-purple-200 border border-purple-700/60 text-[11px] font-bold whitespace-nowrap transition cursor-pointer shadow-xs disabled:opacity-50"
-                      >
-                        {btn.label}
-                      </button>
-                    ))}
-                  </div>
-
                   {isAiCopilotExpanded && (
-                    <div className="flex items-center gap-2 pt-1">
+                    <div className="flex items-center gap-1.5 pt-0.5">
                       <input
                         type="text"
                         value={customReplyPrompt}
@@ -2017,13 +2007,13 @@ export const SmartInbox: React.FC = () => {
                           }
                         }}
                         placeholder="Custom prompt (e.g. Confirm 2pm Thursday, emphasize free trial, and ask for mobile number)..."
-                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-[11px] text-slate-100 placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-[11px] text-slate-100 placeholder-slate-500 focus:outline-none focus:border-purple-500"
                       />
                       <button
                         type="button"
                         disabled={isGeneratingAiReply || !customReplyPrompt.trim()}
                         onClick={() => handleAiDraft('custom')}
-                        className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-[11px] flex items-center gap-1 shadow-md transition cursor-pointer disabled:opacity-40 shrink-0"
+                        className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-[10px] flex items-center gap-1 transition cursor-pointer disabled:opacity-40 shrink-0"
                       >
                         {isGeneratingAiReply ? (
                           <RefreshCw className="w-3 h-3 animate-spin" />
@@ -2036,10 +2026,10 @@ export const SmartInbox: React.FC = () => {
                   )}
                 </div>
 
-                <form onSubmit={handleSendReply} className="space-y-2">
+                <form onSubmit={handleSendReply} className="space-y-1.5">
                   <textarea
                     ref={replyTextareaRef}
-                    rows={3}
+                    rows={2}
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
                     onKeyDown={(e) => {
@@ -2048,14 +2038,14 @@ export const SmartInbox: React.FC = () => {
                       }
                     }}
                     placeholder={`Reply to ${currentThread.leadName} (${currentThread.leadEmail})...`}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-2xl p-3 text-xs md:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs md:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner resize-y"
                   />
 
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex flex-wrap items-center justify-between gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       {/* Instant Template Selector */}
-                      <div className="flex items-center gap-1.5 bg-slate-950/80 border border-slate-800 rounded-xl px-2.5 py-1">
-                        <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                      <div className="flex items-center gap-1 bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-0.5">
+                        <FileText className="w-3 h-3 text-cyan-400" />
                         <select
                           onChange={(e) => {
                             if (e.target.value) {
@@ -2064,10 +2054,10 @@ export const SmartInbox: React.FC = () => {
                             }
                           }}
                           defaultValue=""
-                          className="bg-transparent text-slate-200 text-[11px] font-bold cursor-pointer focus:outline-none max-w-[200px] truncate"
+                          className="bg-transparent text-slate-200 text-[10px] font-bold cursor-pointer focus:outline-none max-w-[170px] truncate"
                         >
                           <option value="" disabled className="bg-slate-900 text-slate-400">
-                            ⚡ Instant Template ({activeEmailTemplates.length} available)...
+                            ⚡ Instant Template ({activeEmailTemplates.length})...
                           </option>
                           {activeEmailTemplates.map(t => (
                             <option key={t.id} value={t.id} className="bg-slate-900 text-slate-100">
@@ -2079,12 +2069,12 @@ export const SmartInbox: React.FC = () => {
 
                       {/* Matched SMTP Account Selector */}
                       {activeSmtpAccounts.length > 0 && (
-                        <div className="flex items-center gap-1.5 bg-slate-950/80 border border-slate-800 rounded-xl px-2.5 py-1">
-                          <span className="text-[10px] font-bold text-emerald-400 uppercase">From:</span>
+                        <div className="flex items-center gap-1 bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-0.5">
+                          <span className="text-[9px] font-bold text-emerald-400 uppercase">From:</span>
                           <select
                             value={replySmtpId}
                             onChange={(e) => setReplySmtpId(e.target.value)}
-                            className="bg-transparent text-slate-200 text-[11px] font-bold cursor-pointer focus:outline-none max-w-[170px] truncate"
+                            className="bg-transparent text-slate-200 text-[10px] font-bold cursor-pointer focus:outline-none max-w-[150px] truncate"
                           >
                             {activeSmtpAccounts.map(acc => (
                               <option key={acc.id} value={acc.id} className="bg-slate-900 text-slate-100">
@@ -2099,29 +2089,38 @@ export const SmartInbox: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => handleInsertQuickSnippet('calendar')}
-                        className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-[11px] font-bold cursor-pointer transition"
+                        className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-[10px] font-bold cursor-pointer transition"
                         title="Insert a proposed meeting slot"
                       >
                         📅 +Time Slot
                       </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsComposerMinimized(true)}
+                        className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-[10px] font-bold cursor-pointer transition"
+                        title="Minimize reply box for full screen reading"
+                      >
+                        ⬇️ Minimize
+                      </button>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       {replyText.trim() && (
                         <button
                           type="button"
                           onClick={() => setReplyText('')}
-                          className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-xs font-bold cursor-pointer transition"
+                          className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-[11px] font-bold cursor-pointer transition"
                         >
                           Clear
                         </button>
                       )}
                       <button
                         type="submit"
-                        className="px-5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-lg shadow-blue-500/20 transition cursor-pointer"
+                        className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-blue-500/20 transition cursor-pointer"
                         title="Send Reply (Ctrl+Enter)"
                       >
-                        <Send className="w-3.5 h-3.5" />
+                        <Send className="w-3 h-3" />
                         <span>Send Reply</span>
                       </button>
                     </div>
