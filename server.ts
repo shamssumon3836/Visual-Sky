@@ -5722,29 +5722,90 @@ app.use('/api', (err: any, req: express.Request, res: express.Response, next: ex
 
 // Vite / Production handler
 async function startServer() {
-  const bootVersion = Date.now().toString(36);
+  app.set('etag', false);
   const prebuiltCandidate = path.join(process.cwd(), 'prebuilt');
+  const prebuiltAppJsPath = path.join(prebuiltCandidate, 'app.js');
+  const prebuiltAppCssPath = path.join(prebuiltCandidate, 'app.css');
   const runtimeAppJsCandidate = path.join(DATA_DIR, 'runtime-app.js');
 
-  // Serve freshly compiled untracked runtime bundle (.data/runtime-app.js) first if present
+  const getActiveAppJsPath = () => {
+    const hasPrebuilt = fs.existsSync(prebuiltAppJsPath);
+    const hasRuntime = fs.existsSync(runtimeAppJsCandidate);
+    if (hasPrebuilt && hasRuntime) {
+      try {
+        const prebuiltMtime = fs.statSync(prebuiltAppJsPath).mtimeMs;
+        const runtimeMtime = fs.statSync(runtimeAppJsCandidate).mtimeMs;
+        return prebuiltMtime >= runtimeMtime ? prebuiltAppJsPath : runtimeAppJsCandidate;
+      } catch {
+        return prebuiltAppJsPath;
+      }
+    }
+    if (hasPrebuilt) return prebuiltAppJsPath;
+    if (hasRuntime) return runtimeAppJsCandidate;
+    return prebuiltAppJsPath;
+  };
+
+  const getDynamicAssetVersion = () => {
+    try {
+      const targetJs = getActiveAppJsPath();
+      if (fs.existsSync(targetJs)) {
+        return Math.floor(fs.statSync(targetJs).mtimeMs).toString(36);
+      }
+    } catch {}
+    return Date.now().toString(36);
+  };
+
+  // Always serve whichever bundle (prebuilt/app.js from Git/Build or runtime-app.js) is newest on disk
   app.get('/prebuilt/app.js', (_req, res) => {
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    if (fs.existsSync(runtimeAppJsCandidate)) {
-      return res.sendFile(runtimeAppJsCandidate);
-    }
-    return res.sendFile(path.join(prebuiltCandidate, 'app.js'));
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    return res.sendFile(getActiveAppJsPath());
   });
 
   app.get('/prebuilt/app.css', (_req, res) => {
     res.setHeader('Content-Type', 'text/css; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    return res.sendFile(path.join(prebuiltCandidate, 'app.css'));
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    return res.sendFile(prebuiltAppCssPath);
   });
 
-  app.use('/prebuilt', express.static(prebuiltCandidate));
-  app.use('/assets', express.static(path.join(process.cwd(), 'dist', 'assets')));
-  app.use('/assets', express.static(path.join(process.cwd(), 'assets')));
+  app.use('/prebuilt', express.static(prebuiltCandidate, { etag: false, lastModified: false }));
+  app.use('/assets', express.static(path.join(process.cwd(), 'dist', 'assets'), { etag: false }));
+  app.use('/assets', express.static(path.join(process.cwd(), 'assets'), { etag: false }));
+
+  const sendFreshIndexHtml = (res: express.Response) => {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    const distCandidate = path.join(process.cwd(), 'dist');
+    const htmlPath = fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
+      ? path.join(prebuiltCandidate, 'index.html')
+      : fs.existsSync(path.join(distCandidate, 'index.html'))
+      ? path.join(distCandidate, 'index.html')
+      : path.join(process.cwd(), 'index.html');
+    try {
+      const v = getDynamicAssetVersion();
+      let html = fs.readFileSync(htmlPath, 'utf8');
+      html = html
+        .replace(/\/prebuilt\/app\.css(\?v=[^"']*)?/g, `/prebuilt/app.css?v=${v}`)
+        .replace(/\/prebuilt\/app\.js(\?v=[^"']*)?/g, `/prebuilt/app.js?v=${v}`);
+      return res.send(html);
+    } catch {
+      return res.sendFile(htmlPath);
+    }
+  };
+
+  // Serve ultra-fast prebuilt/index.html with dynamic mtime cache-busting on root '/' if prebuilt/app.js exists
+  app.get('/', (req, res, next) => {
+    if (fs.existsSync(prebuiltAppJsPath) && fs.existsSync(path.join(prebuiltCandidate, 'index.html'))) {
+      return sendFreshIndexHtml(res);
+    }
+    return next();
+  });
 
   const isProdServer =
     process.env.NODE_ENV === 'production' ||
@@ -5770,6 +5831,7 @@ async function startServer() {
     app.use(
       express.static(distPath, {
         index: false,
+        etag: false,
         setHeaders: (res, filePath) => {
           if (filePath.endsWith('.html') || filePath.endsWith('.js') || filePath.endsWith('.css')) {
             res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -5778,22 +5840,7 @@ async function startServer() {
       })
     );
     app.get('*', (_req, res) => {
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      const htmlPath = fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
-        ? path.join(prebuiltCandidate, 'index.html')
-        : fs.existsSync(path.join(distCandidate, 'index.html'))
-        ? path.join(distCandidate, 'index.html')
-        : path.join(process.cwd(), 'index.html');
-      try {
-        let html = fs.readFileSync(htmlPath, 'utf8');
-        html = html
-          .replace(/\/prebuilt\/app\.css(\?v=[^"']*)?/g, `/prebuilt/app.css?v=${bootVersion}`)
-          .replace(/\/prebuilt\/app\.js(\?v=[^"']*)?/g, `/prebuilt/app.js?v=${bootVersion}`);
-        return res.send(html);
-      } catch {
-        return res.sendFile(htmlPath);
-      }
+      return sendFreshIndexHtml(res);
     });
   }
 

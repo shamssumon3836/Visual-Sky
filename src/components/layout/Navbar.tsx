@@ -506,7 +506,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
           title="Share or Change Your Google Drive Folder Link for Email File Attachments (0 KB Hosting)"
         >
           <FolderOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-          <span className="whitespace-nowrap hidden sm:inline">
+          <span className="whitespace-nowrap">
             {driveStorageSettings?.folderUrl ? '☁️ Drive Linked' : '☁️ Drive Link'}
           </span>
         </button>

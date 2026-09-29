@@ -69,6 +69,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
       badgeColor: 'bg-blue-500/10 text-blue-300 border-blue-500/20'
     },
     {
+      id: 'drive_storage',
+      label: 'Google Drive Storage',
+      icon: FolderOpen,
+      badge: driveStorageSettings?.folderUrl ? '✓ Linked' : '0 KB Host',
+      badgeColor: driveStorageSettings?.folderUrl
+        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+        : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+    },
+    {
       id: 'smtp',
       label: 'SMTP / IMAP Hub',
       icon: Server,
@@ -109,15 +118,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
       icon: Inbox,
       badge: isServiceDisabled('inbox') ? '🔒 Disabled' : (unreadThreadsCount > 0 ? unreadThreadsCount : undefined),
       badgeColor: isServiceDisabled('inbox') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-rose-500/20 text-rose-300 border-rose-500/30'
-    },
-    {
-      id: 'drive_storage',
-      label: 'Google Drive Storage',
-      icon: FolderOpen,
-      badge: driveStorageSettings?.folderUrl ? '✓ Linked' : 'Set Link',
-      badgeColor: driveStorageSettings?.folderUrl
-        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
-        : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
     },
     {
       id: 'sent',
@@ -232,6 +232,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
             <span>{currentUser.quotaUsed.toLocaleString()} Sent</span>
             <span>{currentUser.quotaLimit.toLocaleString()} Quota</span>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('drive_storage')}
+            className="w-full mt-1 py-2 px-3 rounded-xl bg-emerald-600/25 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-200 text-[11px] font-extrabold flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+          >
+            <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
+            <span>{driveStorageSettings?.folderUrl ? '☁️ Change Drive Link' : '☁️ Add Google Drive Link'}</span>
+          </button>
 
           {onOpenBilling && (
             <button

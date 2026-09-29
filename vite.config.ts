@@ -25,7 +25,6 @@ export default defineConfig(() => {
     },
     server: {
       hmr: false,
-      watch: null,
     },
     build: {
       chunkSizeWarningLimit: 1000,

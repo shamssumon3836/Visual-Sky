@@ -18,7 +18,8 @@ import {
   BarChart3,
   Bot, 
   ShieldCheck, 
-  Grid
+  Grid,
+  FolderOpen
 } from 'lucide-react';
 
 // Code-split heavy views and modals so initial page load & reload are ultra-fast
@@ -339,6 +340,16 @@ const MainContent: React.FC = () => {
           {unreadCount > 0 && (
             <span className="absolute top-1 right-2 w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
           )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('drive_storage')}
+          className={`flex flex-col items-center gap-1 text-[10px] font-bold py-1.5 px-2 rounded-xl transition cursor-pointer ${
+            activeTab === 'drive_storage' ? 'text-emerald-400 bg-emerald-500/10' : 'text-emerald-400/80 hover:text-emerald-300'
+          }`}
+        >
+          <FolderOpen className="w-4 h-4" />
+          <span>Drive Link</span>
         </button>
 
         <button

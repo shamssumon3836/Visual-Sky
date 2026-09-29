@@ -63,6 +63,13 @@ function healCpanelGitRepo() {
 }
 
 function buildWithEsbuild() {
+  try {
+    if (fs.existsSync(runtimeAppJs)) fs.unlinkSync(runtimeAppJs);
+  } catch (_e) {}
+  try {
+    if (fs.existsSync(runtimeServer)) fs.unlinkSync(runtimeServer);
+  } catch (_e) {}
+
   const esbuild = require('esbuild');
   fs.mkdirSync(dataDir, { recursive: true });
 
