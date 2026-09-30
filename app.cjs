@@ -21,42 +21,84 @@ const runtimeServer = path.join(dataDir, 'server.runtime.cjs');
 const runtimeAppJs = path.join(dataDir, 'runtime-app.js');
 const prebuiltAppCss = path.join(prebuiltDir, 'app.css');
 
-// Auto-heal cPanel Git repository locks and HTTP/1.1 config so "Update from Remote" in cPanel never fails
+// Auto-heal cPanel Git repository locks and clean .git/config so "Update from Remote" in cPanel never fails
 function healCpanelGitRepo() {
   try {
     const gitDir = path.join(__dirname, '.git');
     if (!fs.existsSync(gitDir)) return;
 
+    // 0. Ensure required Git subdirectories and HEAD exist so cPanel never says "not a git repository"
+    const requiredDirs = [
+      path.join(gitDir, 'objects'),
+      path.join(gitDir, 'refs', 'heads'),
+      path.join(gitDir, 'refs', 'tags'),
+      path.join(gitDir, 'refs', 'remotes', 'origin')
+    ];
+    for (const d of requiredDirs) {
+      if (!fs.existsSync(d)) {
+        try {
+          fs.mkdirSync(d, { recursive: true });
+        } catch (_e) {}
+      }
+    }
+    const headFile = path.join(gitDir, 'HEAD');
+    if (!fs.existsSync(headFile)) {
+      try {
+        fs.writeFileSync(headFile, 'ref: refs/heads/main\n', 'utf8');
+      } catch (_e) {}
+    }
+
     // 1. Remove stale .git lock files that block cPanel Git Version Control
     const lockFiles = [
       path.join(gitDir, 'index.lock'),
       path.join(gitDir, 'HEAD.lock'),
+      path.join(gitDir, 'FETCH_HEAD.lock'),
+      path.join(gitDir, 'ORIG_HEAD.lock'),
       path.join(gitDir, 'config.lock'),
       path.join(gitDir, 'packed-refs.lock'),
       path.join(gitDir, 'refs', 'remotes', 'origin', 'main.lock'),
+      path.join(gitDir, 'refs', 'remotes', 'origin', 'HEAD.lock'),
       path.join(gitDir, 'refs', 'heads', 'main.lock')
     ];
     for (const lockFile of lockFiles) {
       if (fs.existsSync(lockFile)) {
         try {
-          const stat = fs.statSync(lockFile);
-          if (Date.now() - stat.mtimeMs > 15000) {
-            fs.unlinkSync(lockFile);
-            console.log('[Git Auto-Heal] Removed stale lock file:', lockFile);
-          }
+          fs.unlinkSync(lockFile);
+          console.log('[Git Auto-Heal] Removed lock file:', lockFile);
         } catch (_e) {}
       }
     }
 
-    // 2. Ensure .git/config has cPanel/CloudLinux safe HTTP settings so GitHub remote connection does not fail
+    // 2. Clean or reconstruct .git/config
     const gitConfigPath = path.join(gitDir, 'config');
     if (fs.existsSync(gitConfigPath)) {
       let cfg = fs.readFileSync(gitConfigPath, 'utf8');
-      if (!cfg.includes('[http]')) {
-        cfg +=
-          '\n[http]\n\tversion = HTTP/1.1\n\tpostBuffer = 524288000\n\tlowSpeedLimit = 0\n\tlowSpeedTime = 999999\n';
-        fs.writeFileSync(gitConfigPath, cfg, 'utf8');
-        console.log('[Git Auto-Heal] Configured HTTP/1.1 and buffer settings in .git/config');
+      const cleanedCfg = cfg
+        .replace(/\n?\[http\][^\[]*/g, '')
+        .trimEnd() + '\n';
+      if (cleanedCfg !== cfg) {
+        fs.writeFileSync(gitConfigPath, cleanedCfg, 'utf8');
+        console.log('[Git Auto-Heal] Cleaned [http] block from .git/config');
+      }
+    } else {
+      // Attempt to recover remote URL from FETCH_HEAD or logs/HEAD if .git/config was accidentally deleted
+      let remoteUrl = '';
+      for (const candidate of [path.join(gitDir, 'FETCH_HEAD'), path.join(gitDir, 'logs', 'HEAD')]) {
+        if (fs.existsSync(candidate)) {
+          try {
+            const raw = fs.readFileSync(candidate, 'utf8');
+            const match = raw.match(/(https?:\/\/[^\s'"]+|git@[^\s'"]+)/);
+            if (match && match[1]) {
+              remoteUrl = match[1].trim();
+              break;
+            }
+          } catch (_e) {}
+        }
+      }
+      if (remoteUrl) {
+        const restoredConfig = `[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n[remote "origin"]\n\turl = ${remoteUrl}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`;
+        fs.writeFileSync(gitConfigPath, restoredConfig, 'utf8');
+        console.log('[Git Auto-Heal] Reconstructed missing .git/config with remote:', remoteUrl);
       }
     }
   } catch (_err) {}

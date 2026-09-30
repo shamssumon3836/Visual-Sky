@@ -12,6 +12,11 @@ import zlib from 'zlib';
 
 dotenv.config();
 
+// Restrict thread pools so cPanel CloudLinux LVE NPROC & memory limits are never exhausted when cPanel Git runs "Update from Remote"
+process.env.GOMAXPROCS = '1';
+process.env.UV_THREADPOOL_SIZE = '1';
+process.env.RAYON_NUM_THREADS = '1';
+
 // Global crash protection for async SMTP/IMAP network and stream errors
 process.on('uncaughtException', (err) => {
   console.error('[CRITICAL UNCAUGHT EXCEPTION PREVENTED]:', err?.message || err);
@@ -3525,9 +3530,93 @@ app.post('/api/user-data/:email/smtp', (req, res) => {
   return res.json({ success: true, count: smtpAccounts.length, savedAt: workspace.updatedAt });
 });
 
-// Auto-sync prebuilt client bundle if source files were updated
+// Auto-heal cPanel Git repository locks and clean .git/config so "Update from Remote" never fails with "The system could not contact the remote repository"
+function healCpanelGitRepo() {
+  try {
+    const gitDir = path.join(process.cwd(), '.git');
+    if (!fs.existsSync(gitDir)) return;
+
+    const requiredDirs = [
+      path.join(gitDir, 'objects'),
+      path.join(gitDir, 'refs', 'heads'),
+      path.join(gitDir, 'refs', 'tags'),
+      path.join(gitDir, 'refs', 'remotes', 'origin')
+    ];
+    for (const d of requiredDirs) {
+      if (!fs.existsSync(d)) {
+        try {
+          fs.mkdirSync(d, { recursive: true });
+        } catch {}
+      }
+    }
+    const headFile = path.join(gitDir, 'HEAD');
+    if (!fs.existsSync(headFile)) {
+      try {
+        fs.writeFileSync(headFile, 'ref: refs/heads/main\n', 'utf8');
+      } catch {}
+    }
+
+    const lockFiles = [
+      path.join(gitDir, 'index.lock'),
+      path.join(gitDir, 'HEAD.lock'),
+      path.join(gitDir, 'FETCH_HEAD.lock'),
+      path.join(gitDir, 'ORIG_HEAD.lock'),
+      path.join(gitDir, 'config.lock'),
+      path.join(gitDir, 'packed-refs.lock'),
+      path.join(gitDir, 'refs', 'remotes', 'origin', 'main.lock'),
+      path.join(gitDir, 'refs', 'remotes', 'origin', 'HEAD.lock'),
+      path.join(gitDir, 'refs', 'heads', 'main.lock')
+    ];
+    for (const lockFile of lockFiles) {
+      if (fs.existsSync(lockFile)) {
+        try {
+          fs.unlinkSync(lockFile);
+        } catch {}
+      }
+    }
+
+    const gitConfigPath = path.join(gitDir, 'config');
+    if (fs.existsSync(gitConfigPath)) {
+      const cfg = fs.readFileSync(gitConfigPath, 'utf8');
+      const cleanedCfg = cfg.replace(/\n?\[http\][^\[]*/g, '').trimEnd() + '\n';
+      if (cleanedCfg !== cfg) {
+        fs.writeFileSync(gitConfigPath, cleanedCfg, 'utf8');
+      }
+    } else {
+      let remoteUrl = '';
+      for (const candidate of [path.join(gitDir, 'FETCH_HEAD'), path.join(gitDir, 'logs', 'HEAD')]) {
+        if (fs.existsSync(candidate)) {
+          try {
+            const raw = fs.readFileSync(candidate, 'utf8');
+            const match = raw.match(/(https?:\/\/[^\s'"]+|git@[^\s'"]+)/);
+            if (match && match[1]) {
+              remoteUrl = match[1].trim();
+              break;
+            }
+          } catch {}
+        }
+      }
+      if (remoteUrl) {
+        const restoredConfig = `[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n[remote "origin"]\n\turl = ${remoteUrl}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`;
+        fs.writeFileSync(gitConfigPath, restoredConfig, 'utf8');
+      }
+    }
+  } catch {}
+}
+
+healCpanelGitRepo();
+
+// Auto-sync prebuilt client bundle ONLY in local dev mode (never spawn esbuild or dirty tracked prebuilt/app.js on cPanel production)
 let lastBundleSyncCheck = 0;
 function ensureFreshPrebuiltBundle() {
+  const isDevTsx =
+    Boolean(process.argv[1] && process.argv[1].endsWith('server.ts')) &&
+    process.env.NODE_ENV !== 'production';
+  if (!isDevTsx) {
+    healCpanelGitRepo();
+    return;
+  }
+
   const now = Date.now();
   if (now - lastBundleSyncCheck < 1500) return;
   lastBundleSyncCheck = now;
@@ -5646,6 +5735,7 @@ const verifiedImapHostCache = new Map<string, string>();
 const imapUidMessageCache = new Map<string, any>();
 const imapClientPool = new Map<string, ImapFlow>();
 const imapPoolBusy = new Set<string>();
+const imapIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 // Endpoint: Live IMAP Reply Synchronization from Mailbox (Warm Persistent Pool + Instant Incremental UID Sync)
 app.post('/api/smtp/imap-sync', async (req, res) => {
@@ -5772,6 +5862,12 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
     // Reuse warm pooled client if available and not currently busy; otherwise open a fresh client
     let connectedClient: ImapFlow | null = null;
     let usingPooledClient = false;
+
+    const existingTimer = imapIdleTimers.get(poolKey);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      imapIdleTimers.delete(poolKey);
+    }
 
     const existingPooled = imapClientPool.get(poolKey);
     if (existingPooled && (existingPooled as any).usable && !imapPoolBusy.has(poolKey)) {
@@ -5930,6 +6026,24 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
     } finally {
       if (usingPooledClient) {
         imapPoolBusy.delete(poolKey);
+        const prevTimer = imapIdleTimers.get(poolKey);
+        if (prevTimer) clearTimeout(prevTimer);
+        const idleTimer = setTimeout(() => {
+          imapIdleTimers.delete(poolKey);
+          if (!imapPoolBusy.has(poolKey)) {
+            const clientToClose = imapClientPool.get(poolKey);
+            if (clientToClose) {
+              imapClientPool.delete(poolKey);
+              try {
+                clientToClose.close();
+              } catch {}
+            }
+          }
+        }, 12000);
+        if (typeof (idleTimer as any).unref === 'function') {
+          (idleTimer as any).unref();
+        }
+        imapIdleTimers.set(poolKey, idleTimer);
       } else {
         try {
           await connectedClient.logout();

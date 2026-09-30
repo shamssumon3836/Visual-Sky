@@ -95,7 +95,7 @@ export const SmartInbox: React.FC = () => {
       }
     };
     const initTimer = setTimeout(runSilentSync, 400);
-    const timer = setInterval(runSilentSync, 5000);
+    const timer = setInterval(runSilentSync, 12000);
     return () => {
       clearTimeout(initTimer);
       clearInterval(timer);

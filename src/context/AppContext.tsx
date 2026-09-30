@@ -1788,6 +1788,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cleanUserId = (currentUser.id || currentUser.supabaseId || '').trim();
 
     const syncFromRemote = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       if (Date.now() - lastLocalMutationMsRef.current < 2500) return;
       loadUserWorkspace(cleanEmail, cleanUserId, undefined, true).catch(() => {});
       fetch(`/api/users/registry?_t=${Date.now()}`, { cache: 'no-store' })
@@ -3736,7 +3737,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const initialTimer = setTimeout(pollTrackingEvents, 1500);
-    const interval = setInterval(pollTrackingEvents, 10000);
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      pollTrackingEvents();
+    }, 10000);
     return () => {
       clearTimeout(initialTimer);
       clearInterval(interval);
@@ -4257,8 +4261,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       syncInboxReplies(undefined, true).catch(() => {});
     }, 2000);
 
-    // Poll every 5 seconds even in background tabs so mobile/desktop OS push notifications fire like Gmail!
     const imapInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       syncInboxReplies(undefined, true).catch(() => {});
     }, 5000);
 
