@@ -88,7 +88,13 @@ export function scrubWorkspaceCollections(rawWorkspace: any, extraTombstones?: I
     const idStr = String(item.id);
     if (idStr.startsWith('camp-live-') || idStr.startsWith('camp-restored-')) return false;
     if (DEMO_IDS.has(idStr) || deletedSet.has(idStr) || deletedSet.has(`thread:${idStr}`)) return false;
-    if (item.name && deletedSet.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) return false;
+    if (item.name) {
+      const cleanNameLower = String(item.name).trim().toLowerCase();
+      const slug = cleanNameLower.replace(/[^a-z0-9]+/g, '-');
+      if (deletedSet.has(`camp-name:${cleanNameLower}`) || deletedSet.has(`camp-restored-${slug}`)) {
+        return false;
+      }
+    }
     return true;
   };
 
@@ -190,15 +196,16 @@ export async function queryUserWorkspace(identifiers: {
   let bestTimestamp = 0;
   const cumulativeTombstones = getLocalTombstones();
   let anyUserDeletedCampaigns = false;
+  const rawCandidates: Array<{
+    candidate: any;
+    source: 'firestore-db' | 'supabase-auth' | 'supabase-table' | 'backend-db';
+  }> = [];
 
-  const considerCandidate = (
+  const queueCandidate = (
     candidate: any,
     source: 'firestore-db' | 'supabase-auth' | 'supabase-table' | 'backend-db'
   ) => {
     if (!candidate || typeof candidate !== 'object') return;
-    const rawTs = candidate.updatedAt ? new Date(candidate.updatedAt).getTime() : 1;
-    const ts = Number.isFinite(rawTs) ? rawTs : 1;
-
     if (Array.isArray(candidate.deletedThreadIds)) {
       for (const id of candidate.deletedThreadIds) if (id) cumulativeTombstones.add(String(id));
     }
@@ -208,6 +215,16 @@ export async function queryUserWorkspace(identifiers: {
     if (candidate.userDeletedCampaigns) {
       anyUserDeletedCampaigns = true;
     }
+    rawCandidates.push({ candidate, source });
+  };
+
+  const considerCandidate = (
+    candidate: any,
+    source: 'firestore-db' | 'supabase-auth' | 'supabase-table' | 'backend-db'
+  ) => {
+    if (!candidate || typeof candidate !== 'object') return;
+    const rawTs = candidate.updatedAt ? new Date(candidate.updatedAt).getTime() : 1;
+    const ts = Number.isFinite(rawTs) ? rawTs : 1;
 
     const scrubbedCandidate = scrubWorkspaceCollections(candidate, cumulativeTombstones);
 
@@ -296,7 +313,7 @@ export async function queryUserWorkspace(identifiers: {
         if (snap && snap.exists()) {
           const firestoreData = snap.data();
           if (firestoreData && typeof firestoreData === 'object') {
-            considerCandidate(firestoreData, 'firestore-db');
+            queueCandidate(firestoreData, 'firestore-db');
           }
         }
       } catch {}
@@ -323,7 +340,7 @@ export async function queryUserWorkspace(identifiers: {
         const parsed = await safeParseResponse(res, 'Backend workspace fetch failed');
         const json = parsed.data;
         if (parsed.ok && json?.success && json?.data && typeof json.data === 'object') {
-          considerCandidate(json.data, 'backend-db');
+          queueCandidate(json.data, 'backend-db');
           return;
         }
 
@@ -340,7 +357,7 @@ export async function queryUserWorkspace(identifiers: {
           const parsed2 = await safeParseResponse(res2, 'Backend workspace fallback fetch failed');
           const json2 = parsed2.data;
           if (parsed2.ok && json2?.success && json2?.data && typeof json2.data === 'object') {
-            considerCandidate(json2.data, 'backend-db');
+            queueCandidate(json2.data, 'backend-db');
           }
         }
       } catch (err: any) {
@@ -360,17 +377,32 @@ export async function queryUserWorkspace(identifiers: {
         }
 
         const { data: supaRows, error: supaErr } = (await withTimeout(
-          query.order('updated_at', { ascending: false }).limit(1) as any,
+          query.order('updated_at', { ascending: false }).limit(5) as any,
           2000
         )) as any;
-        if (!supaErr && Array.isArray(supaRows) && supaRows.length > 0 && supaRows[0]?.data) {
-          const raw = supaRows[0].data;
-          const workspaceObj = typeof raw === 'string' ? JSON.parse(raw) : raw;
-          considerCandidate(workspaceObj, 'supabase-table');
+        if (!supaErr && Array.isArray(supaRows) && supaRows.length > 0) {
+          for (const row of supaRows) {
+            if (row?.data) {
+              const workspaceObj = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+              queueCandidate(workspaceObj, 'supabase-table');
+            }
+          }
         }
       } catch {}
     })()
   ]);
+
+  if (cumulativeTombstones.size > 0) {
+    try {
+      const serialized = JSON.stringify(Array.from(cumulativeTombstones).slice(-5000));
+      localStorage.setItem('visualsky_permanently_deleted_ids', serialized);
+      localStorage.setItem('visualsky_deleted_imap_msgs', serialized);
+    } catch {}
+  }
+
+  for (const item of rawCandidates) {
+    considerCandidate(item.candidate, item.source);
+  }
 
   if (bestData) {
     return {
@@ -430,11 +462,20 @@ export async function persistUserWorkspace(params: {
     }
   })();
 
-  // 2. Fire-and-forget Supabase persistence
+  // 2. Supabase persistence (update all rows matching email + upsert canonical row)
   if (isSupabaseConfigured && supabase) {
     Promise.resolve().then(async () => {
       try {
-        const rowId = canonicalDocId || cleanUserId || `usr-${cleanEmail.replace(/[^a-z0-9]/g, '-')}`;
+        if (cleanEmail) {
+          await supabase
+            .from('user_workspaces')
+            .update({
+              data: payloadToSave,
+              updated_at: nowIso
+            })
+            .ilike('email', cleanEmail);
+        }
+        const rowId = cleanUserId || canonicalDocId || `usr-${cleanEmail.replace(/[^a-z0-9]/g, '-')}`;
         await supabase.from('user_workspaces').upsert(
           {
             user_id: rowId,

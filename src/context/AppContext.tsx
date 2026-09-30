@@ -1432,6 +1432,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const allDeletedIds = Array.from(getPermanentlyDeletedSet());
 
     try {
+      // Fast granular resource endpoint with keepalive so even immediate page reload persists deletions
+      fetch(`/api/user-data/${encodeURIComponent(cleanEmail)}/resource/${encodeURIComponent(resource)}`, {
+        method: 'POST',
+        keepalive: true,
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store'
+        },
+        body: JSON.stringify({
+          items,
+          permanentlyDeletedIds: allDeletedIds,
+          deletedThreadIds: allDeletedIds,
+          userDeletedCampaigns: userDeletedCampaignsRef.current,
+          updatedAt: nowIso,
+          userId: cleanUserId
+        })
+      }).catch(() => {});
+
       const snapshotData = {
         ...latestWorkspaceRef.current,
         updatedAt: nowIso,
@@ -2675,6 +2693,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Campaign Actions (Functional state updates + ref sync so live dispatch loops never overwrite newly created campaigns)
   const createCampaign = (campaignData: Omit<Campaign, 'id' | 'sentCount' | 'openCount' | 'replyCount' | 'bounceCount' | 'createdAt'>): Campaign => {
+    // If user creates a new campaign with a name that was previously deleted, clear old name tombstone
+    if (campaignData.name) {
+      try {
+        const cleanNameLower = String(campaignData.name).trim().toLowerCase();
+        const slug = cleanNameLower.replace(/[^a-z0-9]+/g, '-');
+        const permSet = getPermanentlyDeletedSet();
+        if (permSet.has(`camp-name:${cleanNameLower}`) || permSet.has(`camp-restored-${slug}`)) {
+          permSet.delete(`camp-name:${cleanNameLower}`);
+          permSet.delete(`camp-restored-${slug}`);
+          const serialized = JSON.stringify(Array.from(permSet).slice(-5000));
+          localStorage.setItem('visualsky_permanently_deleted_ids', serialized);
+          localStorage.setItem('visualsky_deleted_imap_msgs', serialized);
+        }
+      } catch {}
+    }
+
     const newCamp: Campaign = {
       ...campaignData,
       id: `camp-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
@@ -2707,8 +2741,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateCampaign = (id: string, updates: Partial<Campaign>) => {
+    const permDeleted = getPermanentlyDeletedSet();
+    if (permDeleted.has(String(id))) return;
     setCampaigns(prev => {
-      const updated = prev.map(c => c.id === id ? { ...c, ...updates } : c);
+      const freshDeleted = getPermanentlyDeletedSet();
+      if (freshDeleted.has(String(id))) return prev;
+      const updated = prev
+        .filter(c => c && !freshDeleted.has(String(c.id)))
+        .map(c => c.id === id ? { ...c, ...updates } : c);
       (latestWorkspaceRef.current as any).campaigns = updated;
       persistResourceDirectly('campaigns', updated);
       return updated;
@@ -2792,14 +2832,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCampaigns(prev => {
       const updated = prev
         .filter(c => c && !String(c.id).startsWith('camp-live-') && !String(c.id).startsWith('camp-restored-'))
-        .map(c => c.id === id ? { ...c, isTrash: true, deletedAt: new Date().toISOString() } : c);
+        .map(c => c.id === id ? { ...c, status: 'paused' as const, isTrash: true, deletedAt: new Date().toISOString() } : c);
       (latestWorkspaceRef.current as any).campaigns = updated;
       persistResourceDirectly('campaigns', updated);
       return updated;
     });
     addNotification({
       title: 'Campaign Moved to Trash 🗑️',
-      message: 'Campaign sequence moved to Trash. You can restore it anytime.',
+      message: 'Campaign sequence paused and moved to Trash. You can restore or permanently delete it anytime.',
       type: 'campaign',
       linkTab: 'trash'
     });
@@ -2821,23 +2861,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const permanentDeleteCampaign = (id: string) => {
-    const sourceList = latestWorkspaceRef.current.campaigns || campaigns || [];
-    const toDelete = sourceList.filter(c => c && c.id === id);
+    const combinedList = [
+      ...(Array.isArray(latestWorkspaceRef.current.campaigns) ? latestWorkspaceRef.current.campaigns : []),
+      ...(Array.isArray(campaigns) ? campaigns : [])
+    ];
+    const toDelete = combinedList.filter(c => c && (c.id === id || c.name === id));
     recordCampaignTombstones(toDelete.length > 0 ? toDelete : [{ id } as Campaign]);
+    recordPermanentlyDeletedIds([id]);
+
+    const permDeleted = getPermanentlyDeletedSet();
+    const isAllowedCamp = (c: Campaign) => {
+      if (!c || !c.id) return false;
+      if (c.id === id || permDeleted.has(String(c.id))) return false;
+      if (String(c.id).startsWith('camp-live-') || String(c.id).startsWith('camp-restored-')) return false;
+      if (c.name) {
+        const cleanNameLower = String(c.name).trim().toLowerCase();
+        const slug = cleanNameLower.replace(/[^a-z0-9]+/g, '-');
+        if (permDeleted.has(`camp-name:${cleanNameLower}`) || permDeleted.has(`camp-restored-${slug}`)) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    const baseCampaigns = Array.isArray(campaigns) && campaigns.length > 0
+      ? campaigns
+      : (Array.isArray(latestWorkspaceRef.current.campaigns) ? latestWorkspaceRef.current.campaigns : []);
+    const immediateUpdated = baseCampaigns.filter(isAllowedCamp);
+    (latestWorkspaceRef.current as any).campaigns = immediateUpdated;
+    try {
+      localStorage.setItem('visualsky_campaigns', JSON.stringify(immediateUpdated));
+    } catch {}
+
     setCampaigns(prev => {
-      const permDeleted = getPermanentlyDeletedSet();
-      const updated = prev.filter(
-        c =>
-          c &&
-          c.id !== id &&
-          !permDeleted.has(String(c.id)) &&
-          !String(c.id).startsWith('camp-live-') &&
-          !String(c.id).startsWith('camp-restored-')
-      );
+      const updated = prev.filter(isAllowedCamp);
       (latestWorkspaceRef.current as any).campaigns = updated;
-      persistResourceDirectly('campaigns', updated);
+      try {
+        localStorage.setItem('visualsky_campaigns', JSON.stringify(updated));
+      } catch {}
       return updated;
     });
+
+    persistResourceDirectly('campaigns', immediateUpdated);
+
     addNotification({
       title: 'Campaign Purged 🗑️',
       message: 'Campaign sequence permanently removed.',
@@ -2855,24 +2921,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const bulkPermanentDeleteCampaigns = (ids: string[]) => {
-    const sourceList = latestWorkspaceRef.current.campaigns || campaigns || [];
-    const toDelete = sourceList.filter(c => c && ids.includes(c.id));
+    const combinedList = [
+      ...(Array.isArray(latestWorkspaceRef.current.campaigns) ? latestWorkspaceRef.current.campaigns : []),
+      ...(Array.isArray(campaigns) ? campaigns : [])
+    ];
+    const toDelete = combinedList.filter(c => c && ids.includes(c.id));
     recordCampaignTombstones(toDelete);
     recordPermanentlyDeletedIds(ids);
+
+    const permDeleted = getPermanentlyDeletedSet();
+    const isAllowedCamp = (c: Campaign) => {
+      if (!c || !c.id) return false;
+      if (ids.includes(c.id) || permDeleted.has(String(c.id))) return false;
+      if (String(c.id).startsWith('camp-live-') || String(c.id).startsWith('camp-restored-')) return false;
+      if (c.name) {
+        const cleanNameLower = String(c.name).trim().toLowerCase();
+        const slug = cleanNameLower.replace(/[^a-z0-9]+/g, '-');
+        if (permDeleted.has(`camp-name:${cleanNameLower}`) || permDeleted.has(`camp-restored-${slug}`)) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    const baseCampaigns = Array.isArray(campaigns) && campaigns.length > 0
+      ? campaigns
+      : (Array.isArray(latestWorkspaceRef.current.campaigns) ? latestWorkspaceRef.current.campaigns : []);
+    const immediateUpdated = baseCampaigns.filter(isAllowedCamp);
+    (latestWorkspaceRef.current as any).campaigns = immediateUpdated;
+    try {
+      localStorage.setItem('visualsky_campaigns', JSON.stringify(immediateUpdated));
+    } catch {}
+
     setCampaigns(prev => {
-      const permDeleted = getPermanentlyDeletedSet();
-      const updated = prev.filter(
-        c =>
-          c &&
-          !ids.includes(c.id) &&
-          !permDeleted.has(String(c.id)) &&
-          !String(c.id).startsWith('camp-live-') &&
-          !String(c.id).startsWith('camp-restored-')
-      );
+      const updated = prev.filter(isAllowedCamp);
       (latestWorkspaceRef.current as any).campaigns = updated;
-      persistResourceDirectly('campaigns', updated);
+      try {
+        localStorage.setItem('visualsky_campaigns', JSON.stringify(updated));
+      } catch {}
       return updated;
     });
+
+    persistResourceDirectly('campaigns', immediateUpdated);
   };
 
   const launchQuickFollowUp = (days: '7d' | '14d' | '30d') => {

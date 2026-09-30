@@ -587,6 +587,54 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
   const abortDispatchRef = useRef<boolean>(false);
   const isPausedRef = useRef<boolean>(false);
+  const dispatchCampaignIdRef = useRef<string | null>(null);
+  const deletedCampaignIdsRef = useRef<Set<string>>(new Set());
+
+  const executePermanentDeleteCampaign = (camp: Campaign | { id: string; name?: string }) => {
+    if (!camp || !camp.id) return;
+    deletedCampaignIdsRef.current.add(camp.id);
+    if (
+      isDispatching &&
+      (dispatchCampaignIdRef.current === camp.id ||
+        (camp.name && dispatchCampaignName === camp.name) ||
+        activeCampaigns.length <= 1)
+    ) {
+      abortDispatchRef.current = true;
+      dispatchCampaignIdRef.current = null;
+      setIsDispatching(false);
+      setIsPaused(false);
+      setShowLiveDispatcher(false);
+    }
+    if (editingCampaignId === camp.id) {
+      setShowWizardModal(false);
+      setEditingCampaignId(null);
+    }
+    permanentDeleteCampaign(camp.id);
+    setCampaignToDelete(null);
+  };
+
+  const executeTrashCampaign = (camp: Campaign | { id: string; name?: string }) => {
+    if (!camp || !camp.id) return;
+    deletedCampaignIdsRef.current.add(camp.id);
+    if (
+      isDispatching &&
+      (dispatchCampaignIdRef.current === camp.id ||
+        (camp.name && dispatchCampaignName === camp.name) ||
+        activeCampaigns.length <= 1)
+    ) {
+      abortDispatchRef.current = true;
+      dispatchCampaignIdRef.current = null;
+      setIsDispatching(false);
+      setIsPaused(false);
+      setShowLiveDispatcher(false);
+    }
+    if (editingCampaignId === camp.id) {
+      setShowWizardModal(false);
+      setEditingCampaignId(null);
+    }
+    deleteCampaign(camp.id);
+    setCampaignToDelete(null);
+  };
 
   useEffect(() => {
     isPausedRef.current = isPaused;
@@ -1013,6 +1061,10 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     setIsDispatching(true);
     setIsPaused(false);
     setDispatchCampaignName(targetCampaign?.name || 'Outreach Sequence');
+    dispatchCampaignIdRef.current = targetCampaign?.id || null;
+    if (targetCampaign?.id) {
+      deletedCampaignIdsRef.current.delete(targetCampaign.id);
+    }
     abortDispatchRef.current = false;
 
     // Resolve leads with full fallback safety
@@ -1090,7 +1142,10 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     let sentSoFar = 0;
 
     for (let i = 0; i < targetLeads.length; i++) {
-      if (abortDispatchRef.current) {
+      if (
+        abortDispatchRef.current ||
+        (targetCampaign?.id && deletedCampaignIdsRef.current.has(targetCampaign.id))
+      ) {
         break;
       }
 
@@ -1180,6 +1235,13 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       } catch (err: any) {
         isSentSuccess = false;
         sendErrorMessage = err?.message || 'Network error connecting to SMTP relay';
+      }
+
+      if (
+        abortDispatchRef.current ||
+        (targetCampaign?.id && deletedCampaignIdsRef.current.has(targetCampaign.id))
+      ) {
+        break;
       }
 
       if (isSentSuccess) {
@@ -1744,11 +1806,13 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                         )}
 
                         <button
+                          type="button"
                           onClick={() => setCampaignToDelete(camp)}
-                          className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-rose-950 hover:text-rose-400 text-slate-400 flex items-center justify-center transition cursor-pointer"
+                          className="px-3 py-1.5 rounded-xl bg-rose-950/60 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
                           title="Delete Campaign"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete</span>
                         </button>
                       </div>
                     </div>
@@ -2136,17 +2200,32 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                       const rcSent = Math.max(rc.sentCount || 0, rcLogs.filter(l => l.status !== 'failed').length);
                       const rcTotal = Math.max(rc.totalLeads || 0, rc.leadIds?.length || 0, rcSent);
                       return (
-                        <button
+                        <div
                           key={rc.id}
-                          type="button"
-                          onClick={() => handleOpenEditWizard(rc)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-emerald-500/40 text-[11px] text-slate-200 flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition"
-                          title="Click to inspect or edit this running campaign"
+                          className="px-2.5 py-1 rounded-lg bg-slate-900/90 border border-emerald-500/40 text-[11px] text-slate-200 flex items-center gap-1.5 whitespace-nowrap"
                         >
-                          <span className="font-bold text-emerald-300">{rc.name}</span>
-                          <span className="font-mono text-cyan-300">({rcSent}/{rcTotal} sent)</span>
-                          <Edit3 className="w-3 h-3 text-slate-400" />
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditWizard(rc)}
+                            className="flex items-center gap-1.5 hover:text-white cursor-pointer transition"
+                            title="Click to inspect or edit this running campaign"
+                          >
+                            <span className="font-bold text-emerald-300">{rc.name}</span>
+                            <span className="font-mono text-cyan-300">({rcSent}/{rcTotal} sent)</span>
+                            <Edit3 className="w-3 h-3 text-slate-400" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              executePermanentDeleteCampaign(rc);
+                            }}
+                            className="ml-1 p-0.5 rounded hover:bg-rose-600/30 text-rose-400 hover:text-rose-200 transition cursor-pointer"
+                            title="Permanently Delete Running Campaign"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       );
                     })}
                 </div>
@@ -3577,13 +3656,26 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
               <div className="flex items-center gap-2 flex-wrap">
                 {editingCampaignId && (
-                  <button
-                    type="button"
-                    onClick={() => handleLaunchCampaign(true)}
-                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center gap-1.5"
-                  >
-                    <span>🚀 Save & Run Dispatch Now</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const existing = activeCampaigns.find(c => c.id === editingCampaignId);
+                        executePermanentDeleteCampaign(existing || { id: editingCampaignId, name: campaignTitle });
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-rose-950/80 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40 font-extrabold text-xs transition cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Permanently</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleLaunchCampaign(true)}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>🚀 Save & Run Dispatch Now</span>
+                    </button>
+                  </>
                 )}
 
                 {wizardStep < 6 && (
@@ -3946,10 +4038,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  deleteCampaign(campaignToDelete.id);
-                  setCampaignToDelete(null);
-                }}
+                onClick={() => executeTrashCampaign(campaignToDelete)}
                 className="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold text-xs transition cursor-pointer flex items-center gap-1.5"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -3957,10 +4046,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  permanentDeleteCampaign(campaignToDelete.id);
-                  setCampaignToDelete(null);
-                }}
+                onClick={() => executePermanentDeleteCampaign(campaignToDelete)}
                 className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs shadow-lg shadow-rose-600/20 transition cursor-pointer flex items-center gap-1.5"
               >
                 <Trash2 className="w-3.5 h-3.5" />

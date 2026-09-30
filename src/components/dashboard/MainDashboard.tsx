@@ -40,7 +40,8 @@ import {
   Workflow,
   FolderOpen,
   Link2,
-  Paperclip
+  Paperclip,
+  Trash2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -53,6 +54,7 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
   const { 
     leads, 
     campaigns: rawCampaigns, 
+    permanentDeleteCampaign,
     smtpAccounts, 
     threads, 
     sentEmails: rawSentEmails,
@@ -656,13 +658,24 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
                       </td>
 
                       <td className="p-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => setActiveTab('sent')}
-                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
-                        >
-                          Inspect Outbox
-                        </button>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('sent')}
+                            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
+                          >
+                            Inspect Outbox
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => permanentDeleteCampaign(camp.id)}
+                            className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1"
+                            title="Permanently Delete Campaign"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );

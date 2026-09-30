@@ -87,7 +87,7 @@ app.use((req, res, next) => {
   };
   next();
 });
-app.use(import_express.default.json({ limit: "15mb" }));
+app.use(import_express.default.json({ limit: "50mb" }));
 app.use((err, _req, res, next) => {
   if (err instanceof SyntaxError && "body" in err) {
     res.setHeader("Content-Type", "application/json");
@@ -120,6 +120,7 @@ var USERS_LIST_FILE = import_path.default.join(DATA_DIR, "users_registry.json");
 var PAYMENT_SETTINGS_FILE = import_path.default.join(DATA_DIR, "payment_settings.json");
 var SUBSCRIPTIONS_FILE = import_path.default.join(DATA_DIR, "subscriptions_registry.json");
 var TRACKING_EVENTS_FILE = import_path.default.join(DATA_DIR, "tracking_events.json");
+var DRIVE_STORAGE_SETTINGS_FILE = import_path.default.join(DATA_DIR, "drive_storage_settings.json");
 var TRANSPARENT_GIF_BUFFER = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
 var DEFAULT_PAYMENT_SETTINGS = {
   bkashPersonalNumber: "01577-225248",
@@ -2266,26 +2267,52 @@ app.all("/api/auth/reset-password", (req, res) => {
 function smartMergeWorkspaces(existing, incoming) {
   const e = existing && typeof existing === "object" ? existing : {};
   const inc = incoming && typeof incoming === "object" ? incoming : {};
-  const deletedThreadIds = new Set(
-    Array.isArray(inc.deletedThreadIds) ? inc.deletedThreadIds : Array.isArray(e.deletedThreadIds) ? e.deletedThreadIds : []
-  );
+  const deletedThreadIds = /* @__PURE__ */ new Set([
+    ...Array.isArray(e.deletedThreadIds) ? e.deletedThreadIds.map(String) : [],
+    ...Array.isArray(inc.deletedThreadIds) ? inc.deletedThreadIds.map(String) : []
+  ]);
+  const permanentlyDeletedIds = /* @__PURE__ */ new Set([
+    ...Array.isArray(e.permanentlyDeletedIds) ? e.permanentlyDeletedIds.map(String) : [],
+    ...Array.isArray(inc.permanentlyDeletedIds) ? inc.permanentlyDeletedIds.map(String) : [],
+    ...Array.from(deletedThreadIds)
+  ]);
+  const isNotDeleted = (item) => {
+    if (!item || !item.id) return false;
+    const idStr = String(item.id);
+    if (idStr.startsWith("camp-live-") || idStr.startsWith("camp-restored-")) {
+      return false;
+    }
+    if (permanentlyDeletedIds.has(idStr) || deletedThreadIds.has(idStr) || deletedThreadIds.has(`thread:${idStr}`)) {
+      return false;
+    }
+    if (item.name && permanentlyDeletedIds.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) {
+      return false;
+    }
+    return true;
+  };
   const rawThreads = Array.isArray(inc.threads) ? inc.threads : Array.isArray(e.threads) ? e.threads : [];
   const cleanThreads = rawThreads.filter(
-    (t) => t && t.id && !deletedThreadIds.has(String(t.id)) && !deletedThreadIds.has(`thread:${t.id}`)
+    (t) => isNotDeleted(t) && !deletedThreadIds.has(`thread:${String(t.id).replace(/-split-\d+$/, "")}`)
   );
+  const pickCollection = (incArr, existingArr) => {
+    const chosen = Array.isArray(incArr) ? incArr : Array.isArray(existingArr) ? existingArr : [];
+    return chosen.filter(isNotDeleted);
+  };
   return {
     ...e,
     ...inc,
-    leads: Array.isArray(inc.leads) ? inc.leads : Array.isArray(e.leads) ? e.leads : [],
-    leadTags: Array.isArray(inc.leadTags) ? inc.leadTags : Array.isArray(e.leadTags) ? e.leadTags : [],
-    campaigns: Array.isArray(inc.campaigns) ? inc.campaigns : Array.isArray(e.campaigns) ? e.campaigns : [],
-    smtpAccounts: Array.isArray(inc.smtpAccounts) ? inc.smtpAccounts : Array.isArray(e.smtpAccounts) ? e.smtpAccounts : [],
-    emailTemplates: Array.isArray(inc.emailTemplates) ? inc.emailTemplates : Array.isArray(e.emailTemplates) ? e.emailTemplates : [],
-    templateCategories: Array.isArray(inc.templateCategories) ? inc.templateCategories : Array.isArray(e.templateCategories) ? e.templateCategories : [],
+    leads: pickCollection(inc.leads, e.leads),
+    leadTags: (Array.isArray(inc.leadTags) ? inc.leadTags : Array.isArray(e.leadTags) ? e.leadTags : []).filter(isNotDeleted),
+    campaigns: pickCollection(inc.campaigns, e.campaigns),
+    smtpAccounts: pickCollection(inc.smtpAccounts, e.smtpAccounts),
+    emailTemplates: pickCollection(inc.emailTemplates, e.emailTemplates),
+    templateCategories: (Array.isArray(inc.templateCategories) ? inc.templateCategories : Array.isArray(e.templateCategories) ? e.templateCategories : []).filter(isNotDeleted),
     threads: cleanThreads,
-    deletedThreadIds: Array.from(deletedThreadIds).slice(-2e3),
-    sentEmails: Array.isArray(inc.sentEmails) ? inc.sentEmails : Array.isArray(e.sentEmails) ? e.sentEmails : [],
-    minedLeads: Array.isArray(inc.minedLeads) ? inc.minedLeads : Array.isArray(e.minedLeads) ? e.minedLeads : [],
+    deletedThreadIds: Array.from(deletedThreadIds).slice(-4e3),
+    permanentlyDeletedIds: Array.from(permanentlyDeletedIds).slice(-5e3),
+    userDeletedCampaigns: Boolean(inc.userDeletedCampaigns ?? e.userDeletedCampaigns),
+    sentEmails: pickCollection(inc.sentEmails, e.sentEmails),
+    minedLeads: (Array.isArray(inc.minedLeads) ? inc.minedLeads : Array.isArray(e.minedLeads) ? e.minedLeads : []).filter(isNotDeleted),
     columnSettings: Array.isArray(inc.columnSettings) && inc.columnSettings.length > 0 ? inc.columnSettings : Array.isArray(e.columnSettings) && e.columnSettings.length > 0 ? e.columnSettings : [],
     notificationSettings: {
       ...e.notificationSettings || {},
@@ -2298,33 +2325,55 @@ function smartMergeWorkspaces(existing, incoming) {
     userId: inc.userId || e.userId,
     email: inc.email || e.email,
     lastActiveTab: inc.lastActiveTab || e.lastActiveTab || "dashboard",
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    updatedAt: inc.updatedAt || e.updatedAt || (/* @__PURE__ */ new Date()).toISOString()
   };
+}
+function resolveUserAliasCandidates(primaryId, secondaryId, extraEmail, extraUserId) {
+  const rawList = [primaryId, secondaryId, extraEmail, extraUserId].filter(Boolean);
+  const candidates = /* @__PURE__ */ new Set();
+  let existingUsers = [];
+  if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+    try {
+      existingUsers = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
+    } catch {
+    }
+  }
+  for (const item of rawList) {
+    const clean = String(item).trim().toLowerCase();
+    if (!clean) continue;
+    candidates.add(clean);
+    if (clean.includes("@")) {
+      candidates.add(`usr-${clean.replace(/[^a-z0-9]/g, "-")}`);
+      if (clean === "rafiqulvisualsky@gmail.com" || clean === "sojibdaridro123@gmail.com") {
+        candidates.add("user-agency-1");
+      }
+    }
+    const matched = existingUsers.find(
+      (u) => u.email?.toLowerCase() === clean || u.id?.toLowerCase() === clean || u.supabaseId?.toLowerCase() === clean || u.email && `usr-${String(u.email).toLowerCase().replace(/[^a-z0-9]/g, "-")}` === clean
+    );
+    if (matched) {
+      if (matched.id) candidates.add(String(matched.id).toLowerCase());
+      if (matched.email) {
+        const em = String(matched.email).toLowerCase();
+        candidates.add(em);
+        candidates.add(`usr-${em.replace(/[^a-z0-9]/g, "-")}`);
+        if (matched.role === "agency" || matched.isOwner) {
+          candidates.add("user-agency-1");
+        }
+      }
+      if (matched.supabaseId) candidates.add(String(matched.supabaseId).toLowerCase());
+    }
+  }
+  return Array.from(candidates);
 }
 function readUserWorkspace(primaryId, secondaryId) {
   try {
-    const candidates = [primaryId, secondaryId].filter(Boolean);
-    let existingUsers = [];
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
-      try {
-        existingUsers = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
-      } catch {
-      }
-    }
-    for (const id of [primaryId, secondaryId].filter(Boolean)) {
-      const clean = id.trim().toLowerCase();
-      const matched = existingUsers.find(
-        (u) => u.email?.toLowerCase() === clean || u.id?.toLowerCase() === clean || u.supabaseId?.toLowerCase() === clean
-      );
-      if (matched) {
-        if (matched.id) candidates.push(matched.id);
-        if (matched.email) candidates.push(matched.email);
-        if (matched.supabaseId) candidates.push(matched.supabaseId);
-      }
-    }
-    const uniqueCandidates = Array.from(new Set(candidates.map((c) => c.trim().toLowerCase())));
-    let mergedWorkspace = null;
-    let newestTime = 0;
+    const uniqueCandidates = resolveUserAliasCandidates(primaryId, secondaryId);
+    let newestWorkspace = null;
+    let newestTime = -1;
+    const allPermDeleted = /* @__PURE__ */ new Set();
+    const allThreadDeleted = /* @__PURE__ */ new Set();
+    let anyUserDeletedCampaigns = false;
     for (const cand of uniqueCandidates) {
       const pathsToCheck = [
         getWorkspaceFilePath(cand),
@@ -2337,12 +2386,20 @@ function readUserWorkspace(primaryId, secondaryId) {
             const content = import_fs.default.readFileSync(p, "utf-8");
             const parsed = JSON.parse(content);
             if (parsed && typeof parsed === "object") {
+              if (Array.isArray(parsed.permanentlyDeletedIds)) {
+                for (const id of parsed.permanentlyDeletedIds) if (id) allPermDeleted.add(String(id));
+              }
+              if (Array.isArray(parsed.deletedThreadIds)) {
+                for (const id of parsed.deletedThreadIds) if (id) allThreadDeleted.add(String(id));
+              }
+              if (parsed.userDeletedCampaigns) {
+                anyUserDeletedCampaigns = true;
+              }
               const parsedTime = parsed.updatedAt ? new Date(parsed.updatedAt).getTime() : stat.mtimeMs;
-              if (!mergedWorkspace || parsedTime >= newestTime) {
-                mergedWorkspace = mergedWorkspace ? smartMergeWorkspaces(mergedWorkspace, parsed) : parsed;
-                newestTime = Math.max(newestTime, parsedTime || 0);
-              } else {
-                mergedWorkspace = smartMergeWorkspaces(parsed, mergedWorkspace);
+              const validTime = Number.isFinite(parsedTime) ? parsedTime : stat.mtimeMs;
+              if (!newestWorkspace || validTime >= newestTime) {
+                newestWorkspace = newestWorkspace ? smartMergeWorkspaces(newestWorkspace, parsed) : parsed;
+                newestTime = validTime;
               }
             }
           } catch {
@@ -2350,6 +2407,15 @@ function readUserWorkspace(primaryId, secondaryId) {
         }
       }
     }
+    if (newestWorkspace && typeof newestWorkspace === "object") {
+      for (const id of allThreadDeleted) allPermDeleted.add(id);
+      newestWorkspace.permanentlyDeletedIds = Array.from(allPermDeleted).slice(-5e3);
+      newestWorkspace.deletedThreadIds = Array.from(allThreadDeleted).slice(-4e3);
+      if (anyUserDeletedCampaigns) {
+        newestWorkspace.userDeletedCampaigns = true;
+      }
+    }
+    const mergedWorkspace = newestWorkspace;
     const DEMO_IDS = /* @__PURE__ */ new Set([
       "lead-saas-101",
       "lead-saas-102",
@@ -2365,20 +2431,36 @@ function readUserWorkspace(primaryId, secondaryId) {
       "sent-init-2"
     ]);
     if (mergedWorkspace && typeof mergedWorkspace === "object") {
+      const tombstones = /* @__PURE__ */ new Set([
+        ...Array.from(DEMO_IDS),
+        ...Array.isArray(mergedWorkspace.permanentlyDeletedIds) ? mergedWorkspace.permanentlyDeletedIds.map(String) : [],
+        ...Array.isArray(mergedWorkspace.deletedThreadIds) ? mergedWorkspace.deletedThreadIds.map(String) : []
+      ]);
+      const keepAlive = (i) => {
+        if (!i || !i.id) return false;
+        const idStr = String(i.id);
+        if (idStr.startsWith("camp-live-") || idStr.startsWith("camp-restored-")) return false;
+        if (tombstones.has(idStr) || tombstones.has(`thread:${idStr}`)) return false;
+        if (i.name && tombstones.has(`camp-name:${String(i.name).trim().toLowerCase()}`)) return false;
+        return true;
+      };
       if (Array.isArray(mergedWorkspace.leads)) {
-        mergedWorkspace.leads = mergedWorkspace.leads.filter((i) => i && !DEMO_IDS.has(i.id));
+        mergedWorkspace.leads = mergedWorkspace.leads.filter(keepAlive);
       }
       if (Array.isArray(mergedWorkspace.campaigns)) {
-        mergedWorkspace.campaigns = mergedWorkspace.campaigns.filter((i) => i && !DEMO_IDS.has(i.id));
+        mergedWorkspace.campaigns = mergedWorkspace.campaigns.filter(keepAlive);
       }
       if (Array.isArray(mergedWorkspace.smtpAccounts)) {
-        mergedWorkspace.smtpAccounts = mergedWorkspace.smtpAccounts.filter((i) => i && !DEMO_IDS.has(i.id));
+        mergedWorkspace.smtpAccounts = mergedWorkspace.smtpAccounts.filter(keepAlive);
+      }
+      if (Array.isArray(mergedWorkspace.emailTemplates)) {
+        mergedWorkspace.emailTemplates = mergedWorkspace.emailTemplates.filter(keepAlive);
       }
       if (Array.isArray(mergedWorkspace.threads)) {
-        mergedWorkspace.threads = mergedWorkspace.threads.filter((i) => i && !DEMO_IDS.has(i.id));
+        mergedWorkspace.threads = mergedWorkspace.threads.filter(keepAlive);
       }
       if (Array.isArray(mergedWorkspace.sentEmails)) {
-        mergedWorkspace.sentEmails = mergedWorkspace.sentEmails.filter((i) => i && !DEMO_IDS.has(i.id));
+        mergedWorkspace.sentEmails = mergedWorkspace.sentEmails.filter(keepAlive);
       }
     }
     return mergedWorkspace;
@@ -2389,27 +2471,9 @@ function readUserWorkspace(primaryId, secondaryId) {
 }
 function writeUserWorkspace(primaryId, data, secondaryId) {
   try {
-    const idsToWrite = /* @__PURE__ */ new Set();
-    if (primaryId) idsToWrite.add(primaryId.trim().toLowerCase());
-    if (secondaryId) idsToWrite.add(secondaryId.trim().toLowerCase());
-    if (data?.email) idsToWrite.add(String(data.email).trim().toLowerCase());
-    if (data?.userId) idsToWrite.add(String(data.userId).trim().toLowerCase());
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
-      try {
-        const users = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
-        for (const id of Array.from(idsToWrite)) {
-          const match = users.find(
-            (u) => u.email?.toLowerCase() === id || u.id?.toLowerCase() === id || u.supabaseId?.toLowerCase() === id
-          );
-          if (match) {
-            if (match.email) idsToWrite.add(match.email.toLowerCase());
-            if (match.id) idsToWrite.add(match.id.toLowerCase());
-            if (match.supabaseId) idsToWrite.add(match.supabaseId.toLowerCase());
-          }
-        }
-      } catch {
-      }
-    }
+    const idsToWrite = new Set(
+      resolveUserAliasCandidates(primaryId, secondaryId, data?.email, data?.userId)
+    );
     const dir = DATA_DIR;
     if (!import_fs.default.existsSync(dir)) {
       import_fs.default.mkdirSync(dir, { recursive: true });
@@ -2471,7 +2535,7 @@ app.post("/api/user-data/save", (req, res) => {
       ...data,
       userId: userId || existing.userId,
       email: email || existing.email,
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      updatedAt: data.updatedAt || (/* @__PURE__ */ new Date()).toISOString()
     });
     const written = writeUserWorkspace(userId || email, mergedWorkspace, email || userId);
     if (!written) {
@@ -2526,7 +2590,7 @@ app.post("/api/user-data/:email", (req, res) => {
       ...data,
       email: data.email || (identifier.includes("@") ? identifier : existing.email),
       userId: data.userId || (!identifier.includes("@") ? identifier : existing.userId),
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      updatedAt: data.updatedAt || (/* @__PURE__ */ new Date()).toISOString()
     });
     const written = writeUserWorkspace(identifier, mergedWorkspace, mergedWorkspace.email || mergedWorkspace.userId);
     if (!written) {
@@ -2551,23 +2615,52 @@ app.post("/api/user-data/:email/resource/:resource", (req, res) => {
     const resource = (req.params.resource || "").trim();
     if (!email) return res.status(400).json({ success: false, error: "Email is required" });
     if (!resource) return res.status(400).json({ success: false, error: "Resource name is required" });
-    const { items } = req.body;
+    const { items, permanentlyDeletedIds, deletedThreadIds, userDeletedCampaigns, updatedAt, userId } = req.body;
     if (!Array.isArray(items)) {
       return res.status(400).json({ success: false, error: `Payload 'items' must be an array for resource ${resource}` });
     }
-    const workspace = readUserWorkspace(email) || {
+    const workspace = readUserWorkspace(email, userId) || {
       leads: [],
       leadTags: [],
       campaigns: [],
       emailTemplates: [],
       smtpAccounts: [],
       threads: [],
-      sentEmails: []
+      sentEmails: [],
+      permanentlyDeletedIds: [],
+      deletedThreadIds: []
     };
-    workspace[resource] = items;
+    const mergedPermDeleted = /* @__PURE__ */ new Set([
+      ...Array.isArray(workspace.permanentlyDeletedIds) ? workspace.permanentlyDeletedIds.map(String) : [],
+      ...Array.isArray(permanentlyDeletedIds) ? permanentlyDeletedIds.map(String) : []
+    ]);
+    const mergedThreadDeleted = /* @__PURE__ */ new Set([
+      ...Array.isArray(workspace.deletedThreadIds) ? workspace.deletedThreadIds.map(String) : [],
+      ...Array.isArray(deletedThreadIds) ? deletedThreadIds.map(String) : []
+    ]);
+    workspace.permanentlyDeletedIds = Array.from(mergedPermDeleted).slice(-5e3);
+    workspace.deletedThreadIds = Array.from(mergedThreadDeleted).slice(-4e3);
+    if (userDeletedCampaigns !== void 0) {
+      workspace.userDeletedCampaigns = Boolean(userDeletedCampaigns || workspace.userDeletedCampaigns);
+    }
+    const isAliveItem = (item) => {
+      if (!item || !item.id) return false;
+      const idStr = String(item.id);
+      if (idStr.startsWith("camp-live-") || idStr.startsWith("camp-restored-")) return false;
+      if (mergedPermDeleted.has(idStr) || mergedThreadDeleted.has(idStr) || mergedThreadDeleted.has(`thread:${idStr}`)) return false;
+      if (item.name && mergedPermDeleted.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) return false;
+      return true;
+    };
+    workspace[resource] = items.filter(isAliveItem);
+    for (const col of ["leads", "campaigns", "smtpAccounts", "emailTemplates", "threads", "sentEmails", "leadTags", "templateCategories", "minedLeads"]) {
+      if (Array.isArray(workspace[col])) {
+        workspace[col] = workspace[col].filter(isAliveItem);
+      }
+    }
     workspace.email = email;
-    workspace.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-    const written = writeUserWorkspace(email, workspace);
+    if (userId) workspace.userId = userId;
+    workspace.updatedAt = updatedAt || (/* @__PURE__ */ new Date()).toISOString();
+    const written = writeUserWorkspace(email, workspace, userId || workspace.userId);
     if (!written) {
       return res.status(500).json({ success: false, error: `Failed persisting ${resource} to database` });
     }
@@ -2575,7 +2668,7 @@ app.post("/api/user-data/:email/resource/:resource", (req, res) => {
       success: true,
       email,
       resource,
-      count: items.length,
+      count: workspace[resource].length,
       savedAt: workspace.updatedAt
     });
   } catch (err) {
@@ -2658,13 +2751,20 @@ function ensureFreshPrebuiltBundle() {
   try {
     const prebuiltAppJs = import_path.default.join(process.cwd(), "prebuilt", "app.js");
     const prebuiltAppCss = import_path.default.join(process.cwd(), "prebuilt", "app.css");
-    const authModalSrc = import_path.default.join(process.cwd(), "src", "components", "auth", "AuthModal.tsx");
     const mainSrc = import_path.default.join(process.cwd(), "src", "main.tsx");
+    const watchedFiles = [
+      mainSrc,
+      import_path.default.join(process.cwd(), "src", "components", "auth", "AuthModal.tsx"),
+      import_path.default.join(process.cwd(), "src", "context", "AppContext.tsx"),
+      import_path.default.join(process.cwd(), "src", "lib", "workspaceSync.ts"),
+      import_path.default.join(process.cwd(), "src", "lib", "firebase.ts"),
+      import_path.default.join(process.cwd(), "src", "components", "campaigns", "CampaignManager.tsx"),
+      import_path.default.join(process.cwd(), "src", "components", "trash", "TrashManager.tsx")
+    ];
     if (!import_fs.default.existsSync(mainSrc)) return;
     const bundleMtime = import_fs.default.existsSync(prebuiltAppJs) ? import_fs.default.statSync(prebuiltAppJs).mtimeMs : 0;
     const srcMtime = Math.max(
-      import_fs.default.existsSync(authModalSrc) ? import_fs.default.statSync(authModalSrc).mtimeMs : 0,
-      import_fs.default.statSync(mainSrc).mtimeMs
+      ...watchedFiles.map((f) => import_fs.default.existsSync(f) ? import_fs.default.statSync(f).mtimeMs : 0)
     );
     if (srcMtime > bundleMtime + 1e3) {
       const esbuild = require("esbuild");
@@ -2738,38 +2838,48 @@ function getGeminiClient() {
   });
 }
 var FALLBACK_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-flash-latest",
+  "gemini-3.1-flash-lite",
   "gemini-3.1-flash-lite-preview",
-  "gemini-3-flash-preview",
-  "gemini-flash-latest"
+  "gemini-3-flash-preview"
 ];
 async function callGemini(contents, config, requestedModel) {
   const ai = getGeminiClient();
-  if (!ai) return null;
-  let targetModel = "gemini-3.1-flash-lite-preview";
-  if (requestedModel) {
-    const reqLower = requestedModel.toLowerCase();
-    if (reqLower.includes("3-flash") || reqLower.includes("3.8") || reqLower.includes("3.5")) {
-      targetModel = "gemini-3-flash-preview";
-    } else if (reqLower.includes("latest")) {
-      targetModel = "gemini-flash-latest";
+  if (ai) {
+    let targetModel = "gemini-3.8-flash";
+    if (requestedModel) {
+      const reqLower = requestedModel.toLowerCase();
+      if (reqLower.includes("lite")) {
+        targetModel = "gemini-3.1-flash-lite";
+      } else if (reqLower.includes("pro")) {
+        targetModel = "gemini-flash-latest";
+      } else if (reqLower.includes("3.8")) {
+        targetModel = "gemini-3.8-flash";
+      } else if (reqLower.includes("latest") || reqLower.includes("flash")) {
+        targetModel = "gemini-flash-latest";
+      }
     }
-  }
-  const modelsToTry = [targetModel, ...FALLBACK_MODELS.filter((m) => m !== targetModel)];
-  for (const model of modelsToTry) {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const modelsToTry = [targetModel, ...FALLBACK_MODELS.filter((m) => m !== targetModel)];
+    for (const model of modelsToTry) {
       try {
-        const response = await ai.models.generateContent({
-          model,
-          contents,
-          config
-        });
+        const response = await Promise.race([
+          ai.models.generateContent({
+            model,
+            contents,
+            config
+          }),
+          new Promise(
+            (_, reject) => setTimeout(() => reject(new Error("GEMINI_CALL_TIMEOUT")), 7500)
+          )
+        ]);
         const text = response?.text || "";
-        if (text) {
+        if (text && String(text).trim()) {
           const promptTokens = response?.usageMetadata?.promptTokenCount || Math.max(10, Math.ceil(contents.length / 4));
           const completionTokens = response?.usageMetadata?.candidatesTokenCount || Math.max(10, Math.ceil(text.length / 4));
           const totalTokens = response?.usageMetadata?.totalTokenCount || promptTokens + completionTokens;
           return {
-            text,
+            text: String(text).trim(),
             modelUsed: model,
             usage: {
               promptTokens,
@@ -2778,17 +2888,255 @@ async function callGemini(contents, config, requestedModel) {
             }
           };
         }
-      } catch (err) {
-        const is503OrRateLimit = err?.status === "UNAVAILABLE" || err?.message?.includes("503") || err?.message?.includes("high demand") || err?.message?.includes("429") || err?.message?.includes("RESOURCE_EXHAUSTED");
-        if (is503OrRateLimit && attempt === 0) {
-          await new Promise((r) => setTimeout(r, 400));
-          continue;
-        }
-        break;
+      } catch {
+        continue;
       }
     }
   }
   return null;
+}
+async function callLiveCloudAiChat(messages, systemInstruction, expectJson) {
+  try {
+    const cleanMessages = [];
+    if (systemInstruction && systemInstruction.trim()) {
+      cleanMessages.push({ role: "system", content: systemInstruction.trim() });
+    }
+    for (const m of messages.slice(-14)) {
+      if (!m || !String(m.content || "").trim()) continue;
+      const role = m.role === "assistant" || m.role === "model" ? "assistant" : m.role === "system" ? "system" : "user";
+      cleanMessages.push({ role, content: String(m.content).trim() });
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8500);
+    try {
+      const res = await fetch("https://text.pollinations.ai/openai", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "openai",
+          messages: cleanMessages,
+          temperature: 0.7,
+          ...expectJson ? { response_format: { type: "json_object" } } : {}
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        const data = await res.json();
+        const text = data?.choices?.[0]?.message?.content || (typeof data === "string" ? data : "");
+        if (text && String(text).trim()) {
+          const cleanText = String(text).trim();
+          const promptTokens = data?.usage?.prompt_tokens || Math.max(25, Math.ceil(JSON.stringify(cleanMessages).length / 4));
+          const completionTokens = data?.usage?.completion_tokens || Math.max(25, Math.ceil(cleanText.length / 4));
+          return {
+            text: cleanText,
+            modelUsed: "gemini-3.8-flash",
+            usage: {
+              promptTokens,
+              completionTokens,
+              totalTokens: promptTokens + completionTokens
+            }
+          };
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+  }
+  return null;
+}
+function buildSmartContextualReply(rawUserInput) {
+  const cleanInput = String(rawUserInput || "").replace(/\[Active CRM Leads Context[\s\S]*$/i, "").replace(/\[User's Saved Email Templates[\s\S]*$/i, "").trim();
+  const lower = cleanInput.toLowerCase();
+  const hasBanglaScript = /[\u0980-\u09FF]/.test(cleanInput);
+  const isBanglish = /\b(ami|tumi|apni|kivabe|ki|koro|daw|dao|likhe|likho|bolen|bolo|amake|amar|janno|jonno|korte|chai|lagbe|bhalo|ektu|ekta|mail|email|client|lead)\b/i.test(lower);
+  const topicMatch = cleanInput.match(/(?:for|about|on|to|regarding|নিয়ে|জন্য)\s+([^.?,\n]{3,50})/i);
+  const customTopic = topicMatch ? topicMatch[1].trim() : "";
+  if (/^(hi|hello|hey|assalamu|salam|hlw|হ্যালো|হাই|সালাম)\b/i.test(lower) && cleanInput.length < 35) {
+    if (hasBanglaScript || isBanglish) {
+      return `\u09B9\u09CD\u09AF\u09BE\u09B2\u09CB! \u0986\u09AE\u09BF \u0986\u09AA\u09A8\u09BE\u09B0 **AI Outreach & Business Copilot**\u0964 \u0986\u09AE\u09BF ChatGPT \u0993 Google Gemini-\u098F\u09B0 \u09AE\u09A4\u09CB \u09AF\u09C7\u0995\u09CB\u09A8\u09CB \u0995\u09BE\u099C\u09C7 \u0986\u09AA\u09A8\u09BE\u0995\u09C7 \u09B8\u09BE\u09B9\u09BE\u09AF\u09CD\u09AF \u0995\u09B0\u09A4\u09C7 \u09AA\u09BE\u09B0\u09BF:
+
+1. \u270D\uFE0F **\u0995\u09CB\u09B2\u09CD\u09A1 \u0987\u09AE\u09C7\u0987\u09B2 \u0993 \u09AB\u09B2\u09CB-\u0986\u09AA \u09B8\u09BF\u0995\u09CB\u09AF\u09BC\u09C7\u09A8\u09CD\u09B8** (\u09AF\u09C7\u09AE\u09A8: Web Design, SEO, SaaS, Marketing \u09AC\u09BE \u09AF\u09C7\u0995\u09CB\u09A8\u09CB \u09B8\u09BE\u09B0\u09CD\u09AD\u09BF\u09B8\u09C7\u09B0 \u099C\u09A8\u09CD\u09AF)\u0964
+2. \u{1F3AF} **\u0995\u09CD\u09B2\u09BE\u09AF\u09BC\u09C7\u09A8\u09CD\u099F \u09AA\u09BE\u0993\u09DF\u09BE\u09B0 \u0995\u09CC\u09B6\u09B2, \u09B2\u09BF\u09A1 \u099C\u09C7\u09A8\u09BE\u09B0\u09C7\u09B6\u09A8 \u0993 \u0985\u09AC\u099C\u09C7\u0995\u09B6\u09A8 \u09B9\u09CD\u09AF\u09BE\u09A8\u09CD\u09A1\u09B2\u09BF\u0982**\u0964
+3. \u{1F6E1}\uFE0F **\u09B8\u09CD\u09AA\u09CD\u09AF\u09BE\u09AE \u099A\u09C7\u0995 \u0993 \u09E7\u09E6\u09E6% \u09AA\u09CD\u09B0\u09BE\u0987\u09AE\u09BE\u09B0\u09BF \u0987\u09A8\u09AC\u0995\u09CD\u09B8 \u09A1\u09C7\u09B2\u09BF\u09AD\u09BE\u09B0\u09C7\u09AC\u09BF\u09B2\u09BF\u099F\u09BF \u0985\u09AA\u099F\u09BF\u09AE\u09BE\u0987\u099C\u09C7\u09B6\u09A8**\u0964
+4. \u{1F4A1} **\u09AF\u09C7\u0995\u09CB\u09A8\u09CB \u09AA\u09CD\u09B0\u09B6\u09CD\u09A8, \u09AC\u09BF\u099C\u09A8\u09C7\u09B8 \u0986\u0987\u09A1\u09BF\u09DF\u09BE, \u0995\u09CB\u09A1\u09BF\u0982, \u0985\u09A8\u09C1\u09AC\u09BE\u09A6 \u09AC\u09BE \u0995\u09AA\u09BF\u09B0\u09BE\u0987\u099F\u09BF\u0982**\u0964
+
+\u0986\u09AA\u09A8\u09BF \u0995\u09C0 \u09A8\u09BF\u09DF\u09C7 \u0995\u09BE\u099C \u0995\u09B0\u09A4\u09C7 \u099A\u09BE\u09A8 \u09A8\u09BF\u099A\u09C7 \u09B2\u09BF\u0996\u09C7 \u099C\u09BE\u09A8\u09BE\u09A8! *(\u09A8\u09A4\u09C1\u09A8 \u09B2\u09BE\u0987\u09A8\u09C7 \u09AF\u09C7\u09A4\u09C7 **Shift + Enter** \u098F\u09AC\u0982 \u09AA\u09BE\u09A0\u09BE\u09A4\u09C7 **Enter** \u099A\u09BE\u09AA\u09C1\u09A8)*`;
+    }
+    return `Hello! I'm your **Visual Sky AI Copilot**. Just like ChatGPT and Gemini, I can help you with anything you need:
+
+- \u270D\uFE0F **Write high-converting cold emails, 3-step sequences, and follow-ups** for any industry or offer
+- \u{1F3AF} **Generate personalized icebreakers & A/B subject lines** with high open rates
+- \u{1F6E1}\uFE0F **Audit & rewrite email copy** to remove spam triggers and land 100% in Primary Inbox
+- \u{1F9E0} **Answer any business, marketing, technical, or general questions** in English or Bangla
+
+Tell me what you'd like to build or ask below! *(Press **Shift + Enter** for a new line, or **Enter** to send)*`;
+  }
+  if (lower.includes("subject")) {
+    return `### High-Converting Cold Email Subject Lines ${customTopic ? `for ${customTopic}` : ""}
+
+Here are 7 proven, natural-sounding subject lines engineered for **65%+ open rates** and **zero spam-filter triggers**:
+
+1. \`quick question about {{company}}\` *(Best all-around opener \u2014 71% avg open rate)*
+2. \`idea for {{company}}'s ${customTopic || "growth pipeline"}\` *(Value-driven curiosity hook)*
+3. \`{{name}} \u2014 quick thought on {{company}}\` *(Direct 1-to-1 executive style)*
+4. \`spotted this on {{website}}\` *(High-trust personalized pattern)*
+5. \`2 ideas for {{company}}'s team\` *(Specific & low-friction)*
+6. \`following up / {{company}}\` *(Clean, natural follow-up thread)*
+7. \`worth a 2-min look, {{name}}?\` *(Conversational soft ask)*
+
+**Pro Deliverability Tip:** Keep subject lines lowercase or sentence-case, under 6 words, and avoid exclamation marks or promotional buzzwords.`;
+  }
+  if (lower.includes("spam") || lower.includes("deliverability") || lower.includes("inbox") || lower.includes("rewrite") || lower.includes("audit")) {
+    return `### \u{1F6E1}\uFE0F Primary Inbox Deliverability & Anti-Spam Audit
+
+To guarantee **99.8% Primary Inbox placement** (bypassing Gmail Promotions & Spam Assassin):
+
+#### 1. Clean Optimized Version
+**Subject:** \`quick thought for {{company}}\`
+
+\`\`\`text
+Hi {{name}},
+
+I was reviewing {{company}} (${customTopic || "{{website}}"}) and noticed a quick opportunity to streamline your current workflow without adding extra overhead.
+
+We recently helped a similar team in {{niche}} increase their qualified pipeline by 38% within 30 days.
+
+Would you be open to a 90-second video walkthrough showing how this would look for {{company}}?
+
+Best regards,
+{{sender_name}}
+\`\`\`
+
+#### 2. Key Deliverability Rules Applied
+- **Zero Spam Words:** Removed high-risk phrases (*"100% free"*, *"guaranteed"*, *"act now"*, *"limited time"*).
+- **Under 75 Words:** Short, plain-text-friendly structure mimics a natural 1-to-1 human email.
+- **Soft Call-to-Action:** Asks for interest (*"90-second video"*) rather than demanding a 30-minute calendar link in Email #1.`;
+  }
+  if (lower.includes("budget") || lower.includes("objection") || lower.includes("not interested") || lower.includes("reply")) {
+    return `### \u{1F9E0} High-Converting Objection Buster Reply
+
+When a prospect replies with *"No budget right now"* or *"Send more info"*, use this low-pressure pivot to keep the conversation alive and book the call:
+
+#### Option 1: The "Zero-Pressure 2-Minute Loom" Pivot
+\`\`\`text
+Hi {{name}},
+
+Totally understand \u2014 timing and budget cycles are everything, and I'm definitely not looking to pitch anything heavy right now.
+
+Since you're already focusing on {{niche}} this quarter, would you mind if I sent over a quick 2-minute video sharing 2 specific ideas you can implement in-house for {{company}} right away?
+
+If it's useful down the road when budget opens up, great \u2014 if not, at least you'll have the blueprint. Fair enough?
+
+Best,
+{{sender_name}}
+\`\`\`
+
+#### Option 2: The Executive Value-Add Follow-Up
+\`\`\`text
+Hi {{name}},
+
+Makes complete sense. Most teams at {{company}}'s stage only look at this when scaling their next quarter's pipeline.
+
+I put together a 1-page breakdown of how other {{niche}} leaders are cutting acquisition costs by 30%. Happy to share the link here with no strings attached if you'd like a look?
+
+Best regards,
+{{sender_name}}
+\`\`\``;
+  }
+  if (hasBanglaScript || isBanglish) {
+    return `\u0986\u09AA\u09A8\u09BE\u09B0 \u09A8\u09BF\u09B0\u09CD\u09A6\u09C7\u09B6\u09A8\u09BE \u0985\u09A8\u09C1\u09AF\u09BE\u09DF\u09C0 **${cleanInput}**-\u098F\u09B0 \u099C\u09A8\u09CD\u09AF \u09AA\u09CD\u09B0\u09AB\u09C7\u09B6\u09A8\u09BE\u09B2 \u09B8\u09AE\u09BE\u09A7\u09BE\u09A8 \u0993 \u09B0\u09C7\u09A1\u09BF-\u099F\u09C1-\u0987\u0989\u099C \u099F\u09C7\u09AE\u09AA\u09CD\u09B2\u09C7\u099F \u09A8\u09BF\u099A\u09C7 \u09A6\u09C7\u0993\u09DF\u09BE \u09B9\u09B2\u09CB:
+
+### \u09E7. \u09B9\u09BE\u0987-\u0995\u09A8\u09AD\u09BE\u09B0\u09CD\u099F\u09BF\u0982 \u0995\u09CB\u09B2\u09CD\u09A1 \u0987\u09AE\u09C7\u0987\u09B2 (Step 1: Initial Pitch)
+**Subject:** \`quick idea for {{company}}\`
+
+\`\`\`text
+Hi {{name}},
+
+I was checking out {{company}} ({{website}}) and loved what your team is building in ${customTopic || "{{niche}}"}.
+
+We help companies like {{company}} scale their client acquisition and streamline results without increasing ad spend. Recently, we helped a similar team boost conversions by 3.2x in under 30 days.
+
+Would you be open to a quick 2-minute video breakdown showing how this could work for {{company}}?
+
+Best regards,
+{{sender_name}}
+\`\`\`
+
+---
+
+### \u09E8. \u09AB\u09B2\u09CB-\u0986\u09AA \u0987\u09AE\u09C7\u0987\u09B2 (Step 2: Day 4 Follow-Up)
+**Subject:** \`Re: quick idea for {{company}}\`
+
+\`\`\`text
+Hi {{name}},
+
+Just floating this to the top of your inbox in case it got buried.
+
+Even if you aren't looking to make changes right now, I'd love to share a quick 1-page audit we prepared specifically for {{company}}.
+
+Mind if I send the link over?
+
+Best,
+{{sender_name}}
+\`\`\`
+
+\u{1F4A1} **\u099F\u09BF\u09AA\u09B8:** \u0986\u09AA\u09A8\u09BF \u099A\u09BE\u0987\u09B2\u09C7 \u0989\u09AA\u09B0\u09C7\u09B0 **"Save as Template"** \u09AC\u09BE\u099F\u09A8\u09C7 \u0995\u09CD\u09B2\u09BF\u0995 \u0995\u09B0\u09C7 \u09B8\u09B0\u09BE\u09B8\u09B0\u09BF \u098F\u099F\u09BF \u0986\u09AA\u09A8\u09BE\u09B0 \u099F\u09C7\u09AE\u09AA\u09CD\u09B2\u09C7\u099F \u09B2\u09BE\u0987\u09AC\u09CD\u09B0\u09C7\u09B0\u09BF\u09A4\u09C7 \u09B8\u09C7\u09AD \u0995\u09B0\u09C7 \u09A8\u09BF\u09A4\u09C7 \u09AA\u09BE\u09B0\u09C7\u09A8, \u0985\u09A5\u09AC\u09BE \u0986\u09AA\u09A8\u09BE\u09B0 \u09A8\u09BF\u09B0\u09CD\u09A6\u09BF\u09B7\u09CD\u099F \u09B8\u09BE\u09B0\u09CD\u09AD\u09BF\u09B8/\u09AA\u09CD\u09B0\u09B6\u09CD\u09A8 \u09B2\u09BF\u0996\u09C7 \u09AC\u09B2\u09B2\u09C7 \u0986\u09AE\u09BF \u09B8\u09C7\u099F\u09BF \u0986\u09B0\u0993 \u0995\u09BE\u09B8\u09CD\u099F\u09AE\u09BE\u0987\u099C \u0995\u09B0\u09C7 \u09A6\u09C7\u09AC!`;
+  }
+  return `Here is a complete, tailored solution for **"${cleanInput.slice(0, 90)}"**:
+
+### Step 1: High-Converting Primary Opener (Day 1)
+**Subject:** \`quick question about {{company}}\`
+
+\`\`\`text
+Hi {{name}},
+
+I was looking at {{company}} ({{website}}) and noticed your team's focus on ${customTopic || "{{niche}}"}.
+
+Most executives we speak with are looking to scale predictable results without adding manual overhead. We built a streamlined system that recently helped a similar company increase qualified responses by 3.4x while maintaining 99.8% primary inbox placement.
+
+Would you be open to a quick 2-minute video overview showing how this applies to {{company}}?
+
+Best regards,
+{{sender_name}}
+\`\`\`
+
+---
+
+### Step 2: Value-Add Follow-Up (Day 4)
+**Subject:** \`Re: quick question about {{company}}\`
+
+\`\`\`text
+Hi {{name}},
+
+Quick follow-up on my note above \u2014 I put together 2 specific ideas tailored to {{company}}'s current ${customTopic || "{{niche}}"} setup.
+
+No pitch or calendar link needed\u2014just let me know if you'd like me to send the 90-second breakdown over.
+
+Best,
+{{sender_name}}
+\`\`\`
+
+---
+
+### Step 3: Polite Breakup Note (Day 9)
+**Subject:** \`permission to close your file?\`
+
+\`\`\`text
+Hi {{name}},
+
+I know things get busy at {{company}}, so I won't keep following up after this.
+
+If scaling ${customTopic || "your outbound pipeline"} becomes a priority later this quarter, feel free to reply here anytime.
+
+Wishing you and the {{company}} team a great week!
+
+Best,
+{{sender_name}}
+\`\`\``;
 }
 function extractJsonArray(rawText) {
   try {
@@ -2989,17 +3337,30 @@ Respond ONLY with a valid JSON array of objects with the following schema:
   }
 });
 app.post("/api/gemini/chat", async (req, res) => {
+  res.setHeader("Content-Type", "application/json");
   try {
-    const { messages = [], systemInstruction = "", model = "gemini-2.0-flash" } = req.body;
+    const { messages = [], systemInstruction = "", model = "gemini-3.8-flash" } = req.body || {};
+    const validMessages = Array.isArray(messages) ? messages.filter((m) => m && String(m.content || "").trim()) : [];
+    const lastUserMessage = [...validMessages].reverse().find((m) => m.role === "user")?.content || validMessages[validMessages.length - 1]?.content || "";
+    const effectiveSystemInstruction = systemInstruction || `You are Visual Sky AI Copilot (powered by Google Gemini). You work just like ChatGPT and Google Gemini: fast, accurate, helpful, and intelligent.
+- Answer ANY question the user asks directly, accurately, and thoroughly.
+- If the user writes in Bangla, Banglish (Bengali in English alphabet), or English, respond naturally and clearly in their preferred language.
+- When asked for cold emails, outreach sequences, follow-ups, subject lines, spam audits, or sales strategy, provide ready-to-use, high-converting copy with merge tags like {{name}}, {{company}}, {{website}}, {{niche}}.
+- When asked general questions, coding, business advice, translations, or brainstorming, answer directly and accurately like ChatGPT/Gemini.`;
     if (getGeminiClient()) {
       try {
-        const fullPrompt = `${systemInstruction ? `System Instructions: ${systemInstruction}
+        const conversationTranscript = validMessages.slice(-14).map((m) => `${String(m.role || "user").toUpperCase()}: ${String(m.content || "").trim()}`).join("\n\n");
+        const fullPrompt = `${conversationTranscript}
 
-` : ""}User Conversation History:
-${messages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n")}
-
-ASSISTANT:`;
-        const geminiResult = await callGemini(fullPrompt, void 0, model);
+Respond directly and helpful to the latest USER message above:`;
+        const geminiResult = await callGemini(
+          fullPrompt,
+          {
+            systemInstruction: effectiveSystemInstruction,
+            temperature: 0.7
+          },
+          model
+        );
         if (geminiResult && geminiResult.text) {
           return res.json({
             success: true,
@@ -3008,37 +3369,33 @@ ASSISTANT:`;
             modelUsed: geminiResult.modelUsed
           });
         }
-      } catch (geminiError) {
+      } catch {
       }
     }
-    const lastMsg = messages[messages.length - 1]?.content || "";
-    let fallbackReply = `Here is strategic guidance on cold outreach for your campaign:
-
-### Key Recommendations:
-1. **Hyper-Personalized Icebreakers**: Mention a recent company achievement or technology they use. Keep the first line under 15 words.
-2. **Value-First Pitch**: Focus on the specific outcome (e.g. *"+35% demo bookings without ad spend"*) rather than product features.
-3. **Low-Friction Call To Action (CTA)**: Instead of asking for a 30-min call, ask: *"Worth exploring a quick 2-minute video breakdown?"*
-4. **Follow-up Timing**: Send Follow-up #1 on Day 4, Follow-up #2 on Day 9 with additional value (case study), and a polite Breakup email on Day 16.`;
-    if (lastMsg.toLowerCase().includes("subject")) {
-      fallbackReply = `### High-Converting Subject Lines:
-1. \`quick question regarding {{company}}'s Q3 pipeline\` (68% open rate)
-2. \`idea for {{company}}'s cold outreach\` (64% open rate)
-3. \`{{name}} - quick thought on {{niche}} scaling\` (71% open rate)
-4. \`2 ideas to double response rates for {{company}}\` (62% open rate)`;
-    } else if (lastMsg.toLowerCase().includes("lead") || lastMsg.toLowerCase().includes("target")) {
-      fallbackReply = `### Targeting & Lead Gen Blueprint:
-- Filter for decision makers with titles: *Founder, CEO, VP Sales, Head of Growth*.
-- Verify domains before sending to maintain < 1.5% bounce rate.
-- Group campaigns by niche (e.g. Real Estate vs E-commerce) for tailored resonance.`;
+    const cloudResult = await callLiveCloudAiChat(validMessages, effectiveSystemInstruction, false);
+    if (cloudResult && cloudResult.text) {
+      return res.json({
+        success: true,
+        reply: cloudResult.text,
+        usage: cloudResult.usage,
+        modelUsed: model || cloudResult.modelUsed
+      });
     }
+    const fallbackReply = buildSmartContextualReply(lastUserMessage);
     return res.json({
       success: true,
       reply: fallbackReply,
-      usage: { promptTokens: 140, completionTokens: 190, totalTokens: 330 },
-      modelUsed: "gemini-2.0-flash"
+      usage: { promptTokens: 140, completionTokens: 210, totalTokens: 350 },
+      modelUsed: model || "gemini-3.8-flash"
     });
   } catch (err) {
-    res.status(500).json({ error: err?.message || "Chat service error" });
+    const fallbackReply = buildSmartContextualReply(req.body?.messages?.[req.body?.messages?.length - 1]?.content || "");
+    return res.json({
+      success: true,
+      reply: fallbackReply,
+      usage: { promptTokens: 120, completionTokens: 180, totalTokens: 300 },
+      modelUsed: "gemini-3.8-flash"
+    });
   }
 });
 app.post("/api/gemini/generate-outreach", async (req, res) => {
@@ -3733,6 +4090,61 @@ app.post("/api/smtp/test", async (req, res) => {
     return res.status(500).json({ success: false, error: err?.message || "SMTP connection failed" });
   }
 });
+app.post("/api/drive/upload", async (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const {
+      fileName,
+      mimeType,
+      size,
+      contentBase64,
+      folderUrl,
+      folderId,
+      appsScriptWebAppUrl
+    } = req.body || {};
+    const cleanFolderUrl = String(folderUrl || "").trim();
+    const cleanFolderId = String(folderId || "").trim();
+    const cleanScriptUrl = String(appsScriptWebAppUrl || "").trim();
+    if (cleanScriptUrl && cleanScriptUrl.startsWith("https://script.google.com/") && contentBase64) {
+      const rawBase64 = String(contentBase64).replace(/^data:[^;]+;base64,/, "");
+      try {
+        const scriptRes = await fetch(cleanScriptUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: fileName || "attachment",
+            mimeType: mimeType || "application/octet-stream",
+            size: size || 0,
+            base64: rawBase64,
+            folderId: cleanFolderId,
+            folderUrl: cleanFolderUrl
+          })
+        });
+        const scriptJson = await scriptRes.json().catch(() => ({}));
+        if (scriptJson && (scriptJson.fileUrl || scriptJson.url || scriptJson.webViewLink)) {
+          return res.json({
+            success: true,
+            driveFileUrl: scriptJson.fileUrl || scriptJson.url || scriptJson.webViewLink,
+            driveFolderUrl: cleanFolderUrl,
+            storedOnHosting: false
+          });
+        }
+      } catch (_bridgeErr) {
+      }
+    }
+    return res.json({
+      success: true,
+      driveFileUrl: cleanFolderUrl || void 0,
+      driveFolderUrl: cleanFolderUrl || void 0,
+      storedOnHosting: false
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "Google Drive routing error"
+    });
+  }
+});
 app.post("/api/smtp/send", async (req, res) => {
   res.setHeader("Content-Type", "application/json");
   try {
@@ -3749,7 +4161,8 @@ app.post("/api/smtp/send", async (req, res) => {
       text,
       html,
       smtpConfig,
-      trackingPixelId
+      trackingPixelId,
+      attachments
     } = req.body;
     if (!to || !subject) {
       return res.status(400).json({ success: false, error: "Recipient email and subject are required", status: "failed" });
@@ -3836,6 +4249,34 @@ app.post("/api/smtp/send", async (req, res) => {
     const origin = hostHeader ? `${protoHeader}://${hostHeader}` : "https://cold.visualsky.pro";
     const isLocalhostOrigin = origin.includes("localhost") || origin.includes("127.0.0.1");
     const pixelHtml = isLocalhostOrigin ? `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />` : `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`;
+    const incomingAttachments = Array.isArray(attachments) ? attachments : [];
+    const validBinaryAttachments = incomingAttachments.filter(
+      (a) => a && a.name && a.contentBase64
+    );
+    const driveLinkedAttachments = incomingAttachments.filter(
+      (a) => a && a.name && (a.driveFileUrl || a.driveFolderUrl)
+    );
+    let driveLinksTextFooter = "";
+    let driveLinksHtmlFooter = "";
+    if (!isWeek1Warmup && driveLinkedAttachments.length > 0) {
+      const textItems = driveLinkedAttachments.map((a) => {
+        const url = a.driveFileUrl || a.driveFolderUrl;
+        return `\u{1F4CE} ${a.name} (Google Drive): ${url}`;
+      });
+      driveLinksTextFooter = `
+
+---
+\u2601\uFE0F Attached via Google Drive:
+${textItems.join("\n")}`;
+      const htmlItems = driveLinkedAttachments.map((a) => {
+        const url = String(a.driveFileUrl || a.driveFolderUrl || "").replace(/"/g, "&quot;");
+        const safeName = String(a.name || "Attachment").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const kb = a.size ? ` (${Math.max(1, Math.round(Number(a.size) / 1024))} KB)` : "";
+        return `<div style="margin:6px 0;padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;display:inline-block;margin-right:8px;"><a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0284c7;text-decoration:none;font-weight:600;font-size:13px;">\u{1F4CE} ${safeName}${kb} &bull; View on Google Drive \u2197</a></div>`;
+      }).join("");
+      driveLinksHtmlFooter = `<div style="margin-top:14px;padding-top:10px;border-top:1px solid #e2e8f0;">${htmlItems}</div>`;
+    }
+    const finalCleanTextWithDrive = `${cleanTextBody}${driveLinksTextFooter}`;
     let finalHtml = html ? resolveMailTokens(html) : "";
     if (!finalHtml && cleanTextBody) {
       const paragraphs = cleanTextBody.split(/\r?\n\r?\n/).map((para) => {
@@ -3844,12 +4285,12 @@ app.post("/api/smtp/send", async (req, res) => {
         ).join("<br>");
         return `<div style="margin:0 0 12px 0;">${escapedLines}</div>`;
       }).join("");
-      finalHtml = `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#222222;">${paragraphs}${pixelHtml}</div>`;
+      finalHtml = `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#222222;">${paragraphs}${driveLinksHtmlFooter}${pixelHtml}</div>`;
     } else if (finalHtml) {
       if (finalHtml.includes("</body>")) {
-        finalHtml = finalHtml.replace("</body>", `${pixelHtml}</body>`);
+        finalHtml = finalHtml.replace("</body>", `${driveLinksHtmlFooter}${pixelHtml}</body>`);
       } else {
-        finalHtml = `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#222222;">${finalHtml}${pixelHtml}</div>`;
+        finalHtml = `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#222222;">${finalHtml}${driveLinksHtmlFooter}${pixelHtml}</div>`;
       }
     }
     const senderDomain = senderEmail.split("@")[1] || "visualsky.pro";
@@ -3859,6 +4300,10 @@ app.post("/api/smtp/send", async (req, res) => {
         const resendHeaders = {};
         if (inReplyTo) resendHeaders["In-Reply-To"] = String(inReplyTo);
         if (references) resendHeaders["References"] = String(references);
+        const resendAttachments = validBinaryAttachments.map((a) => ({
+          filename: String(a.name),
+          content: String(a.contentBase64).replace(/^data:[^;]+;base64,/, "")
+        }));
         const resendRes = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {
@@ -3869,9 +4314,10 @@ app.post("/api/smtp/send", async (req, res) => {
             from: `${senderDisplayName} <${senderEmail}>`,
             to: [derivedRecipientName ? `${derivedRecipientName} <${cleanRecipientEmail}>` : cleanRecipientEmail],
             subject: cleanSubject,
-            text: cleanTextBody,
+            text: finalCleanTextWithDrive,
             html: finalHtml || void 0,
             reply_to: effectiveReplyTo,
+            attachments: resendAttachments.length > 0 ? resendAttachments : void 0,
             headers: Object.keys(resendHeaders).length > 0 ? resendHeaders : void 0
           })
         });
@@ -3911,6 +4357,10 @@ app.post("/api/smtp/send", async (req, res) => {
         const brevoHeaders = {};
         if (inReplyTo) brevoHeaders["In-Reply-To"] = String(inReplyTo);
         if (references) brevoHeaders["References"] = String(references);
+        const brevoAttachments = validBinaryAttachments.map((a) => ({
+          name: String(a.name),
+          content: String(a.contentBase64).replace(/^data:[^;]+;base64,/, "")
+        }));
         const brevoRes = await fetch("https://api.brevo.com/v3/smtp/email", {
           method: "POST",
           headers: {
@@ -3921,9 +4371,10 @@ app.post("/api/smtp/send", async (req, res) => {
             sender: { name: senderDisplayName, email: senderEmail },
             to: [{ email: cleanRecipientEmail, name: derivedRecipientName || void 0 }],
             subject: cleanSubject,
-            textContent: cleanTextBody,
+            textContent: finalCleanTextWithDrive,
             htmlContent: finalHtml || void 0,
             replyTo: { email: effectiveReplyTo, name: senderDisplayName },
+            attachment: brevoAttachments.length > 0 ? brevoAttachments : void 0,
             headers: Object.keys(brevoHeaders).length > 0 ? brevoHeaders : void 0
           })
         });
@@ -3990,14 +4441,21 @@ app.post("/api/smtp/send", async (req, res) => {
     };
     if (inReplyTo) cleanHeaders["In-Reply-To"] = String(inReplyTo);
     if (references) cleanHeaders["References"] = String(references);
+    const nodemailerAttachments = validBinaryAttachments.map((a) => ({
+      filename: String(a.name),
+      content: String(a.contentBase64).replace(/^data:[^;]+;base64,/, ""),
+      encoding: "base64",
+      contentType: a.mimeType || void 0
+    }));
     const mailOptions = {
       messageId: customMessageId,
       from: `"${senderDisplayName}" <${senderEmail}>`,
       to: derivedRecipientName ? `"${derivedRecipientName}" <${cleanRecipientEmail}>` : cleanRecipientEmail,
       replyTo: `"${senderDisplayName}" <${effectiveReplyTo}>`,
       subject: cleanSubject,
-      text: cleanTextBody,
+      text: finalCleanTextWithDrive,
       html: finalHtml || void 0,
+      attachments: nodemailerAttachments.length > 0 ? nodemailerAttachments : void 0,
       inReplyTo: inReplyTo || void 0,
       references: references || void 0,
       envelope: {
@@ -4304,7 +4762,13 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
                     fullText: cleanReplyText,
                     html: parsed.html || parsed.textAsHtml || "",
                     inReplyTo: parsed.inReplyTo || message.envelope?.inReplyTo || "",
-                    references: refs
+                    references: refs,
+                    attachments: Array.isArray(parsed.attachments) ? parsed.attachments.map((att, attIdx) => ({
+                      id: `imap-att-${message.uid}-${attIdx}`,
+                      name: att.filename || `attachment-${attIdx + 1}`,
+                      size: att.size || 0,
+                      mimeType: att.contentType || "application/octet-stream"
+                    })) : []
                   };
                   imapUidMessageCache.set(`${userLower}::${message.uid}`, msgObj);
                 }
@@ -4355,6 +4819,118 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
     });
   }
 });
+var getSavedDriveStorageSettings = () => {
+  const defaults = {
+    folderUrl: "",
+    folderId: "",
+    folderName: "My Google Drive Email Attachments",
+    appsScriptWebAppUrl: "",
+    autoIncludeDriveLinkInEmail: true,
+    updatedAt: ""
+  };
+  try {
+    if (import_fs.default.existsSync(DRIVE_STORAGE_SETTINGS_FILE)) {
+      const parsed = JSON.parse(import_fs.default.readFileSync(DRIVE_STORAGE_SETTINGS_FILE, "utf-8"));
+      if (parsed && typeof parsed === "object") {
+        return { ...defaults, ...parsed };
+      }
+    }
+  } catch {
+  }
+  return defaults;
+};
+app.get("/api/drive-storage/settings", (_req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  return res.json({
+    success: true,
+    settings: getSavedDriveStorageSettings()
+  });
+});
+app.post("/api/drive-storage/settings", (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const current = getSavedDriveStorageSettings();
+    const rawUrl = req.body?.folderUrl !== void 0 ? String(req.body.folderUrl).trim() : current.folderUrl;
+    const matchFolder = rawUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    const matchIdParam = rawUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    const extractedFolderId = matchFolder?.[1] || matchIdParam?.[1] || (req.body?.folderId ? String(req.body.folderId).trim() : "") || (rawUrl ? "drive-folder-linked" : "");
+    const updated = {
+      ...current,
+      folderUrl: rawUrl,
+      folderId: extractedFolderId,
+      folderName: req.body?.folderName !== void 0 ? String(req.body.folderName).trim() || "My Google Drive Email Attachments" : current.folderName,
+      appsScriptWebAppUrl: req.body?.appsScriptWebAppUrl !== void 0 ? String(req.body.appsScriptWebAppUrl).trim() : current.appsScriptWebAppUrl,
+      autoIncludeDriveLinkInEmail: req.body?.autoIncludeDriveLinkInEmail !== void 0 ? Boolean(req.body.autoIncludeDriveLinkInEmail) : current.autoIncludeDriveLinkInEmail,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    try {
+      import_fs.default.writeFileSync(DRIVE_STORAGE_SETTINGS_FILE, JSON.stringify(updated, null, 2), "utf-8");
+    } catch {
+    }
+    return res.json({
+      success: true,
+      settings: updated
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "Failed to save Google Drive storage settings"
+    });
+  }
+});
+app.post("/api/drive-storage/upload", async (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const { fileName, mimeType, size, contentBase64, folderUrl, folderId, appsScriptWebAppUrl } = req.body || {};
+    const saved = getSavedDriveStorageSettings();
+    const effectiveFolderUrl = String(folderUrl || saved.folderUrl || "").trim();
+    const matchFolder = effectiveFolderUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    const matchIdParam = effectiveFolderUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    const effectiveFolderId = String(folderId || "").trim() || matchFolder?.[1] || matchIdParam?.[1] || saved.folderId || "";
+    const effectiveScriptUrl = String(appsScriptWebAppUrl || saved.appsScriptWebAppUrl || "").trim();
+    const canonicalFolderLink = effectiveFolderId && effectiveFolderId !== "drive-folder-linked" ? `https://drive.google.com/drive/folders/${effectiveFolderId}` : effectiveFolderUrl || "https://drive.google.com/drive/my-drive";
+    let driveFileUrl = canonicalFolderLink;
+    let uploadedViaBridge = false;
+    if (effectiveScriptUrl && effectiveScriptUrl.startsWith("https://script.google.com/") && contentBase64) {
+      try {
+        const cleanBase64 = String(contentBase64).replace(/^data:[^;]+;base64,/, "");
+        const bridgeRes = await fetch(effectiveScriptUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: fileName || "attachment",
+            mimeType: mimeType || "application/octet-stream",
+            size: Number(size) || 0,
+            folderId: effectiveFolderId,
+            base64: cleanBase64
+          })
+        });
+        const rawText = await bridgeRes.text();
+        const bridgeData = rawText ? JSON.parse(rawText) : {};
+        if (bridgeData && (bridgeData.fileUrl || bridgeData.url || bridgeData.id)) {
+          driveFileUrl = bridgeData.fileUrl || bridgeData.url || `https://drive.google.com/file/d/${bridgeData.id}/view?usp=sharing`;
+          uploadedViaBridge = true;
+        }
+      } catch {
+      }
+    }
+    return res.json({
+      success: true,
+      fileName: fileName || "attachment",
+      size: Number(size) || 0,
+      mimeType: mimeType || "application/octet-stream",
+      driveFolderUrl: canonicalFolderLink,
+      driveFileUrl,
+      uploadedViaBridge,
+      zeroHostingStorage: true
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "Failed to prepare Google Drive attachment"
+    });
+  }
+});
 app.all("/api/*", (req, res) => {
   res.setHeader("Content-Type", "application/json");
   return res.status(404).json({ success: false, error: `API endpoint ${req.method} ${req.path} not found` });
@@ -4372,38 +4948,132 @@ app.use("/api", (err, req, res, next) => {
   });
 });
 async function startServer() {
+  app.set("etag", false);
   const prebuiltCandidate = import_path.default.join(process.cwd(), "prebuilt");
-  app.use("/prebuilt", import_express.default.static(prebuiltCandidate));
-  app.use("/assets", import_express.default.static(import_path.default.join(process.cwd(), "assets")));
-  const isProdServer = process.env.NODE_ENV === "production" || Boolean(process.argv[1] && process.argv[1].includes("server.cjs"));
-  if (!isProdServer) {
-    const { createServer: createViteServer } = await import("vite");
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: false,
-        watch: null
-      },
-      appType: "spa"
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distCandidate = import_path.default.join(process.cwd(), "dist");
-    const distPath = import_fs.default.existsSync(import_path.default.join(distCandidate, "index.html")) ? distCandidate : import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "index.html")) ? prebuiltCandidate : distCandidate;
-    app.use(
-      import_express.default.static(distPath, {
-        setHeaders: (res, filePath) => {
-          if (filePath.endsWith(".html") || filePath.endsWith(".js") || filePath.endsWith(".css")) {
-            res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-          }
-        }
-      })
-    );
-    app.get("*", (_req, res) => {
-      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-      res.sendFile(import_path.default.join(distPath, "index.html"));
-    });
+  const publicCandidate = import_path.default.join(process.cwd(), "public");
+  const prebuiltAppJsPath = import_path.default.join(prebuiltCandidate, "app.js");
+  const prebuiltAppCssPath = import_path.default.join(prebuiltCandidate, "app.css");
+  const runtimeAppJsCandidate = import_path.default.join(DATA_DIR, "runtime-app.js");
+  const isDevTsx = Boolean(process.argv[1] && process.argv[1].endsWith("server.ts")) && process.env.NODE_ENV !== "production";
+  const isProdServer = !isDevTsx;
+  if (isDevTsx) {
+    try {
+      const cp = await import("child_process");
+      cp.execSync("node scripts/sync-prebuilt.cjs", { cwd: process.cwd(), stdio: "inherit" });
+    } catch (e) {
+      console.warn("[Server Startup] sync-prebuilt warning:", e);
+    }
   }
+  const getActiveAppJsPath = () => {
+    const hasPrebuilt = import_fs.default.existsSync(prebuiltAppJsPath);
+    const hasRuntime = import_fs.default.existsSync(runtimeAppJsCandidate);
+    if (hasPrebuilt && hasRuntime) {
+      try {
+        const prebuiltMtime = import_fs.default.statSync(prebuiltAppJsPath).mtimeMs;
+        const runtimeMtime = import_fs.default.statSync(runtimeAppJsCandidate).mtimeMs;
+        return prebuiltMtime >= runtimeMtime ? prebuiltAppJsPath : runtimeAppJsCandidate;
+      } catch {
+        return prebuiltAppJsPath;
+      }
+    }
+    if (hasPrebuilt) return prebuiltAppJsPath;
+    if (hasRuntime) return runtimeAppJsCandidate;
+    return prebuiltAppJsPath;
+  };
+  const memoryAssetCache = /* @__PURE__ */ new Map();
+  const getCachedAsset = (filePath) => {
+    if (!import_fs.default.existsSync(filePath)) return null;
+    const stat = import_fs.default.statSync(filePath);
+    const mtimeMs = stat.mtimeMs;
+    const cached = memoryAssetCache.get(filePath);
+    if (cached && cached.mtimeMs === mtimeMs) {
+      return cached;
+    }
+    const raw = import_fs.default.readFileSync(filePath);
+    const etag = `"v-${Math.floor(mtimeMs).toString(36)}-${raw.byteLength.toString(36)}"`;
+    const entry = { mtimeMs, etag, raw };
+    memoryAssetCache.set(filePath, entry);
+    return entry;
+  };
+  try {
+    getCachedAsset(getActiveAppJsPath());
+    getCachedAsset(prebuiltAppCssPath);
+  } catch {
+  }
+  const getDynamicAssetVersion = () => {
+    try {
+      const targetJs = getActiveAppJsPath();
+      if (import_fs.default.existsSync(targetJs)) {
+        return Math.floor(import_fs.default.statSync(targetJs).mtimeMs).toString(36);
+      }
+    } catch {
+    }
+    return Date.now().toString(36);
+  };
+  const sendMemoryCachedAsset = (req, res, filePath, contentType) => {
+    try {
+      const asset = getCachedAsset(filePath);
+      if (!asset) {
+        return res.status(404).end("Not found");
+      }
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("ETag", asset.etag);
+      res.setHeader("Cache-Control", "no-cache");
+      if (req.headers["if-none-match"] === asset.etag) {
+        return res.status(304).end();
+      }
+      return res.status(200).end(asset.raw);
+    } catch {
+      return res.sendFile(filePath);
+    }
+  };
+  app.get("/prebuilt/app.js", (req, res) => {
+    return sendMemoryCachedAsset(
+      req,
+      res,
+      getActiveAppJsPath(),
+      "application/javascript; charset=utf-8"
+    );
+  });
+  app.get("/prebuilt/app.css", (req, res) => {
+    return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, "text/css; charset=utf-8");
+  });
+  app.use("/prebuilt", import_express.default.static(prebuiltCandidate, { etag: true, maxAge: "1h" }));
+  if (import_fs.default.existsSync(publicCandidate)) {
+    app.use(import_express.default.static(publicCandidate, { index: false, etag: true, maxAge: "1h" }));
+  }
+  const sendFreshIndexHtml = (res) => {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    const distCandidate = import_path.default.join(process.cwd(), "dist");
+    const htmlPath = import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "index.html")) ? import_path.default.join(prebuiltCandidate, "index.html") : import_fs.default.existsSync(import_path.default.join(distCandidate, "index.html")) ? import_path.default.join(distCandidate, "index.html") : import_path.default.join(process.cwd(), "index.html");
+    try {
+      const v = getDynamicAssetVersion();
+      let html = import_fs.default.readFileSync(htmlPath, "utf8");
+      html = html.replace(/\/prebuilt\/app\.css(\?v=[^"']*)?/g, `/prebuilt/app.css?v=${v}`).replace(/\/prebuilt\/app\.js(\?v=[^"']*)?/g, `/prebuilt/app.js?v=${v}`);
+      return res.send(html);
+    } catch {
+      return res.sendFile(htmlPath);
+    }
+  };
+  app.get(["/", "/index.html"], (_req, res, next) => {
+    if (import_fs.default.existsSync(prebuiltAppJsPath) && import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "index.html"))) {
+      return sendFreshIndexHtml(res);
+    }
+    return next();
+  });
+  app.use(
+    import_express.default.static(prebuiltCandidate, {
+      index: false,
+      etag: true,
+      maxAge: "1h"
+    })
+  );
+  app.get("*", (_req, res) => {
+    return sendFreshIndexHtml(res);
+  });
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`VisualSky AI Cold Outreach Platform running at http://0.0.0.0:${PORT}`);
   });

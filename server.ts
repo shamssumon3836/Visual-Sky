@@ -2653,20 +2653,24 @@ function smartMergeWorkspaces(existing: any, incoming: any): any {
     ...Array.from(deletedThreadIds)
   ]);
 
-  const isNotDeleted = (item: any) => {
-    if (!item || !item.id) return false;
-    const idStr = String(item.id);
-    if (idStr.startsWith('camp-live-') || idStr.startsWith('camp-restored-')) {
-      return false;
-    }
-    if (permanentlyDeletedIds.has(idStr) || deletedThreadIds.has(idStr) || deletedThreadIds.has(`thread:${idStr}`)) {
-      return false;
-    }
-    if (item.name && permanentlyDeletedIds.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) {
-      return false;
-    }
-    return true;
-  };
+    const isNotDeleted = (item: any) => {
+      if (!item || !item.id) return false;
+      const idStr = String(item.id);
+      if (idStr.startsWith('camp-live-') || idStr.startsWith('camp-restored-')) {
+        return false;
+      }
+      if (permanentlyDeletedIds.has(idStr) || deletedThreadIds.has(idStr) || deletedThreadIds.has(`thread:${idStr}`)) {
+        return false;
+      }
+      if (item.name) {
+        const cleanNameLower = String(item.name).trim().toLowerCase();
+        const slug = cleanNameLower.replace(/[^a-z0-9]+/g, '-');
+        if (permanentlyDeletedIds.has(`camp-name:${cleanNameLower}`) || permanentlyDeletedIds.has(`camp-restored-${slug}`)) {
+          return false;
+        }
+      }
+      return true;
+    };
 
   const rawThreads = Array.isArray(inc.threads)
     ? inc.threads
@@ -3103,10 +3107,10 @@ function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null
 
     // Check all workspace_{id}.json and user_{email}.json files and pick the newest updatedAt record while unioning tombstones
     let newestWorkspace: any = null;
-    let newestTime = -1;
     const allPermDeleted = new Set<string>();
     const allThreadDeleted = new Set<string>();
     let anyUserDeletedCampaigns = false;
+    const loadedRecords: Array<{ parsed: any; validTime: number }> = [];
 
     for (const cand of uniqueCandidates) {
       const pathsToCheck = [
@@ -3131,14 +3135,18 @@ function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null
               }
               const parsedTime = parsed.updatedAt ? new Date(parsed.updatedAt).getTime() : stat.mtimeMs;
               const validTime = Number.isFinite(parsedTime) ? parsedTime : stat.mtimeMs;
-              if (!newestWorkspace || validTime >= newestTime) {
-                newestWorkspace = newestWorkspace ? smartMergeWorkspaces(newestWorkspace, parsed) : parsed;
-                newestTime = validTime;
-              }
+              loadedRecords.push({ parsed, validTime });
             }
           } catch {}
         }
       }
+    }
+
+    loadedRecords.sort((a, b) => a.validTime - b.validTime);
+    for (const rec of loadedRecords) {
+      rec.parsed.permanentlyDeletedIds = Array.from(allPermDeleted);
+      rec.parsed.deletedThreadIds = Array.from(allThreadDeleted);
+      newestWorkspace = newestWorkspace ? smartMergeWorkspaces(newestWorkspace, rec.parsed) : rec.parsed;
     }
 
     if (newestWorkspace && typeof newestWorkspace === 'object') {
@@ -3517,16 +3525,11 @@ app.post('/api/user-data/:email/smtp', (req, res) => {
   return res.json({ success: true, count: smtpAccounts.length, savedAt: workspace.updatedAt });
 });
 
-// Auto-sync prebuilt client bundle if source files were updated via Git pull on cPanel (production only)
+// Auto-sync prebuilt client bundle if source files were updated
 let lastBundleSyncCheck = 0;
 function ensureFreshPrebuiltBundle() {
-  const isProdServer =
-    process.env.NODE_ENV === 'production' ||
-    Boolean(process.argv[1] && process.argv[1].includes('server.cjs'));
-  if (!isProdServer) return;
-
   const now = Date.now();
-  if (now - lastBundleSyncCheck < 3000) return;
+  if (now - lastBundleSyncCheck < 1500) return;
   lastBundleSyncCheck = now;
   try {
     const prebuiltAppJs = path.join(process.cwd(), 'prebuilt', 'app.js');
@@ -3539,6 +3542,7 @@ function ensureFreshPrebuiltBundle() {
       path.join(process.cwd(), 'src', 'lib', 'workspaceSync.ts'),
       path.join(process.cwd(), 'src', 'lib', 'firebase.ts'),
       path.join(process.cwd(), 'src', 'components', 'campaigns', 'CampaignManager.tsx'),
+      path.join(process.cwd(), 'src', 'components', 'dashboard', 'MainDashboard.tsx'),
       path.join(process.cwd(), 'src', 'components', 'trash', 'TrashManager.tsx')
     ];
 
@@ -6210,8 +6214,9 @@ async function startServer() {
     }
   };
 
-  // Serve pre-compressed RAM-cached JS & CSS bundles in <1ms
+  // Serve pre-compressed RAM-cached JS & CSS bundles in <1ms (auto-syncing if src changed)
   app.get('/prebuilt/app.js', (req, res) => {
+    ensureFreshPrebuiltBundle();
     return sendMemoryCachedAsset(
       req,
       res,
