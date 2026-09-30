@@ -448,35 +448,48 @@ export async function persistUserWorkspace(params: {
     });
   }
 
-  // 3. Save to Central Backend Database API immediately (with keepalive so page reload never aborts in-flight write)
+  // 3. Save to Central Backend Database API immediately (only enable keepalive for payloads < 30KB to avoid browser 64KB keepalive TypeError)
   let backendSucceeded = false;
+  let authoritativeUpdatedAt = nowIso;
   try {
+    const bodyStr = JSON.stringify({
+      userId: cleanUserId,
+      email: cleanEmail,
+      data: payloadToSave
+    });
     const res = await fetch('/api/user-data/save', {
       method: 'POST',
-      keepalive: true,
+      keepalive: bodyStr.length < 30000,
       headers: {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache, no-store'
       },
-      body: JSON.stringify({
-        userId: cleanUserId,
-        email: cleanEmail,
-        data: payloadToSave
-      })
+      body: bodyStr
     });
 
     if (res.ok) {
       backendSucceeded = true;
+      try {
+        const json = await res.json();
+        if (json?.savedAt) authoritativeUpdatedAt = json.savedAt;
+      } catch {}
     } else {
       const fallbackId = cleanEmail || cleanUserId;
       if (fallbackId) {
+        const fallbackBody = JSON.stringify({ data: payloadToSave });
         const res2 = await fetch(`/api/user-data/${encodeURIComponent(fallbackId)}`, {
           method: 'POST',
-          keepalive: true,
+          keepalive: fallbackBody.length < 30000,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ data: payloadToSave })
+          body: fallbackBody
         });
-        if (res2.ok) backendSucceeded = true;
+        if (res2.ok) {
+          backendSucceeded = true;
+          try {
+            const json2 = await res2.json();
+            if (json2?.savedAt) authoritativeUpdatedAt = json2.savedAt;
+          } catch {}
+        }
       }
     }
   } catch {}
@@ -485,6 +498,6 @@ export async function persistUserWorkspace(params: {
 
   return {
     success: backendSucceeded || firestoreSucceeded,
-    updatedAt: nowIso
+    updatedAt: authoritativeUpdatedAt
   };
 }

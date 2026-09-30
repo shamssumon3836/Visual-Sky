@@ -36,6 +36,8 @@ export const TrashManager: React.FC = () => {
     campaigns,
     restoreCampaign,
     permanentDeleteCampaign,
+    bulkRestoreCampaigns,
+    bulkPermanentDeleteCampaigns,
     emailTemplates,
     restoreEmailTemplate,
     permanentDeleteEmailTemplate,
@@ -235,7 +237,7 @@ export const TrashManager: React.FC = () => {
                 <div className="flex items-center gap-3">
                   <button
                     onClick={() => {
-                      trashCampaigns.forEach(c => restoreCampaign(c.id));
+                      bulkRestoreCampaigns(trashCampaigns.map(c => c.id));
                       confetti({ particleCount: 50, spread: 60 });
                     }}
                     className="flex items-center gap-1 text-xs font-bold text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
@@ -243,7 +245,7 @@ export const TrashManager: React.FC = () => {
                     <RotateCcw className="w-3.5 h-3.5" /> Restore All Campaigns
                   </button>
                   <button
-                    onClick={() => trashCampaigns.forEach(c => permanentDeleteCampaign(c.id))}
+                    onClick={() => bulkPermanentDeleteCampaigns(trashCampaigns.map(c => c.id))}
                     className="flex items-center gap-1 text-xs font-bold text-rose-400 hover:text-rose-300 transition cursor-pointer"
                   >
                     <Trash2 className="w-3.5 h-3.5" /> Delete All Permanently

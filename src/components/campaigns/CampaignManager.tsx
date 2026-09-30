@@ -56,6 +56,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     updateCampaign,
     toggleCampaignStatus, 
     deleteCampaign, 
+    permanentDeleteCampaign,
     launchQuickFollowUp, 
     getDormantLeads,
     leads,
@@ -3935,7 +3936,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
               </p>
             </div>
 
-            <div className="pt-2 flex justify-end gap-2">
+            <div className="pt-2 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setCampaignToDelete(null)}
@@ -3947,17 +3948,23 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                 type="button"
                 onClick={() => {
                   deleteCampaign(campaignToDelete.id);
-                  addNotification({
-                    title: 'Campaign Deleted 🗑️',
-                    message: `"${campaignToDelete.name}" was permanently removed.`,
-                    type: 'system'
-                  });
                   setCampaignToDelete(null);
                 }}
-                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs shadow-lg shadow-rose-600/20 transition cursor-pointer flex items-center gap-1.5"
+                className="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold text-xs transition cursor-pointer flex items-center gap-1.5"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete Campaign</span>
+                <span>Move to Trash</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  permanentDeleteCampaign(campaignToDelete.id);
+                  setCampaignToDelete(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs shadow-lg shadow-rose-600/20 transition cursor-pointer flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Permanently</span>
               </button>
             </div>
           </div>

@@ -946,8 +946,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Lead Tags
   const [leadTags, setLeadTags] = useState<LeadTag[]>(() => {
     try {
+      const permDeleted = getPermanentlyDeletedSet();
       const saved = localStorage.getItem('visualsky_tags');
-      return saved ? JSON.parse(saved) : INITIAL_TAGS;
+      const base: LeadTag[] = saved ? JSON.parse(saved) : INITIAL_TAGS;
+      return Array.isArray(base)
+        ? base.filter(
+            (t) =>
+              t &&
+              !permDeleted.has(String(t.id)) &&
+              !(t.name && permDeleted.has(`tag-name:${String(t.name).trim().toLowerCase()}`))
+          )
+        : [];
     } catch {
       return INITIAL_TAGS;
     }
@@ -1033,8 +1042,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Template Categories & Templates
   const [templateCategories, setTemplateCategories] = useState<TemplateCategory[]>(() => {
     try {
+      const permDeleted = getPermanentlyDeletedSet();
       const saved = localStorage.getItem('visualsky_tmpl_categories');
-      return saved ? JSON.parse(saved) : INITIAL_TEMPLATE_CATEGORIES;
+      const base: TemplateCategory[] = saved ? JSON.parse(saved) : INITIAL_TEMPLATE_CATEGORIES;
+      return Array.isArray(base) ? base.filter((c) => c && !permDeleted.has(String(c.id))) : [];
     } catch {
       return INITIAL_TEMPLATE_CATEGORIES;
     }
@@ -1430,29 +1441,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         [resource]: items
       };
 
-      await Promise.allSettled([
-        fetch(`/api/user-data/${encodeURIComponent(cleanEmail)}/resource/${encodeURIComponent(resource)}`, {
-          method: 'POST',
-          keepalive: true,
-          headers: { 
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-cache, no-store'
-          },
-          body: JSON.stringify({
-            items,
-            userId: cleanUserId,
-            updatedAt: nowIso,
-            permanentlyDeletedIds: allDeletedIds,
-            deletedThreadIds: allDeletedIds,
-            userDeletedCampaigns: userDeletedCampaignsRef.current
-          })
-        }),
-        persistUserWorkspace({
-          userId: cleanUserId,
-          email: cleanEmail,
-          data: snapshotData
-        })
-      ]);
+      const res = await persistUserWorkspace({
+        userId: cleanUserId,
+        email: cleanEmail,
+        data: snapshotData
+      });
+      if (res.success && res.updatedAt) {
+        syncedUpdatedAtRef.current = res.updatedAt;
+        try {
+          localStorage.setItem('visualsky_workspace_updated_at', res.updatedAt);
+        } catch {}
+      }
     } catch (e) {
       console.warn(`Direct database persistence error for ${resource}:`, e);
     }

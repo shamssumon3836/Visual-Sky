@@ -83,5 +83,14 @@ service cloud.firestore {
 
       allow delete: if isAdmin();
     }
+
+    match /workspaces/{workspaceId} {
+      allow get: if isValidId(workspaceId);
+      allow list: if false;
+      allow create, update: if isValidId(workspaceId) &&
+                               incoming() is map &&
+                               incoming().keys().size() <= 40;
+      allow delete: if isAdmin();
+    }
   }
 }

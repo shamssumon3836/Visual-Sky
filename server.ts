@@ -3279,7 +3279,7 @@ app.post('/api/user-data/save', (req, res) => {
       ...data,
       userId: userId || existing.userId,
       email: email || existing.email,
-      updatedAt: new Date().toISOString()
+      updatedAt: data.updatedAt || new Date().toISOString()
     });
 
     const written = writeUserWorkspace(userId || email, mergedWorkspace, email || userId);
@@ -3345,7 +3345,7 @@ app.post('/api/user-data/:email', (req, res) => {
       ...data,
       email: data.email || (identifier.includes('@') ? identifier : existing.email),
       userId: data.userId || (!identifier.includes('@') ? identifier : existing.userId),
-      updatedAt: new Date().toISOString()
+      updatedAt: data.updatedAt || new Date().toISOString()
     });
 
     const written = writeUserWorkspace(identifier, mergedWorkspace, mergedWorkspace.email || mergedWorkspace.userId);
@@ -3531,14 +3531,21 @@ function ensureFreshPrebuiltBundle() {
   try {
     const prebuiltAppJs = path.join(process.cwd(), 'prebuilt', 'app.js');
     const prebuiltAppCss = path.join(process.cwd(), 'prebuilt', 'app.css');
-    const authModalSrc = path.join(process.cwd(), 'src', 'components', 'auth', 'AuthModal.tsx');
     const mainSrc = path.join(process.cwd(), 'src', 'main.tsx');
+    const watchedFiles = [
+      mainSrc,
+      path.join(process.cwd(), 'src', 'components', 'auth', 'AuthModal.tsx'),
+      path.join(process.cwd(), 'src', 'context', 'AppContext.tsx'),
+      path.join(process.cwd(), 'src', 'lib', 'workspaceSync.ts'),
+      path.join(process.cwd(), 'src', 'lib', 'firebase.ts'),
+      path.join(process.cwd(), 'src', 'components', 'campaigns', 'CampaignManager.tsx'),
+      path.join(process.cwd(), 'src', 'components', 'trash', 'TrashManager.tsx')
+    ];
 
     if (!fs.existsSync(mainSrc)) return;
     const bundleMtime = fs.existsSync(prebuiltAppJs) ? fs.statSync(prebuiltAppJs).mtimeMs : 0;
     const srcMtime = Math.max(
-      fs.existsSync(authModalSrc) ? fs.statSync(authModalSrc).mtimeMs : 0,
-      fs.statSync(mainSrc).mtimeMs
+      ...watchedFiles.map((f) => (fs.existsSync(f) ? fs.statSync(f).mtimeMs : 0))
     );
 
     if (srcMtime > bundleMtime + 1000) {
