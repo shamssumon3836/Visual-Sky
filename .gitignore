@@ -1,5 +1,7 @@
 node_modules/
 build/
+dist/
+tmp/
 coverage/
 .data/
 .runtime/
@@ -8,3 +10,4 @@ coverage/
 *.map
 .env*
 !.env.example
+

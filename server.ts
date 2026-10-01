@@ -3531,9 +3531,8 @@ app.post('/api/user-data/:email/smtp', (req, res) => {
 });
 
 // Auto-heal cPanel Git repository locks and clean .git/config so "Update from Remote" never fails with "The system could not contact the remote repository"
-function healCpanelGitRepo() {
+function healSingleGitDir(gitDir: string) {
   try {
-    const gitDir = path.join(process.cwd(), '.git');
     if (!fs.existsSync(gitDir)) return;
 
     const requiredDirs = [
@@ -3575,36 +3574,49 @@ function healCpanelGitRepo() {
       }
     }
 
+    const DEFAULT_REMOTE_URL = 'https://github.com/shamssumon3836/Visual-Sky.git';
     const gitConfigPath = path.join(gitDir, 'config');
     if (fs.existsSync(gitConfigPath)) {
       const cfg = fs.readFileSync(gitConfigPath, 'utf8');
-      const cleanedCfg = cfg.replace(/\n?\[http\][^\[]*/g, '').trimEnd() + '\n';
+      let cleanedCfg =
+        cfg
+          .replace(/\n?\[http\][^\[]*/g, '')
+          .replace(/\n?\[pack\][^\[]*/g, '')
+          .trimEnd() + '\n';
+      if (!cleanedCfg.includes('[remote "origin"]')) {
+        cleanedCfg += `[remote "origin"]\n\turl = ${DEFAULT_REMOTE_URL}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n`;
+      }
+      if (!cleanedCfg.includes('[branch "main"]')) {
+        cleanedCfg += `[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`;
+      }
       if (cleanedCfg !== cfg) {
         fs.writeFileSync(gitConfigPath, cleanedCfg, 'utf8');
       }
     } else {
-      let remoteUrl = '';
-      for (const candidate of [path.join(gitDir, 'FETCH_HEAD'), path.join(gitDir, 'logs', 'HEAD')]) {
-        if (fs.existsSync(candidate)) {
-          try {
-            const raw = fs.readFileSync(candidate, 'utf8');
-            const match = raw.match(/(https?:\/\/[^\s'"]+|git@[^\s'"]+)/);
-            if (match && match[1]) {
-              remoteUrl = match[1].trim();
-              break;
-            }
-          } catch {}
-        }
-      }
-      if (remoteUrl) {
-        const restoredConfig = `[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n[remote "origin"]\n\turl = ${remoteUrl}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`;
-        fs.writeFileSync(gitConfigPath, restoredConfig, 'utf8');
-      }
+      const restoredConfig = `[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n[remote "origin"]\n\turl = ${DEFAULT_REMOTE_URL}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`;
+      fs.writeFileSync(gitConfigPath, restoredConfig, 'utf8');
     }
   } catch {}
 }
 
+function healCpanelGitRepo() {
+  const candidateRoots = new Set([
+    process.cwd(),
+    '/home/visualsk/cold.visualsky.pro',
+    '/home/visualsk/git-coldmail'
+  ]);
+  for (const root of candidateRoots) {
+    healSingleGitDir(path.join(root, '.git'));
+  }
+}
+
 healCpanelGitRepo();
+try {
+  const gitHealTimer = setInterval(healCpanelGitRepo, 30000);
+  if (gitHealTimer && typeof gitHealTimer.unref === 'function') {
+    gitHealTimer.unref();
+  }
+} catch {}
 
 // Auto-sync prebuilt client bundle ONLY in local dev mode (never spawn esbuild or dirty tracked prebuilt/app.js on cPanel production)
 let lastBundleSyncCheck = 0;

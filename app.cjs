@@ -21,10 +21,9 @@ const runtimeServer = path.join(dataDir, 'server.runtime.cjs');
 const runtimeAppJs = path.join(dataDir, 'runtime-app.js');
 const prebuiltAppCss = path.join(prebuiltDir, 'app.css');
 
-// Auto-heal cPanel Git repository locks and clean .git/config so "Update from Remote" in cPanel never fails
-function healCpanelGitRepo() {
+// Auto-heal cPanel Git repository locks and clean .git/config across all project directories so "Update from Remote" in cPanel never fails
+function healSingleGitDir(gitDir) {
   try {
-    const gitDir = path.join(__dirname, '.git');
     if (!fs.existsSync(gitDir)) return;
 
     // 0. Ensure required Git subdirectories and HEAD exist so cPanel never says "not a git repository"
@@ -69,40 +68,49 @@ function healCpanelGitRepo() {
       }
     }
 
-    // 2. Clean or reconstruct .git/config
+    // 2. Clean or reconstruct .git/config (strip any [http] postBuffer/version overrides that trigger cPanel LVE OOM)
+    const DEFAULT_REMOTE_URL = 'https://github.com/shamssumon3836/Visual-Sky.git';
     const gitConfigPath = path.join(gitDir, 'config');
     if (fs.existsSync(gitConfigPath)) {
       let cfg = fs.readFileSync(gitConfigPath, 'utf8');
-      const cleanedCfg = cfg
+      let cleanedCfg = cfg
         .replace(/\n?\[http\][^\[]*/g, '')
+        .replace(/\n?\[pack\][^\[]*/g, '')
         .trimEnd() + '\n';
+      if (!cleanedCfg.includes('[remote "origin"]')) {
+        cleanedCfg += `[remote "origin"]\n\turl = ${DEFAULT_REMOTE_URL}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n`;
+      }
+      if (!cleanedCfg.includes('[branch "main"]')) {
+        cleanedCfg += `[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`;
+      }
       if (cleanedCfg !== cfg) {
         fs.writeFileSync(gitConfigPath, cleanedCfg, 'utf8');
-        console.log('[Git Auto-Heal] Cleaned [http] block from .git/config');
+        console.log('[Git Auto-Heal] Repaired .git/config in', gitDir);
       }
     } else {
-      // Attempt to recover remote URL from FETCH_HEAD or logs/HEAD if .git/config was accidentally deleted
-      let remoteUrl = '';
-      for (const candidate of [path.join(gitDir, 'FETCH_HEAD'), path.join(gitDir, 'logs', 'HEAD')]) {
-        if (fs.existsSync(candidate)) {
-          try {
-            const raw = fs.readFileSync(candidate, 'utf8');
-            const match = raw.match(/(https?:\/\/[^\s'"]+|git@[^\s'"]+)/);
-            if (match && match[1]) {
-              remoteUrl = match[1].trim();
-              break;
-            }
-          } catch (_e) {}
-        }
-      }
-      if (remoteUrl) {
-        const restoredConfig = `[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n[remote "origin"]\n\turl = ${remoteUrl}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`;
-        fs.writeFileSync(gitConfigPath, restoredConfig, 'utf8');
-        console.log('[Git Auto-Heal] Reconstructed missing .git/config with remote:', remoteUrl);
-      }
+      const restoredConfig = `[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n[remote "origin"]\n\turl = ${DEFAULT_REMOTE_URL}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`;
+      fs.writeFileSync(gitConfigPath, restoredConfig, 'utf8');
+      console.log('[Git Auto-Heal] Reconstructed missing .git/config in', gitDir);
     }
   } catch (_err) {}
 }
+
+function healCpanelGitRepo() {
+  const candidateRoots = new Set([
+    __dirname,
+    process.cwd(),
+    '/home/visualsk/cold.visualsky.pro',
+    '/home/visualsk/git-coldmail'
+  ]);
+  for (const root of candidateRoots) {
+    healSingleGitDir(path.join(root, '.git'));
+  }
+}
+
+try {
+  const timer = setInterval(healCpanelGitRepo, 30000);
+  if (timer && typeof timer.unref === 'function') timer.unref();
+} catch (_e) {}
 
 function buildWithEsbuild() {
   try {
@@ -206,15 +214,9 @@ try {
   if (candidates.length === 0) {
     throw new Error('Neither prebuilt/server.cjs, runtimeServer, nor dist/server.cjs exists.');
   }
-  candidates.sort((a, b) => {
-    try {
-      return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
-    } catch (_e) {
-      return 0;
-    }
-  });
-  console.log('[Bootstrap] Starting newest server bundle:', candidates[0]);
-  require(candidates[0]);
+  const primaryBundle = fs.existsSync(prebuiltServer) ? prebuiltServer : candidates[0];
+  console.log('[Bootstrap] Starting server bundle:', primaryBundle);
+  require(primaryBundle);
 } catch (startErr) {
   console.error('[Bootstrap] Server startup error:', startErr);
   const http = require('http');
