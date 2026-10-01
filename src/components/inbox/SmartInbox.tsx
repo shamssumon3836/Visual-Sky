@@ -186,6 +186,166 @@ export const SmartInbox: React.FC = () => {
   const [replyAttachments, setReplyAttachments] = useState<EmailAttachment[]>([]);
   const [composeAttachments, setComposeAttachments] = useState<EmailAttachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState<boolean>(false);
+  const [previewAttachment, setPreviewAttachment] = useState<EmailAttachment | null>(null);
+  const [syncingDriveAttId, setSyncingDriveAttId] = useState<string | null>(null);
+  const [copiedAppsScriptCode, setCopiedAppsScriptCode] = useState<boolean>(false);
+
+  const DRIVE_APPS_SCRIPT_SNIPPET = `function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var folderId = data.folderId || '';
+    if (!folderId && data.folderUrl) {
+      var m = String(data.folderUrl).match(/\\/folders\\/([a-zA-Z0-9_-]+)/);
+      if (m && m[1]) folderId = m[1];
+    }
+    var folder;
+    try {
+      folder = folderId ? DriveApp.getFolderById(folderId) : DriveApp.getRootFolder();
+    } catch (_e) {
+      folder = DriveApp.getRootFolder();
+    }
+    var decoded = Utilities.base64Decode(data.base64);
+    var blob = Utilities.newBlob(decoded, data.mimeType || 'application/octet-stream', data.fileName || 'attachment');
+    var file = folder.createFile(blob);
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (_s) {}
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      id: file.getId(),
+      fileUrl: file.getUrl()
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}`;
+
+  const isImageAttachment = (att: EmailAttachment): boolean => {
+    const mime = String(att?.mimeType || '').toLowerCase();
+    const name = String(att?.name || '').toLowerCase();
+    return mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
+  };
+
+  const getAttachmentViewSrc = (att: EmailAttachment): string => {
+    if (!att) return '';
+    if (att.contentBase64 && att.contentBase64.startsWith('data:')) return att.contentBase64;
+    if (att.viewUrl) return att.viewUrl;
+    if (att.id) return `/api/attachments/view/${encodeURIComponent(att.id)}`;
+    if (att.driveFileUrl && !att.driveFileUrl.includes('/folders/')) return att.driveFileUrl;
+    return '';
+  };
+
+  const getAttachmentDownloadSrc = (att: EmailAttachment): string => {
+    if (!att) return '';
+    if (att.downloadUrl) return att.downloadUrl;
+    if (att.id) return `/api/attachments/download/${encodeURIComponent(att.id)}`;
+    return getAttachmentViewSrc(att);
+  };
+
+  const handleDownloadAttachment = async (att: EmailAttachment, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!att) return;
+    const fileName = att.name || 'attachment';
+
+    try {
+      if (att.contentBase64 && att.contentBase64.startsWith('data:')) {
+        const res = await fetch(att.contentBase64);
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
+        return;
+      }
+
+      const downloadUrl = getAttachmentDownloadSrc(att);
+      if (downloadUrl) {
+        const res = await fetch(downloadUrl);
+        if (res.ok) {
+          const blob = await res.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = blobUrl;
+          link.download = fileName;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
+          return;
+        }
+      }
+    } catch {}
+
+    const fallbackUrl = getAttachmentDownloadSrc(att) || att.driveFileUrl || att.driveFolderUrl;
+    if (fallbackUrl) {
+      const link = document.createElement('a');
+      link.href = fallbackUrl;
+      link.download = fileName;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
+
+  const handleSyncAttachmentToDrive = async (att: EmailAttachment, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!att || !att.id) return;
+    if (!driveStorageSettings.appsScriptWebAppUrl) {
+      setShowDriveSettingsModal(true);
+      addNotification({
+        title: '☁️ Connect Google Drive Auto-Upload Bridge',
+        message: 'আপনার Google Drive ফোল্ডারের ভেতরে ফাইল সরাসরি যোগ করতে নিচে ১-ক্লিকে Apps Script Web App URL পেস্ট করে সেভ করুন।',
+        type: 'system'
+      });
+      return;
+    }
+
+    setSyncingDriveAttId(att.id);
+    try {
+      const res = await fetch(`/api/drive-storage/sync-file/${encodeURIComponent(att.id)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folderUrl: driveStorageSettings.folderUrl,
+          folderId: driveStorageSettings.folderId,
+          appsScriptWebAppUrl: driveStorageSettings.appsScriptWebAppUrl
+        })
+      });
+      const parsed = await safeParseResponse(res, 'Drive sync failed');
+      if (parsed.ok && parsed.data?.success && parsed.data?.driveFileUrl) {
+        att.driveFileUrl = parsed.data.driveFileUrl;
+        att.uploadedToDrive = true;
+        addNotification({
+          title: '✅ Added to Your Google Drive Folder!',
+          message: `"${att.name}" আপনার Google Drive ফোল্ডারে সফলভাবে আপলোড হয়েছে।`,
+          type: 'system'
+        });
+      } else {
+        addNotification({
+          title: '⚠️ Google Drive Upload Notice',
+          message: parsed.data?.error || 'Could not upload to Google Drive folder. Check Drive Settings.',
+          type: 'system'
+        });
+      }
+    } catch {
+      addNotification({
+        title: '⚠️ Google Drive Sync Error',
+        message: 'Could not reach Google Drive bridge.',
+        type: 'system'
+      });
+    } finally {
+      setSyncingDriveAttId(null);
+    }
+  };
 
   // Google Drive Folder Link Settings Modal State
   const [showDriveSettingsModal, setShowDriveSettingsModal] = useState<boolean>(false);
@@ -242,35 +402,51 @@ export const SmartInbox: React.FC = () => {
           reader.readAsDataURL(file);
         });
 
-        let driveFolderUrl = driveStorageSettings.folderUrl || 'https://drive.google.com/drive/my-drive';
-        let driveFileUrl = driveFolderUrl;
+        const generatedId = `att-${Date.now()}-${Math.random().toString(36).substring(2, 7)}-${i}`;
+        let finalId = generatedId;
+        let driveFolderUrl = driveStorageSettings.folderUrl || undefined;
+        let driveFileUrl: string | undefined = undefined;
+        let viewUrl = `/api/attachments/view/${encodeURIComponent(generatedId)}`;
+        let downloadUrl = `/api/attachments/download/${encodeURIComponent(generatedId)}`;
+        let uploadedToDrive = false;
 
         try {
           const upRes = await fetch('/api/drive-storage/upload', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              id: generatedId,
               fileName: file.name,
               mimeType: file.type || 'application/octet-stream',
               size: file.size,
               contentBase64: base64DataUrl,
               folderUrl: driveStorageSettings.folderUrl,
               folderId: driveStorageSettings.folderId,
-              appsScriptWebAppUrl: driveStorageSettings.appsScriptWebAppUrl
+              appsScriptWebAppUrl: driveStorageSettings.appsScriptWebAppUrl,
+              source: 'outgoing'
             })
           });
           const parsed = await safeParseResponse(upRes, 'Drive upload check');
           if (parsed.ok && parsed.data?.success) {
+            finalId = parsed.data.id || generatedId;
+            viewUrl = parsed.data.viewUrl || `/api/attachments/view/${encodeURIComponent(finalId)}`;
+            downloadUrl = parsed.data.downloadUrl || `/api/attachments/download/${encodeURIComponent(finalId)}`;
             driveFolderUrl = parsed.data.driveFolderUrl || driveFolderUrl;
-            driveFileUrl = parsed.data.driveFileUrl || driveFolderUrl;
+            if (parsed.data.uploadedViaBridge && parsed.data.driveFileUrl) {
+              driveFileUrl = parsed.data.driveFileUrl;
+              uploadedToDrive = true;
+            }
           }
         } catch {}
 
         newItems.push({
-          id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 7)}-${i}`,
+          id: finalId,
           name: file.name,
           size: file.size,
           mimeType: file.type || 'application/octet-stream',
+          viewUrl,
+          downloadUrl,
+          uploadedToDrive,
           driveFolderUrl,
           driveFileUrl,
           contentBase64: base64DataUrl
@@ -2246,19 +2422,22 @@ export const SmartInbox: React.FC = () => {
                           {mainReply}
                         </div>
 
-                        {/* Gmail-Style Attached Files Display (Stored in Google Drive — 0 KB Hosting Used) */}
+                        {/* Inline Image Previews + Attached Files View & Download Bar */}
                         {Array.isArray((m as any).attachments) && (m as any).attachments.length > 0 && (
-                          <div className="pt-2 border-t border-slate-800/70 space-y-1.5">
-                            <div className="flex items-center justify-between text-[10px] font-bold text-emerald-300">
-                              <span className="flex items-center gap-1">
-                                <Paperclip className="w-3 h-3 text-emerald-400" />
-                                <span>{(m as any).attachments.length} Attached File(s) • Google Drive Storage</span>
+                          <div className="pt-2.5 border-t border-slate-800/80 space-y-2.5">
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-bold text-emerald-300">
+                              <span className="flex items-center gap-1.5">
+                                <Paperclip className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>
+                                  {(m as any).attachments.length} Attached File(s) / Image(s) — View &amp; Download Ready
+                                </span>
                               </span>
                               {driveStorageSettings.folderUrl && (
                                 <a
                                   href={driveStorageSettings.folderUrl}
                                   target="_blank"
                                   rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
                                   className="text-cyan-300 hover:underline flex items-center gap-1"
                                 >
                                   <span>Open Drive Folder</span>
@@ -2266,34 +2445,139 @@ export const SmartInbox: React.FC = () => {
                                 </a>
                               )}
                             </div>
+
+                            {/* Inline Visual Preview for Any Attached Images / Pictures */}
+                            {(m as any).attachments.some((att: EmailAttachment) => isImageAttachment(att)) && (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                {(m as any).attachments
+                                  .filter((att: EmailAttachment) => isImageAttachment(att))
+                                  .map((att: EmailAttachment, imgIdx: number) => {
+                                    const imgSrc = getAttachmentViewSrc(att);
+                                    if (!imgSrc) return null;
+                                    return (
+                                      <div
+                                        key={`img-prev-${att.id || imgIdx}`}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setPreviewAttachment(att);
+                                        }}
+                                        className="group relative rounded-2xl overflow-hidden border border-emerald-500/30 bg-slate-950/95 shadow-lg cursor-pointer hover:border-cyan-400/70 transition"
+                                      >
+                                        <div className="bg-slate-950 flex items-center justify-center p-2 max-h-64 overflow-hidden">
+                                          <img
+                                            src={imgSrc}
+                                            alt={att.name || 'Email Image'}
+                                            className="max-h-60 w-auto object-contain rounded-lg transition group-hover:scale-[1.02]"
+                                            loading="lazy"
+                                          />
+                                        </div>
+                                        <div className="px-3 py-2 bg-slate-900/95 border-t border-slate-800 flex items-center justify-between gap-2">
+                                          <div className="min-w-0">
+                                            <div className="text-[11px] font-bold text-white truncate">
+                                              🖼️ {att.name}
+                                            </div>
+                                            <div className="text-[10px] text-slate-400 font-mono">
+                                              {formatFileSize(att.size)}
+                                            </div>
+                                          </div>
+                                          <div className="flex items-center gap-1.5 shrink-0">
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setPreviewAttachment(att);
+                                              }}
+                                              className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 text-[10px] font-extrabold cursor-pointer transition"
+                                            >
+                                              👁️ View
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={(e) => handleDownloadAttachment(att, e)}
+                                              className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black cursor-pointer transition"
+                                            >
+                                              ⬇️ Download
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                              </div>
+                            )}
+
+                            {/* File Action Cards for All Attachments (Images, PDFs, Docs, ZIP, etc.) */}
                             <div className="flex flex-wrap gap-2">
                               {(m as any).attachments.map((att: EmailAttachment, attIdx: number) => {
-                                const openUrl =
-                                  att.driveFileUrl ||
-                                  att.driveFolderUrl ||
-                                  driveStorageSettings.folderUrl ||
-                                  'https://drive.google.com/drive/my-drive';
+                                const hasRealDriveFile =
+                                  Boolean(att.driveFileUrl && !String(att.driveFileUrl).includes('/folders/'));
                                 return (
-                                  <a
+                                  <div
                                     key={att.id || attIdx}
-                                    href={openUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="px-2.5 py-1.5 rounded-xl bg-slate-950/90 hover:bg-slate-900 border border-emerald-500/30 hover:border-emerald-400/60 flex items-center gap-2 text-xs text-slate-100 transition group shadow-sm"
-                                    title="View / Manage Attachment in Google Drive"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="px-3 py-2 rounded-xl bg-slate-950/95 border border-emerald-500/30 hover:border-emerald-400/60 flex items-center justify-between gap-3 text-xs text-slate-100 transition shadow-sm"
                                   >
-                                    <Paperclip className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                                    <div className="min-w-0">
-                                      <div className="font-bold text-[11px] text-white truncate max-w-[180px]">
-                                        {att.name}
-                                      </div>
-                                      <div className="text-[9px] text-emerald-300/90 font-mono flex items-center gap-1">
-                                        <span>{formatFileSize(att.size)}</span>
-                                        <span>•</span>
-                                        <span>☁️ Google Drive ↗</span>
+                                    <div
+                                      onClick={() => setPreviewAttachment(att)}
+                                      className="flex items-center gap-2 min-w-0 cursor-pointer"
+                                    >
+                                      <Paperclip className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                      <div className="min-w-0">
+                                        <div className="font-bold text-[11px] text-white truncate max-w-[190px] hover:text-cyan-300">
+                                          {att.name}
+                                        </div>
+                                        <div className="text-[9px] text-slate-400 font-mono flex items-center gap-1">
+                                          <span>{formatFileSize(att.size)}</span>
+                                          {hasRealDriveFile && (
+                                            <>
+                                              <span>•</span>
+                                              <span className="text-emerald-300">☁️ In Google Drive ✓</span>
+                                            </>
+                                          )}
+                                        </div>
                                       </div>
                                     </div>
-                                  </a>
+
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => setPreviewAttachment(att)}
+                                        className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 text-[10px] font-extrabold cursor-pointer transition"
+                                        title="Preview / View File"
+                                      >
+                                        👁️ View
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => handleDownloadAttachment(att, e)}
+                                        className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black cursor-pointer transition"
+                                        title="Download File to Device"
+                                      >
+                                        ⬇️ Download
+                                      </button>
+                                      {hasRealDriveFile ? (
+                                        <a
+                                          href={att.driveFileUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold transition"
+                                          title="Open File in Google Drive"
+                                        >
+                                          ☁️ Drive ↗
+                                        </a>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          disabled={syncingDriveAttId === att.id}
+                                          onClick={(e) => handleSyncAttachmentToDrive(att, e)}
+                                          className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 text-[10px] font-bold cursor-pointer transition disabled:opacity-50"
+                                          title="Add this file directly into your Google Drive folder"
+                                        >
+                                          {syncingDriveAttId === att.id ? 'Uploading...' : '☁️ +Drive'}
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
                                 );
                               })}
                             </div>
@@ -3096,6 +3380,36 @@ export const SmartInbox: React.FC = () => {
                 />
               </div>
 
+              {/* Google Apps Script Auto-Upload Bridge Setup */}
+              <div className="p-3.5 rounded-2xl bg-slate-950 border border-cyan-500/30 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-extrabold text-cyan-300 text-xs">
+                    🚀 আপনার Google Drive ফোল্ডারের ভেতরে অটোমেটিক ফাইল যোগ করার সেটআপ (Apps Script Bridge)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(DRIVE_APPS_SCRIPT_SNIPPET).catch(() => {});
+                      setCopiedAppsScriptCode(true);
+                      setTimeout(() => setCopiedAppsScriptCode(false), 2500);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 text-[10px] font-black cursor-pointer shrink-0"
+                  >
+                    {copiedAppsScriptCode ? '✓ Code Copied!' : '📋 Copy Script Code'}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  শুধুমাত্র ফোল্ডার লিংক দিলে Google সিকিউরিটির কারণে বাইরের সার্ভারকে আপনার ফোল্ডারের ভেতরে ফাইল রাইট করতে দেয় না। আপনার ফোল্ডারে সরাসরি ফাইল জমা হতে: ১) <a href="https://script.google.com" target="_blank" rel="noreferrer" className="text-cyan-400 underline font-bold">script.google.com</a> খুলে <strong>New Project</strong>-এ উপরের কোডটি পেস্ট করুন, ২) <strong>Deploy → New deployment → Web app (Who has access: Anyone)</strong> দিয়ে Deploy করে প্রাপ্ত <strong>Web App URL</strong> নিচে পেস্ট করে সেভ করুন:
+                </p>
+                <input
+                  type="url"
+                  value={driveScriptUrlInput}
+                  onChange={(e) => setDriveScriptUrlInput(e.target.value)}
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  className="w-full bg-slate-900 border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 font-mono focus:outline-none"
+                />
+              </div>
+
               <label className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-900/90 border border-slate-800 cursor-pointer">
                 <input
                   type="checkbox"
@@ -3151,6 +3465,148 @@ export const SmartInbox: React.FC = () => {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* IN-APP IMAGE & FILE PREVIEW LIGHTBOX MODAL */}
+      {previewAttachment && (
+        <div
+          onClick={() => setPreviewAttachment(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-black/90 backdrop-blur-md animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-[#090d16] border border-cyan-500/40 w-full max-w-4xl rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+          >
+            <div className="px-4 py-3 bg-slate-900/95 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Paperclip className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div className="min-w-0">
+                  <div className="font-black text-white text-xs sm:text-sm truncate">
+                    {previewAttachment.name}
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-mono">
+                    {formatFileSize(previewAttachment.size)} &bull; {previewAttachment.mimeType || 'File'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={(e) => handleDownloadAttachment(previewAttachment, e)}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer transition shadow"
+                >
+                  <span>⬇️ Download File</span>
+                </button>
+                {previewAttachment.driveFileUrl && !previewAttachment.driveFileUrl.includes('/folders/') ? (
+                  <a
+                    href={previewAttachment.driveFileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 font-bold text-xs flex items-center gap-1 transition"
+                  >
+                    <span>☁️ Open in Drive</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={syncingDriveAttId === previewAttachment.id}
+                    onClick={(e) => handleSyncAttachmentToDrive(previewAttachment, e)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-300 font-bold text-xs cursor-pointer transition"
+                  >
+                    {syncingDriveAttId === previewAttachment.id ? 'Uploading...' : '☁️ Save to Drive'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPreviewAttachment(null)}
+                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-slate-950 min-h-[320px]">
+              {(() => {
+                const viewSrc = getAttachmentViewSrc(previewAttachment);
+                const mime = String(previewAttachment.mimeType || '').toLowerCase();
+                const name = String(previewAttachment.name || '').toLowerCase();
+
+                if (isImageAttachment(previewAttachment) && viewSrc) {
+                  return (
+                    <img
+                      src={viewSrc}
+                      alt={previewAttachment.name}
+                      className="max-h-[75vh] max-w-full object-contain rounded-xl shadow-2xl"
+                    />
+                  );
+                }
+
+                if ((mime.includes('pdf') || name.endsWith('.pdf')) && viewSrc) {
+                  return (
+                    <iframe
+                      src={viewSrc}
+                      title={previewAttachment.name}
+                      className="w-full h-[72vh] rounded-xl border border-slate-800 bg-white"
+                    />
+                  );
+                }
+
+                if ((mime.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(name)) && viewSrc) {
+                  return (
+                    <video
+                      src={viewSrc}
+                      controls
+                      className="max-h-[72vh] max-w-full rounded-xl"
+                    />
+                  );
+                }
+
+                if ((mime.startsWith('audio/') || /\.(mp3|wav|ogg)$/i.test(name)) && viewSrc) {
+                  return <audio src={viewSrc} controls className="w-full max-w-md" />;
+                }
+
+                return (
+                  <div className="text-center space-y-4 p-8 max-w-md">
+                    <div className="w-16 h-16 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center text-emerald-400 mx-auto">
+                      <FileText className="w-8 h-8" />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-base font-black text-white break-all">
+                        {previewAttachment.name}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        {formatFileSize(previewAttachment.size)} &bull; {previewAttachment.mimeType || 'Document / Archive'}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-center gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={(e) => handleDownloadAttachment(previewAttachment, e)}
+                        className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-2 cursor-pointer shadow-lg shadow-emerald-500/20"
+                      >
+                        <span>⬇️ Download {previewAttachment.name}</span>
+                      </button>
+                      {viewSrc && (
+                        <a
+                          href={viewSrc}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 font-bold text-xs flex items-center gap-1.5"
+                        >
+                          <span>Open in Browser</span>
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </div>
       )}

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useApp } from '../../context/AppContext';
+import { useApp, getLeadInactiveDays } from '../../context/AppContext';
 import { 
   BarChart3, 
   TrendingUp, 
@@ -61,6 +61,7 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
     emailTemplates: rawEmailTemplates,
     setActiveTab, 
     openFollowUpCohortModal,
+    openCampaignWizard,
     currentUser,
     simulateIncomingReply,
     addNotification,
@@ -89,9 +90,9 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
   const connectedSmtps = activeSmtps.filter(s => s.isConnected);
 
   // Inactive leads for 7d, 14d, 30d cohorts
-  const dormant7d = leads.filter(l => !l.isTrash && l.daysAgo >= 7 && l.status !== 'replied').length;
-  const dormant14d = leads.filter(l => !l.isTrash && l.daysAgo >= 14 && l.status !== 'replied').length;
-  const dormant30d = leads.filter(l => !l.isTrash && l.daysAgo >= 30 && l.status !== 'replied').length;
+  const dormant7d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 7 && !l.isReplied && l.status !== 'replied').length;
+  const dormant14d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 14 && !l.isReplied && l.status !== 'replied').length;
+  const dormant30d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 30 && !l.isReplied && l.status !== 'replied').length;
 
   // Real-time aggregate metric calculations
   const totalCampaignSent = campaigns.reduce((acc, c) => acc + c.sentCount, 0);
@@ -169,7 +170,7 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
           {/* Quick Primary Actions with Cyber Neomorphism */}
           <div className="flex items-center gap-2.5 flex-wrap shrink-0">
             <button
-              onClick={() => setActiveTab('campaigns')}
+              onClick={() => openCampaignWizard()}
               className="flex items-center gap-2 px-5 py-3.5 bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:via-blue-500 hover:to-indigo-500 text-white rounded-2xl text-xs font-black shadow-xl shadow-cyan-500/25 transition transform hover:-translate-y-0.5 cursor-pointer border border-cyan-400/30"
             >
               <Zap className="w-4 h-4 fill-white" />

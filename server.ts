@@ -5356,33 +5356,75 @@ app.post('/api/smtp/send', async (req, res) => {
       ? `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`
       : `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`;
 
-    // Prepare in-memory attachments (0 KB saved on server disk) + Google Drive attachment links
+    // Prepare attachments (MIME attachments + Attachment Store + Google Drive links)
     const incomingAttachments: any[] = Array.isArray(attachments) ? attachments : [];
+    const savedDriveCfg = getSavedDriveStorageSettings();
+    for (const att of incomingAttachments) {
+      if (att && att.name && att.contentBase64) {
+        const cleanB64 = String(att.contentBase64).replace(/^data:[^;]+;base64,/, '');
+        const buf = Buffer.from(cleanB64, 'base64');
+        const attId = String(att.id || `out-att-${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+        att.id = attId;
+        att.viewUrl = `/api/attachments/view/${encodeURIComponent(attId)}`;
+        att.downloadUrl = `/api/attachments/download/${encodeURIComponent(attId)}`;
+        if (buf.length > 0) {
+          storeAttachmentBinary(attId, att.name, att.mimeType || 'application/octet-stream', buf, {
+            source: 'outgoing',
+            senderEmail,
+            recipientEmail: cleanRecipientEmail,
+            subject: cleanSubject,
+            driveFolderUrl: att.driveFolderUrl || savedDriveCfg.folderUrl || undefined,
+            driveFileUrl: att.driveFileUrl && !String(att.driveFileUrl).includes('/folders/') ? att.driveFileUrl : undefined,
+            uploadedToDrive: Boolean(att.uploadedToDrive || (att.driveFileUrl && !String(att.driveFileUrl).includes('/folders/')))
+          });
+        }
+      }
+    }
+
     const validBinaryAttachments = incomingAttachments.filter(
       (a: any) => a && a.name && a.contentBase64
     );
     const driveLinkedAttachments = incomingAttachments.filter(
-      (a: any) => a && a.name && (a.driveFileUrl || a.driveFolderUrl)
+      (a: any) =>
+        a &&
+        a.name &&
+        savedDriveCfg.autoIncludeDriveLinkInEmail !== false &&
+        ((a.driveFileUrl && !String(a.driveFileUrl).includes('/folders/')) || a.viewUrl || a.driveFolderUrl)
     );
 
     let driveLinksTextFooter = '';
     let driveLinksHtmlFooter = '';
     if (!isWeek1Warmup && driveLinkedAttachments.length > 0) {
       const textItems = driveLinkedAttachments.map((a: any) => {
-        const url = a.driveFileUrl || a.driveFolderUrl;
-        return `📎 ${a.name} (Google Drive): ${url}`;
+        const directFileUrl =
+          a.driveFileUrl && !String(a.driveFileUrl).includes('/folders/')
+            ? a.driveFileUrl
+            : a.id
+            ? `${origin}/api/attachments/view/${encodeURIComponent(a.id)}`
+            : a.driveFolderUrl;
+        return `📎 ${a.name}: ${directFileUrl}`;
       });
-      driveLinksTextFooter = `\n\n---\n☁️ Attached via Google Drive:\n${textItems.join('\n')}`;
+      driveLinksTextFooter = `\n\n---\n📎 Attached Files:\n${textItems.join('\n')}`;
 
       const htmlItems = driveLinkedAttachments
         .map((a: any) => {
-          const url = String(a.driveFileUrl || a.driveFolderUrl || '').replace(/"/g, '&quot;');
+          const hasRealDriveFile = a.driveFileUrl && !String(a.driveFileUrl).includes('/folders/');
+          const viewFileUrl = String(
+            hasRealDriveFile
+              ? a.driveFileUrl
+              : a.id
+              ? `${origin}/api/attachments/view/${encodeURIComponent(a.id)}`
+              : a.driveFolderUrl || ''
+          ).replace(/"/g, '&quot;');
+          const downloadFileUrl = String(
+            a.id ? `${origin}/api/attachments/download/${encodeURIComponent(a.id)}` : viewFileUrl
+          ).replace(/"/g, '&quot;');
           const safeName = String(a.name || 'Attachment')
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;');
           const kb = a.size ? ` (${Math.max(1, Math.round(Number(a.size) / 1024))} KB)` : '';
-          return `<div style="margin:6px 0;padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;display:inline-block;margin-right:8px;"><a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0284c7;text-decoration:none;font-weight:600;font-size:13px;">📎 ${safeName}${kb} &bull; View on Google Drive ↗</a></div>`;
+          return `<div style="margin:6px 0;padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;display:inline-block;margin-right:8px;"><a href="${viewFileUrl}" target="_blank" rel="noopener noreferrer" style="color:#0284c7;text-decoration:none;font-weight:600;font-size:13px;">📎 ${safeName}${kb} &bull; View File ↗</a> &nbsp;|&nbsp; <a href="${downloadFileUrl}" target="_blank" rel="noopener noreferrer" style="color:#059669;text-decoration:none;font-weight:600;font-size:12px;">⬇️ Download</a></div>`;
         })
         .join('');
       driveLinksHtmlFooter = `<div style="margin-top:14px;padding-top:10px;border-top:1px solid #e2e8f0;">${htmlItems}</div>`;
@@ -5689,15 +5731,62 @@ app.post('/api/smtp/send', async (req, res) => {
   }
 });
 
-// Helper: Extract clean latest reply body from raw email text (completely strips '>' quote signs, multi-line "On ... wrote:" blocks, and raw {{...}} tokens)
+// Helper: Decode HTML entities & strip HTML quote blocks / tags so raw <div dir="ltr"> or <div class="gmail_quote"> never appears
+function stripHtmlAndQuotesToText(rawInput: string): string {
+  if (!rawInput) return '';
+  let str = String(rawInput).replace(/\r\n/g, '\n');
+
+  if (/<[a-zA-Z!/]/.test(str)) {
+    // Remove style/script/head and tracking pixel images
+    str = str
+      .replace(/<head[\s\S]*?<\/head>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<img[^>]*\/api\/track\/open\/[^>]*>/gi, '');
+
+    // Remove Gmail, Outlook, Yahoo, and Apple Mail quoted history containers in HTML
+    str = str
+      .replace(/<div[^>]*class=["'][^"']*gmail_quote[\s\S]*$/i, '')
+      .replace(/<blockquote[^>]*class=["'][^"']*gmail_quote[\s\S]*$/i, '')
+      .replace(/<div[^>]*class=["'][^"']*gmail_attr[\s\S]*$/i, '')
+      .replace(/<div[^>]*id=["'](appendonsend|divRplyFwdMsg)["'][\s\S]*$/i, '')
+      .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, '');
+
+    // Convert line-breaking HTML tags to newline
+    str = str
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(div|p|li|tr|h[1-6]|blockquote|section|article)>/gi, '\n');
+
+    // Strip all remaining HTML tags
+    str = str.replace(/<[^>]+>/g, '');
+
+    // Decode common HTML entities
+    str = str
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;|&apos;/gi, "'")
+      .replace(/&amp;/gi, '&')
+      .replace(/&#(\d+);/g, (_m, code) => {
+        const n = Number(code);
+        return Number.isFinite(n) ? String.fromCharCode(n) : '';
+      });
+  }
+
+  return str;
+}
+
+// Helper: Extract clean latest reply body from raw email text (completely strips '>' quote signs, multi-line "On ... wrote:" blocks, HTML tags, and raw {{...}} tokens)
 function extractCleanReplyBody(rawText: string): string {
   if (!rawText) return '';
 
-  // 1. Normalize line endings and strip multi-line Gmail/Outlook/Apple Mail quote headers and everything below them
-  let text = String(rawText).replace(/\r\n/g, '\n');
+  // 1. Strip HTML tags & HTML quote blocks first
+  let text = stripHtmlAndQuotesToText(rawText);
 
-  // Strip "On <date/time>, <name/email> wrote:" even when wrapped across 1-4 lines
-  text = text.replace(/(\n|^)\s*On\s+[\s\S]{1,320}?wrote:\s*(\n|$)[\s\S]*$/i, '');
+  // Strip "On <date/time>, <name/email> wrote:" even when wrapped across 1-5 lines or at the start of the message
+  text = text.replace(/(\n|^)\s*On\s+[\s\S]{1,360}?wrote:\s*(\n|$)[\s\S]*$/i, '');
+  text = text.replace(/^\s*On\s+[\s\S]{1,360}?wrote:[\s\S]*$/i, '');
   // Strip Outlook / Webmail separator blocks
   text = text.replace(/(\n|^)\s*-{2,}\s*Original Message\s*-{2,}[\s\S]*$/i, '');
   text = text.replace(/(\n|^)\s*_{5,}[\s\S]*$/i, '');
@@ -5732,6 +5821,7 @@ function extractCleanReplyBody(rawText: string): string {
   const cleaned = chosenLines
     .map(l => l.replace(/^\s*>+\s?/g, ''))
     .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
     .replace(/\{\{\s*website\s*\}\}/gi, 'your website')
     .replace(/\{\{\s*company\s*\}\}/gi, 'your company')
     .replace(/\{\{\s*first_name\s*\}\}/gi, 'there')
@@ -5741,6 +5831,233 @@ function extractCleanReplyBody(rawText: string): string {
 
   return cleaned;
 }
+
+// Persistent & In-Memory Attachment Store for Instant Viewing, Downloading & Google Drive Sync
+const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');
+const DRIVE_FILES_INDEX_FILE = path.join(DATA_DIR, 'drive-files-index.json');
+try {
+  if (!fs.existsSync(ATTACHMENTS_DIR)) {
+    fs.mkdirSync(ATTACHMENTS_DIR, { recursive: true });
+  }
+} catch {}
+
+interface StoredAttachmentRecord {
+  id: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  filePath?: string;
+  driveFolderUrl?: string;
+  driveFileUrl?: string;
+  uploadedToDrive?: boolean;
+  source: 'incoming' | 'outgoing' | 'drive_hub';
+  senderEmail?: string;
+  recipientEmail?: string;
+  subject?: string;
+  uploadedAt: string;
+}
+
+const attachmentMemoryBuffers = new Map<string, { buffer: Buffer; mimeType: string; name: string }>();
+const attachmentIndexMap = new Map<string, StoredAttachmentRecord>();
+
+try {
+  if (fs.existsSync(DRIVE_FILES_INDEX_FILE)) {
+    const rawIdx = JSON.parse(fs.readFileSync(DRIVE_FILES_INDEX_FILE, 'utf-8'));
+    if (Array.isArray(rawIdx)) {
+      for (const item of rawIdx) {
+        if (item && item.id) {
+          attachmentIndexMap.set(String(item.id), item);
+        }
+      }
+    }
+  }
+} catch {}
+
+const saveAttachmentIndexToDisk = () => {
+  try {
+    const list = Array.from(attachmentIndexMap.values())
+      .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
+      .slice(0, 500);
+    fs.writeFileSync(DRIVE_FILES_INDEX_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch {}
+};
+
+function storeAttachmentBinary(
+  id: string,
+  name: string,
+  mimeType: string,
+  buffer: Buffer,
+  meta: Partial<StoredAttachmentRecord> = {}
+): StoredAttachmentRecord {
+  const safeId = String(id || `att-${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+  const cleanName = String(name || 'attachment').trim() || 'attachment';
+  const cleanMime = String(mimeType || 'application/octet-stream').trim() || 'application/octet-stream';
+  const filePath = path.join(ATTACHMENTS_DIR, safeId);
+
+  attachmentMemoryBuffers.set(safeId, { buffer, mimeType: cleanMime, name: cleanName });
+  if (attachmentMemoryBuffers.size > 150) {
+    const oldestKey = attachmentMemoryBuffers.keys().next().value;
+    if (oldestKey) attachmentMemoryBuffers.delete(oldestKey);
+  }
+
+  try {
+    fs.writeFileSync(filePath, buffer);
+  } catch {}
+
+  const existing = attachmentIndexMap.get(safeId);
+  const savedSettings = getSavedDriveStorageSettings();
+  const record: StoredAttachmentRecord = {
+    id: safeId,
+    name: cleanName,
+    size: buffer.length || existing?.size || 0,
+    mimeType: cleanMime,
+    filePath,
+    driveFolderUrl: meta.driveFolderUrl || existing?.driveFolderUrl || savedSettings.folderUrl || undefined,
+    driveFileUrl: meta.driveFileUrl || existing?.driveFileUrl || undefined,
+    uploadedToDrive: meta.uploadedToDrive ?? existing?.uploadedToDrive ?? false,
+    source: meta.source || existing?.source || 'incoming',
+    senderEmail: meta.senderEmail || existing?.senderEmail,
+    recipientEmail: meta.recipientEmail || existing?.recipientEmail,
+    subject: meta.subject || existing?.subject,
+    uploadedAt: existing?.uploadedAt || meta.uploadedAt || new Date().toISOString()
+  };
+
+  attachmentIndexMap.set(safeId, record);
+  saveAttachmentIndexToDisk();
+  return record;
+}
+
+function getAttachmentBinaryById(rawId: string): { buffer: Buffer; mimeType: string; name: string } | null {
+  const safeId = String(rawId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+  if (!safeId) return null;
+
+  const mem = attachmentMemoryBuffers.get(safeId);
+  if (mem) return mem;
+
+  const record = attachmentIndexMap.get(safeId);
+  const candidatePath = record?.filePath || path.join(ATTACHMENTS_DIR, safeId);
+  try {
+    if (fs.existsSync(candidatePath)) {
+      const buffer = fs.readFileSync(candidatePath);
+      const mimeType = record?.mimeType || 'application/octet-stream';
+      const name = record?.name || safeId;
+      attachmentMemoryBuffers.set(safeId, { buffer, mimeType, name });
+      return { buffer, mimeType, name };
+    }
+  } catch {}
+  return null;
+}
+
+// Helper: Upload binary Buffer to User's Google Drive Folder via Apps Script Web App Bridge
+async function uploadBufferToGoogleDrive(params: {
+  fileName: string;
+  mimeType: string;
+  buffer: Buffer;
+  folderUrl?: string;
+  folderId?: string;
+  appsScriptWebAppUrl?: string;
+}): Promise<{
+  uploadedViaBridge: boolean;
+  driveFolderUrl: string;
+  driveFileUrl: string;
+  bridgeError?: string;
+}> {
+  const saved = getSavedDriveStorageSettings();
+  const effectiveFolderUrl = String(params.folderUrl || saved.folderUrl || '').trim();
+  const matchFolder = effectiveFolderUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  const matchIdParam = effectiveFolderUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  const rawFolderId =
+    String(params.folderId || '').trim() ||
+    matchFolder?.[1] ||
+    matchIdParam?.[1] ||
+    saved.folderId ||
+    '';
+  const effectiveFolderId = rawFolderId === 'drive-folder-linked' ? (matchFolder?.[1] || matchIdParam?.[1] || '') : rawFolderId;
+  const effectiveScriptUrl = String(params.appsScriptWebAppUrl || saved.appsScriptWebAppUrl || '').trim();
+
+  const canonicalFolderLink =
+    effectiveFolderId && effectiveFolderId !== 'drive-folder-linked'
+      ? `https://drive.google.com/drive/folders/${effectiveFolderId}`
+      : effectiveFolderUrl || '';
+
+  let driveFileUrl = canonicalFolderLink;
+  let uploadedViaBridge = false;
+  let bridgeError: string | undefined;
+
+  if (effectiveScriptUrl && effectiveScriptUrl.startsWith('https://script.google.com/') && params.buffer?.length > 0) {
+    try {
+      const cleanBase64 = params.buffer.toString('base64');
+      const bridgeRes = await fetch(effectiveScriptUrl, {
+        method: 'POST',
+        redirect: 'follow',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          fileName: params.fileName || 'attachment',
+          mimeType: params.mimeType || 'application/octet-stream',
+          size: params.buffer.length,
+          folderId: effectiveFolderId,
+          folderUrl: effectiveFolderUrl,
+          base64: cleanBase64
+        })
+      });
+      const rawText = await bridgeRes.text();
+      let bridgeData: any = {};
+      try {
+        bridgeData = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        bridgeError = 'Apps Script response was not valid JSON. Check deployment permissions (Anyone).';
+      }
+      if (bridgeData && (bridgeData.fileUrl || bridgeData.url || bridgeData.webViewLink || bridgeData.id)) {
+        driveFileUrl =
+          bridgeData.fileUrl ||
+          bridgeData.url ||
+          bridgeData.webViewLink ||
+          `https://drive.google.com/file/d/${bridgeData.id}/view?usp=sharing`;
+        uploadedViaBridge = true;
+      } else if (bridgeData?.error) {
+        bridgeError = String(bridgeData.error);
+      }
+    } catch (err: any) {
+      bridgeError = err?.message || 'Failed to reach Apps Script Web App URL';
+    }
+  }
+
+  return {
+    uploadedViaBridge,
+    driveFolderUrl: canonicalFolderLink,
+    driveFileUrl,
+    bridgeError
+  };
+}
+
+// Endpoint: View Attachment Inline (Images, PDFs, Text, Videos, etc.)
+app.get('/api/attachments/view/:id', (req, res) => {
+  const item = getAttachmentBinaryById(req.params.id);
+  if (!item) {
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(404).json({ success: false, error: 'Attachment not found' });
+  }
+  const safeFileName = item.name.replace(/["\r\n]/g, '_');
+  res.setHeader('Content-Type', item.mimeType || 'application/octet-stream');
+  res.setHeader('Content-Length', String(item.buffer.length));
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(safeFileName)}"`);
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  return res.status(200).end(item.buffer);
+});
+
+// Endpoint: Force Download Attachment Binary to User's Device
+app.get('/api/attachments/download/:id', (req, res) => {
+  const item = getAttachmentBinaryById(req.params.id);
+  if (!item) {
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(404).json({ success: false, error: 'Attachment not found' });
+  }
+  const safeFileName = item.name.replace(/["\r\n]/g, '_');
+  res.setHeader('Content-Type', item.mimeType || 'application/octet-stream');
+  res.setHeader('Content-Length', String(item.buffer.length));
+  res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"; filename*=UTF-8''${encodeURIComponent(safeFileName)}`);
+  return res.status(200).end(item.buffer);
+});
 
 // In-memory caches & warm connection pool for ultra-fast (<100ms) real-time IMAP auto-sync
 const verifiedImapHostCache = new Map<string, string>();
@@ -5942,9 +6259,13 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
         }
 
         if (recentUids.length > 0) {
-          const uncachedUids = recentUids.filter(uid => !imapUidMessageCache.has(`${userLower}::${uid}`));
+          const cachePrefix = `v3::${userLower}`;
+          const uncachedUids = recentUids.filter(uid => !imapUidMessageCache.has(`${cachePrefix}::${uid}`));
 
           if (uncachedUids.length > 0) {
+            const driveSettings = getSavedDriveStorageSettings();
+            const safeUserSlug = userLower.replace(/[^a-z0-9]/gi, '_');
+
             for await (const message of connectedClient.fetch(
               uncachedUids,
               { uid: true, envelope: true, source: true },
@@ -5963,11 +6284,189 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
                     message.envelope?.from?.[0]?.name ||
                     ''
                   ).trim();
-                  const rawText =
-                    parsed.text ||
-                    (parsed.html ? String(parsed.html).replace(/<[^>]+>/g, ' ') : '') ||
-                    '';
-                  const cleanReplyText = extractCleanReplyBody(rawText);
+                  const msgSubject = parsed.subject || message.envelope?.subject || 'No Subject';
+
+                  // 1. Extract all real attachments & inline images from parsed.attachments
+                  const extractedAttachments: any[] = [];
+                  const seenBase64Prefixes = new Set<string>();
+
+                  if (Array.isArray(parsed.attachments)) {
+                    for (let attIdx = 0; attIdx < parsed.attachments.length; attIdx++) {
+                      const att: any = parsed.attachments[attIdx];
+                      if (!att) continue;
+                      const rawBuf: Buffer = Buffer.isBuffer(att.content)
+                        ? att.content
+                        : att.content
+                        ? Buffer.from(att.content)
+                        : Buffer.alloc(0);
+
+                      const mimeType = String(att.contentType || 'application/octet-stream').trim();
+                      const rawFileName = String(att.filename || '').trim();
+                      // Skip tiny 1x1 tracking pixel gifs
+                      if (
+                        rawFileName.startsWith('px-') ||
+                        (mimeType === 'image/gif' && rawBuf.length > 0 && rawBuf.length <= 120)
+                      ) {
+                        continue;
+                      }
+
+                      const extFromMime = (() => {
+                        if (mimeType.includes('png')) return 'png';
+                        if (mimeType.includes('jpeg') || mimeType.includes('jpg')) return 'jpg';
+                        if (mimeType.includes('gif')) return 'gif';
+                        if (mimeType.includes('webp')) return 'webp';
+                        if (mimeType.includes('pdf')) return 'pdf';
+                        if (mimeType.includes('zip')) return 'zip';
+                        if (mimeType.includes('csv')) return 'csv';
+                        if (mimeType.includes('plain')) return 'txt';
+                        return 'bin';
+                      })();
+
+                      const fileName =
+                        rawFileName ||
+                        (mimeType.startsWith('image/')
+                          ? `image-${message.uid}-${attIdx + 1}.${extFromMime}`
+                          : `attachment-${message.uid}-${attIdx + 1}.${extFromMime}`);
+
+                      const attId = `imap-att-${safeUserSlug}-${message.uid}-${attIdx}`;
+                      let driveFolderUrl = driveSettings.folderUrl || undefined;
+                      let driveFileUrl: string | undefined = undefined;
+                      let uploadedToDrive = false;
+
+                      if (rawBuf.length > 0) {
+                        // Auto-upload incoming attachment to user's Google Drive if Apps Script bridge is configured
+                        if (driveSettings.appsScriptWebAppUrl) {
+                          try {
+                            const bridgeOut = await uploadBufferToGoogleDrive({
+                              fileName,
+                              mimeType,
+                              buffer: rawBuf,
+                              folderUrl: driveSettings.folderUrl,
+                              folderId: driveSettings.folderId,
+                              appsScriptWebAppUrl: driveSettings.appsScriptWebAppUrl
+                            });
+                            if (bridgeOut.driveFolderUrl) driveFolderUrl = bridgeOut.driveFolderUrl;
+                            if (bridgeOut.uploadedViaBridge && bridgeOut.driveFileUrl) {
+                              driveFileUrl = bridgeOut.driveFileUrl;
+                              uploadedToDrive = true;
+                            }
+                          } catch {}
+                        }
+
+                        storeAttachmentBinary(attId, fileName, mimeType, rawBuf, {
+                          source: 'incoming',
+                          senderEmail: fromAddr,
+                          recipientEmail: cleanUser,
+                          subject: msgSubject,
+                          driveFolderUrl,
+                          driveFileUrl,
+                          uploadedToDrive
+                        });
+                      }
+
+                      const b64Str =
+                        rawBuf.length > 0 && rawBuf.length <= 4 * 1024 * 1024
+                          ? `data:${mimeType};base64,${rawBuf.toString('base64')}`
+                          : undefined;
+
+                      if (b64Str) {
+                        seenBase64Prefixes.add(b64Str.slice(0, 120));
+                      }
+
+                      extractedAttachments.push({
+                        id: attId,
+                        name: fileName,
+                        size: rawBuf.length || att.size || 0,
+                        mimeType,
+                        viewUrl: `/api/attachments/view/${encodeURIComponent(attId)}`,
+                        downloadUrl: `/api/attachments/download/${encodeURIComponent(attId)}`,
+                        driveFolderUrl,
+                        driveFileUrl,
+                        uploadedToDrive,
+                        source: 'incoming',
+                        contentBase64: b64Str
+                      });
+                    }
+                  }
+
+                  // 2. Also inspect non-quoted HTML for inline <img src="data:image/..."> or external images not in parsed.attachments
+                  const rawHtmlStr = String(parsed.html || '');
+                  if (rawHtmlStr) {
+                    const unquotedHtml = rawHtmlStr
+                      .replace(/<div[^>]*class=["'][^"']*gmail_quote[\s\S]*$/i, '')
+                      .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, '');
+                    const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+                    let imgMatch: RegExpExecArray | null;
+                    let inlineIdx = 0;
+                    while ((imgMatch = imgRegex.exec(unquotedHtml)) !== null) {
+                      const imgSrc = (imgMatch[1] || '').trim();
+                      if (
+                        !imgSrc ||
+                        imgSrc.includes('/api/track/open/') ||
+                        imgSrc.includes('px-') ||
+                        imgMatch[0].includes('width="1"') ||
+                        imgMatch[0].includes('width:1px') ||
+                        imgMatch[0].includes('width: 1px')
+                      ) {
+                        continue;
+                      }
+                      if (imgSrc.startsWith('data:image/')) {
+                        if (seenBase64Prefixes.has(imgSrc.slice(0, 120))) continue;
+                        seenBase64Prefixes.add(imgSrc.slice(0, 120));
+                        const mMime = imgSrc.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.*)$/);
+                        if (mMime && mMime[2]) {
+                          inlineIdx++;
+                          const mimeType = mMime[1];
+                          const ext = mimeType.includes('png') ? 'png' : mimeType.includes('gif') ? 'gif' : 'jpg';
+                          const buf = Buffer.from(mMime[2], 'base64');
+                          if (buf.length <= 120 && ext === 'gif') continue;
+                          const attId = `imap-inline-${safeUserSlug}-${message.uid}-${inlineIdx}`;
+                          const fileName = `inline-image-${inlineIdx}.${ext}`;
+                          storeAttachmentBinary(attId, fileName, mimeType, buf, {
+                            source: 'incoming',
+                            senderEmail: fromAddr,
+                            recipientEmail: cleanUser,
+                            subject: msgSubject,
+                            driveFolderUrl: driveSettings.folderUrl || undefined
+                          });
+                          extractedAttachments.push({
+                            id: attId,
+                            name: fileName,
+                            size: buf.length,
+                            mimeType,
+                            viewUrl: `/api/attachments/view/${encodeURIComponent(attId)}`,
+                            downloadUrl: `/api/attachments/download/${encodeURIComponent(attId)}`,
+                            driveFolderUrl: driveSettings.folderUrl || undefined,
+                            source: 'incoming',
+                            contentBase64: buf.length <= 4 * 1024 * 1024 ? imgSrc : undefined
+                          });
+                        }
+                      } else if (/^https?:\/\//i.test(imgSrc)) {
+                        inlineIdx++;
+                        const attId = `imap-extimg-${safeUserSlug}-${message.uid}-${inlineIdx}`;
+                        extractedAttachments.push({
+                          id: attId,
+                          name: `embedded-image-${inlineIdx}.jpg`,
+                          size: 10240,
+                          mimeType: 'image/jpeg',
+                          viewUrl: imgSrc,
+                          downloadUrl: imgSrc,
+                          driveFolderUrl: driveSettings.folderUrl || undefined,
+                          source: 'incoming'
+                        });
+                      }
+                    }
+                  }
+
+                  // 3. Extract clean reply text (never leaking raw HTML tags or <div class="gmail_quote">)
+                  let cleanReplyText = extractCleanReplyBody(parsed.text || '');
+                  if (!cleanReplyText && parsed.html) {
+                    cleanReplyText = extractCleanReplyBody(String(parsed.html));
+                  }
+                  if (!cleanReplyText && extractedAttachments.length > 0) {
+                    cleanReplyText = `📎 Sent ${extractedAttachments.length} file(s): ${extractedAttachments.map(a => a.name).join(', ')}`;
+                  }
+
                   const refs = Array.isArray(parsed.references)
                     ? parsed.references
                     : parsed.references
@@ -5985,25 +6484,18 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
                         ? parsed.to.map((t: any) => t.value?.[0]?.address)
                         : parsed.to.value?.[0]?.address
                       : cleanUser,
-                    subject: parsed.subject || message.envelope?.subject || 'No Subject',
+                    subject: msgSubject,
                     date:
                       parsed.date || message.envelope?.date || new Date().toISOString(),
                     text: cleanReplyText,
                     fullText: cleanReplyText,
-                    html: parsed.html || parsed.textAsHtml || '',
+                    html: '', // Never send raw quoted HTML to prevent <div dir="ltr"> from rendering
                     inReplyTo: parsed.inReplyTo || message.envelope?.inReplyTo || '',
                     references: refs,
-                    attachments: Array.isArray(parsed.attachments)
-                      ? parsed.attachments.map((att: any, attIdx: number) => ({
-                          id: `imap-att-${message.uid}-${attIdx}`,
-                          name: att.filename || `attachment-${attIdx + 1}`,
-                          size: att.size || 0,
-                          mimeType: att.contentType || 'application/octet-stream'
-                        }))
-                      : []
+                    attachments: extractedAttachments
                   };
 
-                  imapUidMessageCache.set(`${userLower}::${message.uid}`, msgObj);
+                  imapUidMessageCache.set(`${cachePrefix}::${message.uid}`, msgObj);
                 }
               } catch (msgErr) {
                 console.warn('Error parsing IMAP message:', msgErr);
@@ -6014,12 +6506,18 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
           // Assemble messages in ascending UID order (always passing text through extractCleanReplyBody)
           const sortedUids = [...recentUids].sort((a, b) => a - b);
           for (const uid of sortedUids) {
-            const cached = imapUidMessageCache.get(`${userLower}::${uid}`);
+            const cached = imapUidMessageCache.get(`${cachePrefix}::${uid}`);
             if (cached) {
+              const cleanedText =
+                extractCleanReplyBody(cached.text || cached.fullText || '') ||
+                (Array.isArray(cached.attachments) && cached.attachments.length > 0
+                  ? `📎 Sent ${cached.attachments.length} file(s): ${cached.attachments.map((a: any) => a.name).join(', ')}`
+                  : '');
               incomingMessages.push({
                 ...cached,
-                text: extractCleanReplyBody(cached.text || cached.fullText || ''),
-                fullText: extractCleanReplyBody(cached.text || cached.fullText || '')
+                text: cleanedText,
+                fullText: cleanedText,
+                html: ''
               });
             }
           }
@@ -6111,8 +6609,8 @@ app.post('/api/drive-storage/settings', (req, res) => {
     const extractedFolderId =
       matchFolder?.[1] ||
       matchIdParam?.[1] ||
-      (req.body?.folderId ? String(req.body.folderId).trim() : '') ||
-      (rawUrl ? 'drive-folder-linked' : '');
+      (req.body?.folderId && req.body.folderId !== 'drive-folder-linked' ? String(req.body.folderId).trim() : '') ||
+      '';
 
     const updated = {
       ...current,
@@ -6149,66 +6647,153 @@ app.post('/api/drive-storage/settings', (req, res) => {
   }
 });
 
-// Zero-Hosting-Disk Google Drive Attachment Bridge
-// Never writes attached files to local hosting disk; routes to user's Google Drive folder and streams in-memory via SMTP
+// Endpoint: List all attached & received files stored in Drive Hub & Attachment Store
+app.get('/api/drive-storage/files', (_req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  const saved = getSavedDriveStorageSettings();
+  const files = Array.from(attachmentIndexMap.values())
+    .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
+    .map(f => ({
+      id: f.id,
+      name: f.name,
+      size: f.size,
+      mimeType: f.mimeType,
+      viewUrl: `/api/attachments/view/${encodeURIComponent(f.id)}`,
+      downloadUrl: `/api/attachments/download/${encodeURIComponent(f.id)}`,
+      driveFolderUrl: f.driveFolderUrl || saved.folderUrl || undefined,
+      driveFileUrl: f.driveFileUrl || undefined,
+      uploadedToDrive: Boolean(f.uploadedToDrive),
+      source: f.source,
+      senderEmail: f.senderEmail,
+      recipientEmail: f.recipientEmail,
+      subject: f.subject,
+      uploadedAt: f.uploadedAt
+    }));
+  return res.json({
+    success: true,
+    count: files.length,
+    files
+  });
+});
+
+// Endpoint: Delete a stored attachment from Drive Hub
+app.delete('/api/drive-storage/files/:id', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  const safeId = String(req.params.id || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const existing = attachmentIndexMap.get(safeId);
+  if (existing?.filePath) {
+    try {
+      if (fs.existsSync(existing.filePath)) fs.unlinkSync(existing.filePath);
+    } catch {}
+  }
+  attachmentMemoryBuffers.delete(safeId);
+  attachmentIndexMap.delete(safeId);
+  saveAttachmentIndexToDisk();
+  return res.json({ success: true });
+});
+
+// Endpoint: Sync/Push an existing stored attachment to the user's Google Drive Folder via Apps Script Bridge
+app.post('/api/drive-storage/sync-file/:id', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const safeId = String(req.params.id || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const binary = getAttachmentBinaryById(safeId);
+    const record = attachmentIndexMap.get(safeId);
+    if (!binary) {
+      return res.status(404).json({ success: false, error: 'Attachment binary not found on server' });
+    }
+    const saved = getSavedDriveStorageSettings();
+    const folderUrl = req.body?.folderUrl || saved.folderUrl;
+    const folderId = req.body?.folderId || saved.folderId;
+    const appsScriptWebAppUrl = req.body?.appsScriptWebAppUrl || saved.appsScriptWebAppUrl;
+
+    if (!appsScriptWebAppUrl || !String(appsScriptWebAppUrl).startsWith('https://script.google.com/')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Google Drive ফোল্ডারের ভেতরে সরাসরি ফাইল আপলোড করতে নিচে ১-ক্লিকে Apps Script Web App URL সংযুক্ত করুন।'
+      });
+    }
+
+    const result = await uploadBufferToGoogleDrive({
+      fileName: binary.name,
+      mimeType: binary.mimeType,
+      buffer: binary.buffer,
+      folderUrl,
+      folderId,
+      appsScriptWebAppUrl
+    });
+
+    if (result.uploadedViaBridge) {
+      if (record) {
+        record.driveFolderUrl = result.driveFolderUrl;
+        record.driveFileUrl = result.driveFileUrl;
+        record.uploadedToDrive = true;
+        attachmentIndexMap.set(safeId, record);
+        saveAttachmentIndexToDisk();
+      }
+      return res.json({
+        success: true,
+        uploadedViaBridge: true,
+        driveFolderUrl: result.driveFolderUrl,
+        driveFileUrl: result.driveFileUrl
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: result.bridgeError || 'Apps Script Bridge did not return a Drive file URL. Check deployment permissions.'
+      });
+    }
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to sync file to Google Drive'
+    });
+  }
+});
+
+// Endpoint: Upload & Register Attachment (Saves to Instant View/Download Store + Uploads to User's Google Drive Folder)
 app.post('/api/drive-storage/upload', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   try {
-    const { fileName, mimeType, size, contentBase64, folderUrl, folderId, appsScriptWebAppUrl } = req.body || {};
+    const { id, fileName, mimeType, size, contentBase64, folderUrl, folderId, appsScriptWebAppUrl, source } = req.body || {};
     const saved = getSavedDriveStorageSettings();
-    const effectiveFolderUrl = String(folderUrl || saved.folderUrl || '').trim();
-    const matchFolder = effectiveFolderUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
-    const matchIdParam = effectiveFolderUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-    const effectiveFolderId =
-      String(folderId || '').trim() ||
-      matchFolder?.[1] ||
-      matchIdParam?.[1] ||
-      saved.folderId ||
-      '';
-    const effectiveScriptUrl = String(appsScriptWebAppUrl || saved.appsScriptWebAppUrl || '').trim();
+    const cleanBase64 = String(contentBase64 || '').replace(/^data:[^;]+;base64,/, '');
+    const buffer = cleanBase64 ? Buffer.from(cleanBase64, 'base64') : Buffer.alloc(0);
 
-    const canonicalFolderLink = effectiveFolderId && effectiveFolderId !== 'drive-folder-linked'
-      ? `https://drive.google.com/drive/folders/${effectiveFolderId}`
-      : effectiveFolderUrl || 'https://drive.google.com/drive/my-drive';
+    const bridgeResult = await uploadBufferToGoogleDrive({
+      fileName: fileName || 'attachment',
+      mimeType: mimeType || 'application/octet-stream',
+      buffer,
+      folderUrl: folderUrl || saved.folderUrl,
+      folderId: folderId || saved.folderId,
+      appsScriptWebAppUrl: appsScriptWebAppUrl || saved.appsScriptWebAppUrl
+    });
 
-    let driveFileUrl = canonicalFolderLink;
-    let uploadedViaBridge = false;
+    const attId = String(id || `drv-att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const viewUrl = `/api/attachments/view/${encodeURIComponent(attId)}`;
+    const downloadUrl = `/api/attachments/download/${encodeURIComponent(attId)}`;
 
-    // If user configured an optional Google Apps Script Web App bridge, upload the binary directly into their Drive folder
-    if (effectiveScriptUrl && effectiveScriptUrl.startsWith('https://script.google.com/') && contentBase64) {
-      try {
-        const cleanBase64 = String(contentBase64).replace(/^data:[^;]+;base64,/, '');
-        const bridgeRes = await fetch(effectiveScriptUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileName: fileName || 'attachment',
-            mimeType: mimeType || 'application/octet-stream',
-            size: Number(size) || 0,
-            folderId: effectiveFolderId,
-            base64: cleanBase64
-          })
-        });
-        const rawText = await bridgeRes.text();
-        const bridgeData = rawText ? JSON.parse(rawText) : {};
-        if (bridgeData && (bridgeData.fileUrl || bridgeData.url || bridgeData.id)) {
-          driveFileUrl =
-            bridgeData.fileUrl ||
-            bridgeData.url ||
-            `https://drive.google.com/file/d/${bridgeData.id}/view?usp=sharing`;
-          uploadedViaBridge = true;
-        }
-      } catch {}
+    if (buffer.length > 0) {
+      storeAttachmentBinary(attId, fileName || 'attachment', mimeType || 'application/octet-stream', buffer, {
+        source: source || 'outgoing',
+        driveFolderUrl: bridgeResult.driveFolderUrl || saved.folderUrl || undefined,
+        driveFileUrl: bridgeResult.uploadedViaBridge ? bridgeResult.driveFileUrl : undefined,
+        uploadedToDrive: bridgeResult.uploadedViaBridge
+      });
     }
 
     return res.json({
       success: true,
+      id: attId,
       fileName: fileName || 'attachment',
-      size: Number(size) || 0,
+      size: buffer.length || Number(size) || 0,
       mimeType: mimeType || 'application/octet-stream',
-      driveFolderUrl: canonicalFolderLink,
-      driveFileUrl,
-      uploadedViaBridge,
+      viewUrl,
+      downloadUrl,
+      driveFolderUrl: bridgeResult.driveFolderUrl || saved.folderUrl || undefined,
+      driveFileUrl: bridgeResult.uploadedViaBridge ? bridgeResult.driveFileUrl : undefined,
+      uploadedViaBridge: bridgeResult.uploadedViaBridge,
+      bridgeError: bridgeResult.bridgeError,
       zeroHostingStorage: true
     });
   } catch (err: any) {

@@ -44,6 +44,7 @@ export { INITIAL_TEMPLATES } from '../../context/AppContext';
 export const TemplateManager: React.FC = () => {
   const { 
     setActiveTab, 
+    openCampaignWizard,
     addNotification, 
     emailTemplates, 
     setEmailTemplates,
@@ -607,8 +608,8 @@ export const TemplateManager: React.FC = () => {
               {/* Quick Action to Campaign / Send Mail */}
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
-                  onClick={() => setActiveTab('campaigns')}
-                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-cyan-500/10"
+                  onClick={() => openCampaignWizard({ templateId: activeTemplate.id, step: 4 })}
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-cyan-500/10 cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
                   Use in Campaign Wizard

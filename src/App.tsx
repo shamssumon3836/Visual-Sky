@@ -57,6 +57,7 @@ const MainContent: React.FC = () => {
     setIsLogoutConfirmOpen, 
     logout,
     activeFollowUpCohort,
+    wizardLaunchRequest,
     driveStorageSettings,
     updateDriveStorageSettings
   } = useApp();
@@ -81,10 +82,10 @@ const MainContent: React.FC = () => {
   const [hasVisitedCampaigns, setHasVisitedCampaigns] = useState<boolean>(activeTab === 'campaigns');
 
   useEffect(() => {
-    if (activeTab === 'campaigns' || activeFollowUpCohort) {
+    if (activeTab === 'campaigns' || activeFollowUpCohort || wizardLaunchRequest?.open) {
       setHasVisitedCampaigns(true);
     }
-  }, [activeTab, activeFollowUpCohort]);
+  }, [activeTab, activeFollowUpCohort, wizardLaunchRequest]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -265,8 +266,16 @@ const MainContent: React.FC = () => {
     }
   };
 
+  const isAgencyAccount =
+    currentUser.role === 'agency' ||
+    currentUser.role === 'owner' ||
+    Boolean(currentUser.isOwner) ||
+    currentUser.email === 'sojibdaridro123@gmail.com' ||
+    currentUser.email === 'rafiqulvisualsky@gmail.com';
   const isCampaignsRestricted =
-    currentUser.role !== 'owner' && currentUser.permissions?.campaignsEnabled === false;
+    !isAgencyAccount &&
+    (currentUser.permissions?.campaignAutomationEnabled === false ||
+      currentUser.permissions?.accountStatus === 'suspended');
 
   return (
     <div className="h-screen w-full bg-[#080c14] text-slate-100 flex flex-col overflow-hidden selection:bg-cyan-500/30 selection:text-cyan-200">

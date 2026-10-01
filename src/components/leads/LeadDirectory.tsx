@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { useApp } from '../../context/AppContext';
+import { useApp, getLeadInactiveDays } from '../../context/AppContext';
 import { Lead, LeadTag } from '../../types';
 import { verifyEmailSync, verifyEmailsWithDns, parseAndVerifyRawEmails, EmailVerificationResult } from '../../utils/emailVerifier';
 import { 
@@ -51,6 +51,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
     addLeads,
     verifyLeadWebsite,
     launchQuickFollowUp,
+    openCampaignWizard,
     searchQuery,
     setSearchQuery,
     addNotification
@@ -302,12 +303,13 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
         const check = getLeadEmailVerification(lead.email);
         return !check.isValid || check.status === 'risky';
       }
+      const inactiveDays = getLeadInactiveDays(lead);
       if (activeFilter === 'replied') return lead.status === 'replied' || lead.isReplied;
       if (activeFilter === 'opened') return lead.status === 'opened' || (lead.openCount && lead.openCount > 0);
       if (activeFilter === 'new') return lead.status === 'new';
-      if (activeFilter === 'inactive_7d') return lead.daysAgo >= 7 && lead.daysAgo < 14;
-      if (activeFilter === 'inactive_14d') return lead.daysAgo >= 14 && lead.daysAgo < 30;
-      if (activeFilter === 'inactive_30d') return lead.daysAgo >= 30;
+      if (activeFilter === 'inactive_7d') return inactiveDays >= 7 && inactiveDays < 14;
+      if (activeFilter === 'inactive_14d') return inactiveDays >= 14 && inactiveDays < 30;
+      if (activeFilter === 'inactive_30d') return inactiveDays >= 30;
 
       return true;
     });
@@ -935,7 +937,15 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
               <span>{selectedLeadIds.length} leads selected</span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => openCampaignWizard({ leadIds: selectedLeadIds, step: 1 })}
+                className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-md cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Launch Campaign ({selectedLeadIds.length})</span>
+              </button>
+
               {/* Bulk Tag Assignment */}
               <div className="relative">
                 <button
@@ -1231,7 +1241,10 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                         {/* Inactive Days */}
                         {isColVisible('daysAgo') && (
                           <td className="p-3.5 font-mono text-slate-400 text-[11px] whitespace-nowrap">
-                            {lead.daysAgo === 0 ? 'Today' : `${lead.daysAgo}d ago`}
+                            {(() => {
+                              const d = getLeadInactiveDays(lead);
+                              return d === 0 ? 'Today' : `${d}d ago`;
+                            })()}
                           </td>
                         )}
 

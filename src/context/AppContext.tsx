@@ -261,6 +261,24 @@ export const getSMTPAccountMetrics = (
   };
 };
 
+// Calculate actual inactive days for a lead from lastActivityDate and stored daysAgo
+export const getLeadInactiveDays = (lead?: Partial<Lead> | null): number => {
+  if (!lead) return 0;
+  const storedDays = Math.max(0, Number(lead.daysAgo) || 0);
+  if (!lead.lastActivityDate) return storedDays;
+  const lastMs = new Date(lead.lastActivityDate).getTime();
+  if (!Number.isFinite(lastMs)) return storedDays;
+  const elapsedDays = Math.max(0, Math.floor((Date.now() - lastMs) / (1000 * 60 * 60 * 24)));
+  return Math.max(storedDays, elapsedDays);
+};
+
+export interface WizardLaunchRequest {
+  open: boolean;
+  templateId?: string;
+  leadIds?: string[];
+  initialStep?: number;
+}
+
 interface AppContextType {
   // Navigation & View
   activeTab: string;
@@ -268,6 +286,9 @@ interface AppContextType {
   activeFollowUpCohort: '7d' | '14d' | '30d' | null;
   setActiveFollowUpCohort: (cohort: '7d' | '14d' | '30d' | null) => void;
   openFollowUpCohortModal: (cohort: '7d' | '14d' | '30d') => void;
+  wizardLaunchRequest: WizardLaunchRequest | null;
+  setWizardLaunchRequest: (req: WizardLaunchRequest | null) => void;
+  openCampaignWizard: (options?: { templateId?: string; leadIds?: string[]; initialStep?: number }) => void;
 
   // Sound & Notification Settings
   soundEnabled: boolean;
@@ -280,7 +301,7 @@ interface AppContextType {
   // Lead Directory
   leads: Lead[];
   setLeads: React.Dispatch<React.SetStateAction<Lead[]>>;
-  addLeads: (newLeads: Partial<Lead>[], targetTag?: string) => void;
+  addLeads: (newLeads: Partial<Lead>[], targetTag?: string) => Lead[];
   updateLead: (id: string, updates: Partial<Lead>) => void;
   deleteLeadToTrash: (id: string) => void;
   restoreLead: (id: string) => void;
@@ -480,13 +501,41 @@ const DEMO_SMTP_IDS = new Set([
 
 const DEMO_SENT_IDS = new Set(['sent-init-1', 'sent-init-2']);
 
-// Helper: Strip '>' quote signs, multi-line "On ... wrote:" blocks, and raw {{...}} tokens from any email text
+// Helper: Strip HTML tags, <div class="gmail_quote"> blocks, '>' quote signs, multi-line "On ... wrote:" blocks, and raw {{...}} tokens from any email text
 export const cleanEmailBodyText = (rawText: string, fallbackWebsite?: string, fallbackCompany?: string, fallbackName?: string): string => {
   if (!rawText) return '';
   let text = String(rawText).replace(/\r\n/g, '\n');
 
+  // If input contains raw HTML tags (e.g. <div dir="ltr">, <div class="gmail_quote">, <blockquote...>, <img...>), strip quote containers and HTML markup first
+  if (/<[a-zA-Z!/]/.test(text)) {
+    text = text
+      .replace(/<head[\s\S]*?<\/head>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<img[^>]*\/api\/track\/open\/[^>]*>/gi, '')
+      .replace(/<div[^>]*class=["'][^"']*gmail_quote[\s\S]*$/i, '')
+      .replace(/<blockquote[^>]*class=["'][^"']*gmail_quote[\s\S]*$/i, '')
+      .replace(/<div[^>]*class=["'][^"']*gmail_attr[\s\S]*$/i, '')
+      .replace(/<div[^>]*id=["'](appendonsend|divRplyFwdMsg)["'][\s\S]*$/i, '')
+      .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(div|p|li|tr|h[1-6]|blockquote|section|article)>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;|&apos;/gi, "'")
+      .replace(/&amp;/gi, '&')
+      .replace(/&#(\d+);/g, (_m, code) => {
+        const n = Number(code);
+        return Number.isFinite(n) ? String.fromCharCode(n) : '';
+      });
+  }
+
   // Strip multi-line "On <date>, <name> wrote:" quote headers and everything below them
-  text = text.replace(/(\n|^)\s*On\s+[\s\S]{1,320}?wrote:\s*(\n|$)[\s\S]*$/i, '');
+  text = text.replace(/(\n|^)\s*On\s+[\s\S]{1,360}?wrote:\s*(\n|$)[\s\S]*$/i, '');
+  text = text.replace(/^\s*On\s+[\s\S]{1,360}?wrote:[\s\S]*$/i, '');
   text = text.replace(/(\n|^)\s*-{2,}\s*Original Message\s*-{2,}[\s\S]*$/i, '');
   text = text.replace(/(\n|^)\s*_{5,}[\s\S]*$/i, '');
   text = text.replace(/(\n|^)\s*From:\s+[^\n]+\n\s*Sent:\s+[^\n]+[\s\S]*$/i, '');
@@ -516,6 +565,7 @@ export const cleanEmailBodyText = (rawText: string, fallbackWebsite?: string, fa
   return chosenLines
     .map(l => l.replace(/^\s*>+\s?/g, ''))
     .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
     .replace(/\{\{\s*website\s*\}\}/gi, fallbackWebsite || fallbackCompany || 'your website')
     .replace(/\{\{\s*company\s*\}\}/gi, fallbackCompany || 'your company')
     .replace(/\{\{\s*first_name\s*\}\}/gi, (fallbackName || 'there').split(' ')[0] || 'there')
@@ -581,18 +631,33 @@ const sanitizeThreadsArray = (list: EmailThread[]): EmailThread[] => {
     for (const m of rawMessages) {
       if (!m) continue;
       if (m.id && deletedSet.has(m.id)) continue;
-      const cleanedBody = cleanEmailBodyText(
+      const normalizedAttachments = Array.isArray(m.attachments)
+        ? m.attachments.map(att => ({
+            ...att,
+            viewUrl: att.viewUrl || (att.id ? `/api/attachments/view/${encodeURIComponent(att.id)}` : undefined),
+            downloadUrl: att.downloadUrl || (att.id ? `/api/attachments/download/${encodeURIComponent(att.id)}` : undefined)
+          }))
+        : undefined;
+      let cleanedBody = cleanEmailBodyText(
         m.body,
         t.leadCompany,
         t.leadCompany,
         m.sender === 'lead' ? (m.senderName || t.leadName) : t.leadName
       );
+      if (!cleanedBody) {
+        if (normalizedAttachments && normalizedAttachments.length > 0) {
+          cleanedBody = `📎 Sent ${normalizedAttachments.length} file(s): ${normalizedAttachments.map(a => a.name).join(', ')}`;
+        } else {
+          cleanedBody = '📩 Message received';
+        }
+      }
       const msgKey = m.id || `${m.sender}-${m.senderEmail || ''}-${m.timestamp || ''}-${cleanedBody.slice(0, 80)}`;
       if (seenMsgKeys.has(msgKey)) continue;
       seenMsgKeys.add(msgKey);
       dedupedMessages.push({
         ...m,
-        body: cleanedBody
+        body: cleanedBody,
+        attachments: normalizedAttachments
       });
     }
 
@@ -798,11 +863,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
   const [activeFollowUpCohort, setActiveFollowUpCohort] = useState<'7d' | '14d' | '30d' | null>(null);
+  const [wizardLaunchRequest, setWizardLaunchRequest] = useState<WizardLaunchRequest | null>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const openFollowUpCohortModal = (cohort: '7d' | '14d' | '30d') => {
     setActiveFollowUpCohort(cohort);
+    setActiveTabState('campaigns');
+    try { localStorage.setItem('visualsky_active_tab', 'campaigns'); } catch {}
+  };
+
+  const openCampaignWizard = (options?: { templateId?: string; leadIds?: string[]; initialStep?: number }) => {
+    setWizardLaunchRequest({
+      open: true,
+      templateId: options?.templateId,
+      leadIds: options?.leadIds,
+      initialStep: options?.initialStep
+    });
     setActiveTabState('campaigns');
     try { localStorage.setItem('visualsky_active_tab', 'campaigns'); } catch {}
   };
@@ -2205,6 +2282,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'lead',
       linkTab: 'leads'
     });
+    return prepared;
   };
 
   const updateLead = (id: string, updates: Partial<Lead>) => {
@@ -2402,7 +2480,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const trackingPixelId = `px-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
-    // Strip heavy base64 from persisted message metadata so 0 KB of hosting disk space is ever consumed
+    // Keep viewUrl, downloadUrl, Drive file links, and inline preview base64 for smaller attachments
     const metadataOnlyAttachments: EmailAttachment[] | undefined =
       Array.isArray(attachments) && attachments.length > 0
         ? attachments.map(a => ({
@@ -2410,8 +2488,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             name: a.name,
             size: a.size,
             mimeType: a.mimeType,
+            viewUrl: a.viewUrl || (a.id ? `/api/attachments/view/${encodeURIComponent(a.id)}` : undefined),
+            downloadUrl: a.downloadUrl || (a.id ? `/api/attachments/download/${encodeURIComponent(a.id)}` : undefined),
+            uploadedToDrive: a.uploadedToDrive,
             driveFolderUrl: a.driveFolderUrl || driveStorageSettings.folderUrl || undefined,
-            driveFileUrl: a.driveFileUrl || driveStorageSettings.folderUrl || undefined
+            driveFileUrl: a.driveFileUrl && !String(a.driveFileUrl).includes('/folders/') ? a.driveFileUrl : undefined,
+            contentBase64: a.size && a.size <= 1500000 ? a.contentBase64 : undefined
           }))
         : undefined;
 
@@ -2967,54 +3049,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const launchQuickFollowUp = (days: '7d' | '14d' | '30d') => {
-    const targetDays = days === '7d' ? 7 : days === '14d' ? 14 : 30;
-    const matchingLeads = leads.filter(l => !l.isTrash && l.daysAgo >= targetDays && l.status !== 'replied');
-
-    if (matchingLeads.length === 0) {
-      addNotification({
-        title: 'No Dormant Leads Found',
-        message: `There are currently no active leads inactive for >= ${days}.`,
-        type: 'system',
-        linkTab: 'leads'
-      });
-      return;
-    }
-
-    const newCamp = createCampaign({
-      name: `1-Click Follow-Up (${days.toUpperCase()} Inactive Cohort)`,
-      niche: 'Automated Dormant Re-engagement',
-      status: 'running',
-      totalLeads: matchingLeads.length,
-      leadIds: matchingLeads.map(l => l.id),
-      sendMode: 'instant',
-      sendingIntervalSec: 15,
-      steps: [
-        {
-          stepNumber: 1,
-          delayDays: 0,
-          subject: days === '7d' 
-            ? 'Quick follow-up regarding our conversation last week' 
-            : days === '14d' 
-            ? 'Value-add metrics report for {{company}}' 
-            : 'Closing the loop on {{company}} cold outreach',
-          body: `Hi {{name}},\n\nFollowing up on my message regarding {{company}}'s cold outreach stack.\n\nDid you have a quick 2 minutes to review?\n\nBest regards,\n${currentUser.name}`,
-          triggerCondition: 'all'
-        }
-      ]
-    });
-
-    // Update leads activity
-    setLeads(prev => prev.map(l => {
-      if (matchingLeads.some(ml => ml.id === l.id)) {
-        return {
-          ...l,
-          daysAgo: 0,
-          lastActivityDate: new Date().toISOString(),
-          sentCampaigns: Array.from(new Set([...l.sentCampaigns, newCamp.name]))
-        };
-      }
-      return l;
-    }));
+    openFollowUpCohortModal(days);
   };
 
   // Template Categories & Templates
@@ -3950,10 +3985,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             continue;
           }
 
-          const alreadyExistsInAnyThread = workingThreads.some(t =>
+          const existingThreadWithMsg = workingThreads.find(t =>
             t.messages.some(m => m.id === msgUniqueId)
           );
-          if (alreadyExistsInAnyThread) {
+          if (existingThreadWithMsg) {
+            // If existing message had raw HTML (<div / gmail_quote) or unhydrated attachments, upgrade it in-place!
+            const incomingAtts: EmailAttachment[] | undefined =
+              Array.isArray(msg.attachments) && msg.attachments.length > 0
+                ? msg.attachments.map((att: any) => ({
+                    ...att,
+                    viewUrl: att.viewUrl || (att.id ? `/api/attachments/view/${encodeURIComponent(att.id)}` : undefined),
+                    downloadUrl: att.downloadUrl || (att.id ? `/api/attachments/download/${encodeURIComponent(att.id)}` : undefined)
+                  }))
+                : undefined;
+
+            const existingMsg = existingThreadWithMsg.messages.find(m => m.id === msgUniqueId);
+            const existingNeedsUpgrade =
+              existingMsg &&
+              (/<[a-zA-Z!/]/.test(existingMsg.body || '') ||
+                (incomingAtts &&
+                  incomingAtts.length > 0 &&
+                  (!existingMsg.attachments ||
+                    existingMsg.attachments.length < incomingAtts.length ||
+                    existingMsg.attachments.some(ea => !ea.viewUrl && !ea.contentBase64))));
+
+            if (existingNeedsUpgrade) {
+              const upgradedBody =
+                cleanEmailBodyText(
+                  String(msg.text || msg.fullText || existingMsg.body || ''),
+                  existingThreadWithMsg.leadCompany,
+                  existingThreadWithMsg.leadCompany,
+                  existingThreadWithMsg.leadName
+                ) ||
+                (incomingAtts && incomingAtts.length > 0
+                  ? `📎 Sent ${incomingAtts.length} file(s): ${incomingAtts.map(a => a.name).join(', ')}`
+                  : '📩 Message received');
+
+              workingThreads = workingThreads.map(t => {
+                if (t.id !== existingThreadWithMsg.id) return t;
+                const nextMsgs = t.messages.map(m =>
+                  m.id === msgUniqueId
+                    ? {
+                        ...m,
+                        body: upgradedBody,
+                        attachments: incomingAtts || m.attachments
+                      }
+                    : m
+                );
+                const lastM = nextMsgs[nextMsgs.length - 1];
+                return {
+                  ...t,
+                  lastMessage: (lastM?.body || upgradedBody).slice(0, 100),
+                  messages: nextMsgs
+                };
+              });
+              threadsChanged = true;
+            }
             continue;
           }
 
@@ -4003,11 +4090,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             senderEmail.split('@')[1]?.split('.')[0] ||
             'Direct Inbox';
 
-          // Clean body text so '>' quote markers and raw {{website}} tokens never appear in Smart Inbox
-          const rawReplyText = String(msg.text || msg.fullText || msg.html || '').trim() || 'Incoming message';
+          // Clean body text so HTML tags, '>' quote markers, and raw {{website}} tokens never appear in Smart Inbox
+          const incomingAttsList: EmailAttachment[] | undefined =
+            Array.isArray(msg.attachments) && msg.attachments.length > 0
+              ? msg.attachments.map((att: any) => ({
+                  ...att,
+                  viewUrl: att.viewUrl || (att.id ? `/api/attachments/view/${encodeURIComponent(att.id)}` : undefined),
+                  downloadUrl: att.downloadUrl || (att.id ? `/api/attachments/download/${encodeURIComponent(att.id)}` : undefined)
+                }))
+              : undefined;
+          const rawReplyText = String(msg.text || msg.fullText || msg.html || '').trim();
           const replyText =
             cleanEmailBodyText(rawReplyText, matchingLead?.website || leadCompany, leadCompany, leadName) ||
-            'Incoming message';
+            (incomingAttsList && incomingAttsList.length > 0
+              ? `📎 Sent ${incomingAttsList.length} file(s): ${incomingAttsList.map(a => a.name).join(', ')}`
+              : '📩 Message received');
 
           const msgDateIso = msg.date ? new Date(msg.date).toISOString() : new Date().toISOString();
           const msgTimeFormatted = msg.date
@@ -4096,7 +4193,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             timestamp: msgTimeFormatted,
             subject: msgSubject,
             body: replyText,
-            attachments: Array.isArray(msg.attachments) && msg.attachments.length > 0 ? msg.attachments : undefined,
+            attachments: incomingAttsList,
             isRead: false,
             status: 'replied'
           };
@@ -4437,8 +4534,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               name: a.name,
               size: a.size,
               mimeType: a.mimeType,
+              viewUrl: a.viewUrl || (a.id ? `/api/attachments/view/${encodeURIComponent(a.id)}` : undefined),
+              downloadUrl: a.downloadUrl || (a.id ? `/api/attachments/download/${encodeURIComponent(a.id)}` : undefined),
+              uploadedToDrive: a.uploadedToDrive,
               driveFolderUrl: a.driveFolderUrl || driveStorageSettings.folderUrl || undefined,
-              driveFileUrl: a.driveFileUrl || driveStorageSettings.folderUrl || undefined
+              driveFileUrl: a.driveFileUrl && !String(a.driveFileUrl).includes('/folders/') ? a.driveFileUrl : undefined,
+              contentBase64: a.size && a.size <= 1500000 ? a.contentBase64 : undefined
             }))
           : undefined;
 
@@ -4684,7 +4785,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const getDormantLeads = (days: number) => {
-    return leads.filter(l => !l.isTrash && l.daysAgo >= days && l.status !== 'replied');
+    return leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= days && !l.isReplied && l.status !== 'replied');
   };
 
   const deleteUserAccount = (userId: string) => {
@@ -4934,6 +5035,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeFollowUpCohort,
         setActiveFollowUpCohort,
         openFollowUpCohortModal,
+        wizardLaunchRequest,
+        setWizardLaunchRequest,
+        openCampaignWizard,
         soundEnabled,
         setSoundEnabled,
         notificationSettings,

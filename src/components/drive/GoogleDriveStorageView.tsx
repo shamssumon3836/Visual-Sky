@@ -17,10 +17,12 @@ import {
   Copy,
   RefreshCw,
   HardDrive,
-  FileText,
   Code2,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Eye,
+  Download,
+  X
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -52,6 +54,7 @@ const APPS_SCRIPT_CODE = `function doPost(e) {
 
 export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ onOpenSendMail }) => {
   const {
+    threads,
     driveStorageSettings,
     updateDriveStorageSettings,
     setActiveTab,
@@ -70,13 +73,33 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
   );
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [isEditingLink, setIsEditingLink] = useState<boolean>(!driveStorageSettings.folderUrl);
-  const [showAppsScriptGuide, setShowAppsScriptGuide] = useState<boolean>(false);
+  const [showAppsScriptGuide, setShowAppsScriptGuide] = useState<boolean>(
+    !driveStorageSettings.appsScriptWebAppUrl
+  );
   const [copiedScript, setCopiedScript] = useState<boolean>(false);
 
   // Test / Staging Attachments right in this section
   const [stagedAttachments, setStagedAttachments] = useState<EmailAttachment[]>([]);
+  const [serverFiles, setServerFiles] = useState<any[]>([]);
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [isTestingDrive, setIsTestingDrive] = useState<boolean>(false);
+  const [syncingAttachmentId, setSyncingAttachmentId] = useState<string | null>(null);
+  const [previewAtt, setPreviewAtt] = useState<EmailAttachment | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const fetchServerFiles = async () => {
+    try {
+      const res = await fetch('/api/drive-storage/files');
+      const data = await res.json().catch(() => ({}));
+      if (Array.isArray(data?.files)) {
+        setServerFiles(data.files);
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    fetchServerFiles();
+  }, []);
 
   useEffect(() => {
     setFolderUrlInput(driveStorageSettings.folderUrl || '');
@@ -89,6 +112,40 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
     driveStorageSettings.appsScriptWebAppUrl,
     driveStorageSettings.autoIncludeDriveLinkInEmail
   ]);
+
+  // Combine attachments from threads + serverFiles + stagedAttachments
+  const allVaultAttachments: EmailAttachment[] = React.useMemo(() => {
+    const map = new Map<string, EmailAttachment>();
+    for (const st of stagedAttachments) {
+      map.set(st.id, st);
+    }
+    for (const sf of serverFiles) {
+      if (sf && sf.id && !map.has(sf.id)) {
+        map.set(sf.id, {
+          id: sf.id,
+          name: sf.name || 'Attachment',
+          size: Number(sf.size || 0),
+          mimeType: sf.mimeType || 'application/octet-stream',
+          viewUrl: sf.viewUrl || `/api/attachments/view/${encodeURIComponent(sf.id)}`,
+          downloadUrl: sf.downloadUrl || `/api/attachments/download/${encodeURIComponent(sf.id)}`,
+          driveFolderUrl: sf.driveFolderUrl || driveStorageSettings.folderUrl,
+          driveFileUrl: sf.driveFileUrl || '',
+          uploadedToDrive: Boolean(sf.uploadedToDrive),
+          uploadedAt: sf.uploadedAt
+        });
+      }
+    }
+    for (const t of threads) {
+      for (const m of t.messages || []) {
+        for (const a of m.attachments || []) {
+          if (a && a.id && !map.has(a.id)) {
+            map.set(a.id, a);
+          }
+        }
+      }
+    }
+    return Array.from(map.values());
+  }, [stagedAttachments, serverFiles, threads, driveStorageSettings.folderUrl]);
 
   const formatFileSize = (bytes: number): string => {
     if (!bytes || bytes <= 0) return '1 KB';
@@ -126,17 +183,22 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
           reader.readAsDataURL(file);
         });
 
+        const attId = `drv-att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         let driveFolderUrl =
           driveStorageSettings.folderUrl ||
           folderUrlInput.trim() ||
           'https://drive.google.com/drive/my-drive';
-        let driveFileUrl = driveFolderUrl;
+        let driveFileUrl = '';
+        let viewUrl = `/api/attachments/view/${encodeURIComponent(attId)}`;
+        let downloadUrl = `/api/attachments/download/${encodeURIComponent(attId)}`;
+        let uploadedToDrive = false;
 
         try {
           const res = await fetch('/api/drive-storage/upload', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              id: attId,
               fileName: file.name,
               mimeType: file.type || 'application/octet-stream',
               size: file.size,
@@ -149,16 +211,22 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
           const data = await res.json().catch(() => ({}));
           if (data?.driveFolderUrl) driveFolderUrl = data.driveFolderUrl;
           if (data?.driveFileUrl) driveFileUrl = data.driveFileUrl;
+          if (data?.viewUrl) viewUrl = data.viewUrl;
+          if (data?.downloadUrl) downloadUrl = data.downloadUrl;
+          if (data?.uploadedToDrive) uploadedToDrive = true;
         } catch {}
 
         added.push({
-          id: `drv-att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          id: attId,
           name: file.name,
           size: file.size,
           mimeType: file.type || 'application/octet-stream',
           contentBase64: base64DataUrl,
           driveFolderUrl,
-          driveFileUrl,
+          driveFileUrl: driveFileUrl || undefined,
+          viewUrl,
+          downloadUrl,
+          uploadedToDrive,
           storageProvider: 'google_drive',
           uploadedAt: new Date().toISOString()
         });
@@ -167,13 +235,137 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
 
     if (added.length > 0) {
       setStagedAttachments(prev => [...added, ...prev]);
+      fetchServerFiles();
+      const uploadedCount = added.filter(a => a.uploadedToDrive).length;
       addNotification({
-        title: `📎 ${added.length} File(s) Ready via Google Drive`,
-        message: `${added.map(a => a.name).join(', ')} prepared with 0 KB hosting disk usage.`,
+        title: uploadedCount > 0
+          ? `☁️ ${uploadedCount} File(s) Uploaded to Google Drive Folder!`
+          : `📎 ${added.length} File(s) Ready (View & Download Active)`,
+        message: uploadedCount > 0
+          ? `${added.map(a => a.name).join(', ')} added directly inside your Google Drive folder.`
+          : `${added.map(a => a.name).join(', ')} ready. Add the Apps Script Web App URL below to auto-create files inside your Google Drive folder.`,
         type: 'system'
       });
     }
     setIsUploading(false);
+  };
+
+  const handleTestDriveUpload = async () => {
+    const activeFolderUrl = folderUrlInput.trim() || driveStorageSettings.folderUrl;
+    const activeScriptUrl = appsScriptUrlInput.trim() || driveStorageSettings.appsScriptWebAppUrl;
+
+    if (!activeFolderUrl) {
+      addNotification({
+        title: '⚠️ Google Drive Folder Link Required',
+        message: 'আগে আপনার Google Drive Folder Link পেস্ট করুন।',
+        type: 'system'
+      });
+      return;
+    }
+
+    setIsTestingDrive(true);
+    try {
+      // Save settings first
+      updateDriveStorageSettings({
+        folderUrl: activeFolderUrl,
+        folderName: folderNameInput.trim() || 'My Google Drive Email Attachments',
+        appsScriptWebAppUrl: activeScriptUrl,
+        autoIncludeDriveLinkInEmail: autoIncludeLink
+      });
+
+      const sampleContent = `Visual Sky Google Drive Auto-Upload Verification\nConnected Folder: ${activeFolderUrl}\nTimestamp: ${new Date().toISOString()}\nStatus: Active & Verified`;
+      const base64Sample = `data:text/plain;base64,${btoa(sampleContent)}`;
+      const testId = `drv-test-${Date.now()}`;
+
+      const res = await fetch('/api/drive-storage/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: testId,
+          fileName: `Visual-Sky-Drive-Test-${new Date().toISOString().slice(0, 10)}.txt`,
+          mimeType: 'text/plain',
+          size: sampleContent.length,
+          contentBase64: base64Sample,
+          folderUrl: activeFolderUrl,
+          appsScriptWebAppUrl: activeScriptUrl
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      fetchServerFiles();
+
+      if (data?.uploadedToDrive) {
+        confetti({ particleCount: 55, spread: 70, origin: { y: 0.3 } });
+        addNotification({
+          title: '✅ File Created Inside Your Google Drive Folder!',
+          message: 'আপনার Google Drive ফোল্ডারে টেস্ট ফাইল সফলভাবে আপলোড হয়েছে! ফোল্ডারটি ওপেন করে দেখুন।',
+          type: 'system'
+        });
+      } else {
+        setShowAppsScriptGuide(true);
+        addNotification({
+          title: '⚠️ Google Drive Write Bridge Needed',
+          message: data?.driveUploadError
+            ? `Google Drive Error: ${data.driveUploadError}`
+            : 'শুধু ফোল্ডার লিংক দিলে Google বাহির থেকে ফাইল তৈরি করতে দেয় না। নিচের ১ মিনিটের Apps Script Web App URL বসিয়ে সেভ করলেই সরাসরি আপনার ফোল্ডারে ফাইল অ্যাড হবে!',
+          type: 'system'
+        });
+      }
+    } catch (err: any) {
+      addNotification({
+        title: '⚠️ Test Failed',
+        message: err?.message || 'Could not reach server.',
+        type: 'system'
+      });
+    } finally {
+      setIsTestingDrive(false);
+    }
+  };
+
+  const handleSyncSingleAttachment = async (att: EmailAttachment) => {
+    setSyncingAttachmentId(att.id);
+    try {
+      const res = await fetch('/api/drive-storage/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: att.id,
+          fileName: att.name,
+          mimeType: att.mimeType || 'application/octet-stream',
+          size: att.size,
+          contentBase64: att.contentBase64,
+          folderUrl: folderUrlInput.trim() || driveStorageSettings.folderUrl,
+          appsScriptWebAppUrl: appsScriptUrlInput.trim() || driveStorageSettings.appsScriptWebAppUrl
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      fetchServerFiles();
+      if (data?.uploadedToDrive) {
+        confetti({ particleCount: 35, spread: 60, origin: { y: 0.35 } });
+        addNotification({
+          title: '☁️ Uploaded to Your Google Drive Folder!',
+          message: `"${att.name}" এখন আপনার Google Drive ফোল্ডারে যোগ হয়েছে।`,
+          type: 'system'
+        });
+      } else {
+        setShowAppsScriptGuide(true);
+        addNotification({
+          title: '⚠️ Apps Script Web App URL Needed',
+          message: 'আপনার Google Drive ফোল্ডারে ফাইল রাইট করার জন্য নিচের বক্সে Apps Script Web App URL পেস্ট করে সেভ করুন।',
+          type: 'system'
+        });
+      }
+    } catch {}
+    setSyncingAttachmentId(null);
+  };
+
+  const handleDownload = (att: EmailAttachment) => {
+    const url = att.downloadUrl || `/api/attachments/download/${encodeURIComponent(att.id)}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = att.name || 'attachment';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const handleCopyAppsScript = () => {
@@ -195,7 +387,7 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
               </span>
               <span className="px-3 py-1 rounded-full text-xs font-extrabold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex items-center gap-1.5">
                 <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
-                <span>0 KB cPanel Hosting Disk Used</span>
+                <span>View, Download &amp; Auto-Upload to Drive</span>
               </span>
               {driveStorageSettings.folderUrl ? (
                 <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-400 text-slate-950 flex items-center gap-1">
@@ -207,13 +399,19 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
                   ⚠️ Drive Link Not Set Yet
                 </span>
               )}
+              {driveStorageSettings.appsScriptWebAppUrl && (
+                <span className="px-3 py-1 rounded-full text-xs font-black bg-cyan-400 text-slate-950 flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Auto-Upload Bridge Active ✓</span>
+                </span>
+              )}
             </div>
 
             <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
               ☁️ Google Drive Folder Link &amp; File Attachment Hub
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              আপনার হোস্টিংয়ে কোনো জায়গা (0 KB) না নিয়ে যেকোনো ফাইল (PDF, Image, ZIP, Doc, Video, Excel) ইমেইলে অ্যাটাচ করুন। নিচে আপনার <strong>Google Drive Folder Link</strong> শেয়ার ও সেভ করুন এবং যেকোনো সময় প্রয়োজন অনুযায়ী লিংক পরিবর্তন (Change) করুন।
+              যেকোনো ইমেইলে আসা বা পাঠানো ছবি ও ফাইল সরাসরি <strong>View / Download</strong> করুন এবং আপনার <strong>Google Drive Folder</strong>-এ অটোমেটিক ফাইল হিসেবে সেভ করুন।
             </p>
           </div>
 
@@ -251,10 +449,10 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
               </div>
               <div>
                 <h2 className="text-base font-black text-white">
-                  ১. আপনার Google Drive Folder Link যুক্ত ও পরিবর্তন করুন
+                  ১. আপনার Google Drive Folder Link ও Auto-Upload সেটআপ
                 </h2>
                 <p className="text-xs text-slate-400">
-                  Share your Google Drive folder link here — you can change or update this link anytime
+                  Connect your Google Drive folder and enable automatic file creation inside it
                 </p>
               </div>
             </div>
@@ -295,10 +493,11 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
                   </a>
                   <button
                     type="button"
-                    onClick={() => setIsEditingLink(true)}
-                    className="px-3 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 text-xs font-bold cursor-pointer transition"
+                    onClick={handleTestDriveUpload}
+                    disabled={isTestingDrive}
+                    className="px-3 py-1 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-black cursor-pointer transition disabled:opacity-50"
                   >
-                    ✏️ Change Link
+                    {isTestingDrive ? 'Testing...' : '🧪 Test Upload to Drive'}
                   </button>
                 </div>
               </div>
@@ -331,9 +530,6 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
                   className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-400 rounded-2xl pl-10 pr-4 py-3 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 transition"
                 />
               </div>
-              <p className="text-[11px] text-slate-400 mt-1.5">
-                💡 টিপস: আপনার Google Drive-এ একটি ফোল্ডার খুলে সেটির <strong>Share → Anyone with the link</strong> অন করে লিংকটি এখানে পেস্ট করুন। পরে যেকোনো সময় এই বক্সে নতুন লিংক বসিয়ে <strong>Save / Update Google Drive Link</strong> বাটনে ক্লিক করলেই লিংক পরিবর্তন হয়ে যাবে।
-              </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -360,58 +556,75 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
                   />
                   <div className="min-w-0">
                     <div className="font-bold text-slate-200 text-xs truncate">
-                      Include Drive Link in Emails
+                      Include Download/Drive Link in Emails
                     </div>
                     <div className="text-[10px] text-slate-400 truncate">
-                      মেইলে ফাইল অ্যাটাচের পাশাপাশি Drive লিংক যুক্ত থাকবে
+                      মেইলে ফাইল অ্যাটাচের পাশাপাশি ডিরেক্ট ফাইল লিংক যুক্ত থাকবে
                     </div>
                   </div>
                 </label>
               </div>
             </div>
 
-            {/* Optional Google Apps Script Bridge Accordion */}
-            <div className="rounded-2xl bg-slate-950/80 border border-slate-800 overflow-hidden">
+            {/* IMPORTANT: Google Apps Script Bridge for Direct Folder File Creation */}
+            <div className="rounded-2xl bg-cyan-950/25 border border-cyan-500/40 overflow-hidden">
               <button
                 type="button"
                 onClick={() => setShowAppsScriptGuide(prev => !prev)}
-                className="w-full px-4 py-3 flex items-center justify-between text-left text-xs font-bold text-slate-300 hover:text-white cursor-pointer"
+                className="w-full px-4 py-3 flex items-center justify-between text-left text-xs font-black text-cyan-200 hover:text-white cursor-pointer"
               >
                 <span className="flex items-center gap-2">
-                  <Code2 className="w-4 h-4 text-cyan-400" />
-                  <span>অপশনাল: অটোমেটিক Google Drive আপলোড ব্রিজ (Apps Script Web App URL)</span>
+                  <Code2 className="w-4 h-4 text-cyan-400 shrink-0" />
+                  <span>
+                    ⚡ আপনার Google Drive ফোল্ডারের ভেতরে ফাইল অটোমেটিক অ্যাড করার ব্রিজ (Apps Script Web App URL)
+                  </span>
                 </span>
-                {showAppsScriptGuide ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                {showAppsScriptGuide ? <ChevronUp className="w-4 h-4 shrink-0" /> : <ChevronDown className="w-4 h-4 shrink-0" />}
               </button>
 
               {showAppsScriptGuide && (
-                <div className="px-4 pb-4 space-y-3 border-t border-slate-800/80 pt-3 text-xs">
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    আপনি যদি চান কম্পিউটার বা ফোন থেকে ফাইল সিলেক্ট করলেই সেটি স্বয়ংক্রিয়ভাবে আপনার Google Drive ফোল্ডারের ভেতরেও ফাইল হিসেবে আপলোড হয়ে যাবে, তাহলে <a href="https://script.google.com" target="_blank" rel="noreferrer" className="text-cyan-400 underline">script.google.com</a>-এ গিয়ে নিচের কোডটি পেস্ট করে <strong>Deploy → New Deployment → Web App (Anyone)</strong> দিয়ে Web App URL-টি নিচে বসিয়ে দিন:
-                  </p>
+                <div className="px-4 pb-4 space-y-3 border-t border-cyan-500/30 pt-3 text-xs">
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 leading-relaxed">
+                    <strong>কেন শুধু ফোল্ডার লিংক দিলে ফাইল যোগ হয় না?</strong> Google-এর সিকিউরিটি নিয়ম অনুযায়ী শুধু ফোল্ডার লিংক দিয়ে বাহিরের সার্ভার থেকে সরাসরি কারো Google Drive-এ ফাইল আপলোড করা যায় না। নিচের ১ মিনিটের Apps Script টি যুক্ত করলেই আপনার মেইলে আসা ও পাঠানো সব ফাইল স্বয়ংক্রিয়ভাবে আপনার ওই Google Drive ফোল্ডারের ভেতরে চলে যাবে!
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-300">
+                    <li>
+                      <a href="https://script.google.com/home/start" target="_blank" rel="noreferrer" className="text-cyan-400 underline font-bold">
+                        script.google.com
+                      </a>{' '}
+                      ওপেন করে <strong>New Project</strong> ক্লিক করুন।
+                    </li>
+                    <li>নিচের কোডটি <strong>Copy Code</strong> করে সেখানে পেস্ট করুন এবং Save করুন।</li>
+                    <li>
+                      উপরে ডানদিকে <strong>Deploy → New deployment → Select type: Web app</strong> দিন।
+                    </li>
+                    <li>
+                      <strong>Who has access: Anyone</strong> সিলেক্ট করে Deploy করুন এবং <strong>Web App URL</strong> কপি করে নিচের বক্সে পেস্ট করুন:
+                    </li>
+                  </ol>
                   <div className="relative">
-                    <pre className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-[10px] text-emerald-300 font-mono overflow-x-auto">
+                    <pre className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-[10px] text-emerald-300 font-mono overflow-x-auto max-h-40">
                       {APPS_SCRIPT_CODE}
                     </pre>
                     <button
                       type="button"
                       onClick={handleCopyAppsScript}
-                      className="absolute top-2 right-2 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-bold flex items-center gap-1 cursor-pointer border border-slate-700"
+                      className="absolute top-2 right-2 px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black flex items-center gap-1 cursor-pointer shadow"
                     >
-                      {copiedScript ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      {copiedScript ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                       <span>{copiedScript ? 'Copied!' : 'Copy Code'}</span>
                     </button>
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                      Google Apps Script Web App URL (Optional)
+                    <label className="block text-[11px] font-extrabold text-cyan-200 mb-1">
+                      Google Apps Script Web App URL (এখানে পেস্ট করুন)
                     </label>
                     <input
                       type="url"
                       value={appsScriptUrlInput}
                       onChange={(e) => setAppsScriptUrlInput(e.target.value)}
-                      placeholder="https://script.google.com/macros/s/.../exec"
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+                      placeholder="https://script.google.com/macros/s/AKfycb.../exec"
+                      className="w-full bg-slate-950 border border-cyan-500/40 rounded-xl px-3 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400"
                     />
                   </div>
                 </div>
@@ -421,11 +634,11 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
             {savedSuccess && (
               <div className="p-3.5 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 font-bold text-xs flex items-center gap-2 animate-in fade-in">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>✅ আপনার Google Drive Folder Link সফলভাবে সেভ ও আপডেট হয়েছে!</span>
+                <span>✅ আপনার Google Drive Folder Link ও সেটিংস সফলভাবে সেভ হয়েছে!</span>
               </div>
             )}
 
-            <div className="flex items-center justify-between gap-3 pt-2">
+            <div className="flex items-center justify-between gap-3 pt-2 flex-wrap">
               {driveStorageSettings.folderUrl ? (
                 <button
                   type="button"
@@ -442,17 +655,24 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
                 <div />
               )}
 
-              <button
-                type="submit"
-                className="px-6 py-3 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-black text-xs sm:text-sm flex items-center gap-2 shadow-xl shadow-emerald-500/20 cursor-pointer transition"
-              >
-                <Check className="w-4 h-4" />
-                <span>
-                  {driveStorageSettings.folderUrl
-                    ? 'Save / Change Google Drive Link'
-                    : 'Save Google Drive Folder Link'}
-                </span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleTestDriveUpload}
+                  disabled={isTestingDrive}
+                  className="px-4 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-cyan-500/40 text-cyan-300 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer transition disabled:opacity-50"
+                >
+                  <span>{isTestingDrive ? 'Uploading Test File...' : '🧪 Test Upload to Drive'}</span>
+                </button>
+
+                <button
+                  type="submit"
+                  className="px-6 py-3 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-black text-xs sm:text-sm flex items-center gap-2 shadow-xl shadow-emerald-500/20 cursor-pointer transition"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Save Drive Settings</span>
+                </button>
+              </div>
             </div>
           </form>
         </div>
@@ -466,10 +686,10 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
               </div>
               <div>
                 <h2 className="text-base font-black text-white">
-                  ২. Gmail-Style যেকোনো ফাইল Attach করুন
+                  ২. যেকোনো ফাইল ও ছবি Upload / Attach করুন
                 </h2>
                 <p className="text-xs text-slate-400">
-                  Attach PDF, Image, Doc, Excel, ZIP, or Video (0 KB Hosting Storage)
+                  Upload PDF, Image, Doc, Excel, ZIP, or Video — View, Download &amp; Sync to Drive
                 </p>
               </div>
             </div>
@@ -494,10 +714,10 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
                 <Upload className="w-6 h-6" />
               </div>
               <div className="text-sm font-black text-white">
-                {isUploading ? 'Attaching File(s)...' : '📎 Click to Select Any File to Attach'}
+                {isUploading ? 'Uploading & Syncing File(s)...' : '📎 Click to Upload Any File or Image'}
               </div>
               <p className="text-xs text-slate-400">
-                যেকোনো ফাইল (PDF, PNG, JPG, DOCX, XLSX, ZIP, MP4) সিলেক্ট করুন — সরাসরি Google Drive লিংক ও ইমেইলে যুক্ত হবে।
+                যেকোনো ফাইল (PDF, PNG, JPG, DOCX, XLSX, ZIP, MP4) সিলেক্ট করুন — সরাসরি প্রিভিউ, ডাউনলোড এবং আপনার Google Drive ফোল্ডারে যুক্ত হবে।
               </p>
               <div className="pt-1">
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-extrabold border border-emerald-500/30">
@@ -506,80 +726,194 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
                 </span>
               </div>
             </div>
-
-            {/* Staged Files List */}
-            {stagedAttachments.length > 0 && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs font-bold text-emerald-300">
-                  <span>Attached Files Ready ({stagedAttachments.length}):</span>
-                  <button
-                    type="button"
-                    onClick={() => setStagedAttachments([])}
-                    className="text-[11px] text-rose-400 hover:underline cursor-pointer"
-                  >
-                    Clear All
-                  </button>
-                </div>
-                <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-                  {stagedAttachments.map((att) => (
-                    <div
-                      key={att.id}
-                      className="p-2.5 rounded-xl bg-slate-950 border border-emerald-500/30 flex items-center justify-between gap-2 text-xs"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Paperclip className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <div className="min-w-0">
-                          <div className="font-bold text-white truncate">{att.name}</div>
-                          <div className="text-[10px] text-emerald-300 font-mono">
-                            {formatFileSize(att.size)} • ☁️ Google Drive (0 KB Hosting)
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {att.driveFolderUrl && (
-                          <a
-                            href={att.driveFileUrl || att.driveFolderUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 text-[10px] font-bold hover:bg-emerald-500/25"
-                          >
-                            Drive ↗
-                          </a>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => setStagedAttachments(prev => prev.filter(x => x.id !== att.id))}
-                          className="p-1 text-slate-400 hover:text-rose-400 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
 
           <div className="p-3.5 rounded-2xl bg-slate-950/90 border border-slate-800 space-y-2 text-xs">
             <div className="font-bold text-cyan-300 flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>কোথায় কোথায় ফাইল অ্যাটাচ করা যাবে?</span>
+              <span>ইমেইল অ্যাটাচমেন্ট ও ছবি যেভাবে কাজ করে:</span>
             </div>
             <ul className="space-y-1 text-[11px] text-slate-300 list-disc list-inside">
               <li>
-                <strong>Smart Inbox (Reply Box):</strong> যেকোনো মেইলের রিপ্লাই দেওয়ার সময় নিচে <code>📎 Attach File</code> বাটনে ক্লিক করে।
+                <strong>Incoming Mail Images &amp; Files:</strong> কেউ আপনাকে মেইলে ছবি বা ফাইল পাঠালে Smart Inbox-এ সাথে সাথে ছবি দেখা যাবে এবং <code>View</code> ও <code>Download</code> বাটনে ক্লিক করে ডাউনলোড করা যাবে।
               </li>
               <li>
-                <strong>Smart Inbox (Compose Email):</strong> নতুন মেইল পাঠানোর সময় <code>📎 Attach Any File</code> বাটনে ক্লিক করে।
-              </li>
-              <li>
-                <strong>Top Navbar (Send Mail):</strong> উপরের <code>Send Mail</code> বাটনে ক্লিক করে যেকোনো ফাইল অ্যাটাচ করে পাঠানো যাবে।
+                <strong>Auto-Save to Google Drive:</strong> আপনার Google Drive ব্রিজ যুক্ত থাকলে মেইলে আসা ও পাঠানো সব ফাইল স্বয়ংক্রিয়ভাবে আপনার Google Drive ফোল্ডারের ভেতরেও জমা হবে।
               </li>
             </ul>
           </div>
         </div>
       </div>
+
+      {/* ALL EMAIL ATTACHMENTS & GOOGLE DRIVE FILES VAULT */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 space-y-4 shadow-xl">
+        <div className="flex items-center justify-between gap-3 flex-wrap border-b border-slate-800 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+              <HardDrive className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-black text-white">
+                ৩. Email Attachments &amp; Google Drive Files ({allVaultAttachments.length})
+              </h2>
+              <p className="text-xs text-slate-400">
+                আপনার ইনবক্সে আসা এবং আপনার পাঠানো সকল ছবি ও ফাইল এখান থেকে View, Download এবং Google Drive-এ Sync করুন
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={fetchServerFiles}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Refresh Files</span>
+          </button>
+        </div>
+
+        {allVaultAttachments.length === 0 ? (
+          <div className="p-8 text-center text-slate-400 text-xs border border-dashed border-slate-800 rounded-2xl">
+            এখনো কোনো ফাইল বা ইমেইল অ্যাটাচমেন্ট নেই। উপরে ফাইল আপলোড করুন অথবা Smart Inbox-এ মেইল সিঙ্ক করুন।
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {allVaultAttachments.map((att) => {
+              const isImg =
+                String(att.mimeType || '').toLowerCase().startsWith('image/') ||
+                /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(att.name || '');
+              const viewSrc =
+                att.contentBase64 && att.contentBase64.startsWith('data:')
+                  ? att.contentBase64
+                  : att.viewUrl || `/api/attachments/view/${encodeURIComponent(att.id)}`;
+
+              return (
+                <div
+                  key={att.id}
+                  className="p-3 rounded-2xl bg-slate-950 border border-slate-800 hover:border-emerald-500/40 flex flex-col justify-between gap-3 transition"
+                >
+                  <div className="space-y-2.5">
+                    {isImg && (
+                      <div
+                        onClick={() => setPreviewAtt(att)}
+                        className="h-36 w-full rounded-xl overflow-hidden bg-slate-900 border border-slate-800 flex items-center justify-center cursor-pointer group"
+                      >
+                        <img
+                          src={viewSrc}
+                          alt={att.name}
+                          className="max-h-full max-w-full object-contain group-hover:scale-105 transition"
+                        />
+                      </div>
+                    )}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-xs font-extrabold text-white truncate" title={att.name}>
+                          {att.name}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          {formatFileSize(att.size)} • {att.uploadedToDrive ? '☁️ Saved in Drive' : '📦 Local Ready'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-slate-900">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewAtt(att)}
+                      className="px-2.5 py-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Eye className="w-3 h-3" />
+                      <span>View</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownload(att)}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[11px] font-black flex items-center gap-1 cursor-pointer"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Download</span>
+                    </button>
+                    {att.uploadedToDrive && att.driveFileUrl ? (
+                      <a
+                        href={att.driveFileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] font-bold flex items-center gap-1"
+                      >
+                        <span>Drive File ↗</span>
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleSyncSingleAttachment(att)}
+                        disabled={syncingAttachmentId === att.id}
+                        className="px-2.5 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                      >
+                        <span>{syncingAttachmentId === att.id ? 'Syncing...' : '☁️ Add to Drive'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Preview Modal */}
+      {previewAtt && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/85 backdrop-blur-md flex items-center justify-center p-4"
+          onClick={() => setPreviewAtt(null)}
+        >
+          <div
+            className="w-full max-w-3xl bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[88vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
+              <div className="text-xs font-black text-white truncate">{previewAtt.name}</div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleDownload(previewAtt)}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewAtt(null)}
+                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-4 bg-slate-950 flex items-center justify-center min-h-[300px]">
+              {String(previewAtt.mimeType || '').toLowerCase().startsWith('image/') ||
+              /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(previewAtt.name || '') ? (
+                <img
+                  src={
+                    previewAtt.contentBase64 && previewAtt.contentBase64.startsWith('data:')
+                      ? previewAtt.contentBase64
+                      : previewAtt.viewUrl || `/api/attachments/view/${encodeURIComponent(previewAtt.id)}`
+                  }
+                  alt={previewAtt.name}
+                  className="max-h-[70vh] max-w-full object-contain rounded-lg"
+                />
+              ) : (
+                <iframe
+                  src={previewAtt.viewUrl || `/api/attachments/view/${encodeURIComponent(previewAtt.id)}`}
+                  title={previewAtt.name}
+                  className="w-full h-[65vh] rounded-lg bg-white border-0"
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

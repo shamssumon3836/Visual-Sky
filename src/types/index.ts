@@ -62,9 +62,13 @@ export interface EmailAttachment {
   mimeType: string;
   driveFolderUrl?: string;
   driveFileUrl?: string;
+  viewUrl?: string;
+  downloadUrl?: string;
+  uploadedToDrive?: boolean;
+  source?: 'incoming' | 'outgoing' | 'drive_hub';
   uploadedAt?: string;
   storageProvider?: 'google_drive' | 'memory';
-  contentBase64?: string; // Used transiently in memory when sending via SMTP; never persisted to server disk
+  contentBase64?: string;
 }
 
 export interface GoogleDriveStorageSettings {
@@ -121,7 +125,7 @@ export interface CampaignStep {
   delayDays: number;
   subject: string;
   body: string;
-  triggerCondition: 'all' | 'not_opened_7d' | 'not_opened_14d' | 'not_opened_30d' | 'no_reply_7d' | 'no_reply_14d' | 'no_reply_30d';
+  triggerCondition: 'all' | 'opened_no_reply' | 'not_opened_7d' | 'not_opened_14d' | 'not_opened_30d' | 'no_reply_7d' | 'no_reply_14d' | 'no_reply_30d';
 }
 
 export interface Campaign {

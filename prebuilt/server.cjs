@@ -44,6 +44,9 @@ var import_crypto = __toESM(require("crypto"), 1);
 var import_dns = __toESM(require("dns"), 1);
 var import_zlib = __toESM(require("zlib"), 1);
 import_dotenv.default.config();
+process.env.GOMAXPROCS = "1";
+process.env.UV_THREADPOOL_SIZE = "1";
+process.env.RAYON_NUM_THREADS = "1";
 process.on("uncaughtException", (err) => {
   console.error("[CRITICAL UNCAUGHT EXCEPTION PREVENTED]:", err?.message || err);
 });
@@ -2285,8 +2288,12 @@ function smartMergeWorkspaces(existing, incoming) {
     if (permanentlyDeletedIds.has(idStr) || deletedThreadIds.has(idStr) || deletedThreadIds.has(`thread:${idStr}`)) {
       return false;
     }
-    if (item.name && permanentlyDeletedIds.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) {
-      return false;
+    if (item.name) {
+      const cleanNameLower = String(item.name).trim().toLowerCase();
+      const slug = cleanNameLower.replace(/[^a-z0-9]+/g, "-");
+      if (permanentlyDeletedIds.has(`camp-name:${cleanNameLower}`) || permanentlyDeletedIds.has(`camp-restored-${slug}`)) {
+        return false;
+      }
     }
     return true;
   };
@@ -2370,10 +2377,10 @@ function readUserWorkspace(primaryId, secondaryId) {
   try {
     const uniqueCandidates = resolveUserAliasCandidates(primaryId, secondaryId);
     let newestWorkspace = null;
-    let newestTime = -1;
     const allPermDeleted = /* @__PURE__ */ new Set();
     const allThreadDeleted = /* @__PURE__ */ new Set();
     let anyUserDeletedCampaigns = false;
+    const loadedRecords = [];
     for (const cand of uniqueCandidates) {
       const pathsToCheck = [
         getWorkspaceFilePath(cand),
@@ -2397,15 +2404,18 @@ function readUserWorkspace(primaryId, secondaryId) {
               }
               const parsedTime = parsed.updatedAt ? new Date(parsed.updatedAt).getTime() : stat.mtimeMs;
               const validTime = Number.isFinite(parsedTime) ? parsedTime : stat.mtimeMs;
-              if (!newestWorkspace || validTime >= newestTime) {
-                newestWorkspace = newestWorkspace ? smartMergeWorkspaces(newestWorkspace, parsed) : parsed;
-                newestTime = validTime;
-              }
+              loadedRecords.push({ parsed, validTime });
             }
           } catch {
           }
         }
       }
+    }
+    loadedRecords.sort((a, b) => a.validTime - b.validTime);
+    for (const rec of loadedRecords) {
+      rec.parsed.permanentlyDeletedIds = Array.from(allPermDeleted);
+      rec.parsed.deletedThreadIds = Array.from(allThreadDeleted);
+      newestWorkspace = newestWorkspace ? smartMergeWorkspaces(newestWorkspace, rec.parsed) : rec.parsed;
     }
     if (newestWorkspace && typeof newestWorkspace === "object") {
       for (const id of allThreadDeleted) allPermDeleted.add(id);
@@ -2741,12 +2751,114 @@ app.post("/api/user-data/:email/smtp", (req, res) => {
   writeUserWorkspace(email, workspace);
   return res.json({ success: true, count: smtpAccounts.length, savedAt: workspace.updatedAt });
 });
+function healSingleGitDir(gitDir) {
+  try {
+    if (!import_fs.default.existsSync(gitDir)) return;
+    const requiredDirs = [
+      import_path.default.join(gitDir, "objects"),
+      import_path.default.join(gitDir, "refs", "heads"),
+      import_path.default.join(gitDir, "refs", "tags"),
+      import_path.default.join(gitDir, "refs", "remotes", "origin")
+    ];
+    for (const d of requiredDirs) {
+      if (!import_fs.default.existsSync(d)) {
+        try {
+          import_fs.default.mkdirSync(d, { recursive: true });
+        } catch {
+        }
+      }
+    }
+    const headFile = import_path.default.join(gitDir, "HEAD");
+    if (!import_fs.default.existsSync(headFile)) {
+      try {
+        import_fs.default.writeFileSync(headFile, "ref: refs/heads/main\n", "utf8");
+      } catch {
+      }
+    }
+    const lockFiles = [
+      import_path.default.join(gitDir, "index.lock"),
+      import_path.default.join(gitDir, "HEAD.lock"),
+      import_path.default.join(gitDir, "FETCH_HEAD.lock"),
+      import_path.default.join(gitDir, "ORIG_HEAD.lock"),
+      import_path.default.join(gitDir, "config.lock"),
+      import_path.default.join(gitDir, "packed-refs.lock"),
+      import_path.default.join(gitDir, "refs", "remotes", "origin", "main.lock"),
+      import_path.default.join(gitDir, "refs", "remotes", "origin", "HEAD.lock"),
+      import_path.default.join(gitDir, "refs", "heads", "main.lock")
+    ];
+    for (const lockFile of lockFiles) {
+      if (import_fs.default.existsSync(lockFile)) {
+        try {
+          import_fs.default.unlinkSync(lockFile);
+        } catch {
+        }
+      }
+    }
+    const DEFAULT_REMOTE_URL = "https://github.com/shamssumon3836/Visual-Sky.git";
+    const gitConfigPath = import_path.default.join(gitDir, "config");
+    if (import_fs.default.existsSync(gitConfigPath)) {
+      const cfg = import_fs.default.readFileSync(gitConfigPath, "utf8");
+      let cleanedCfg = cfg.replace(/\n?\[http\][^\[]*/g, "").replace(/\n?\[pack\][^\[]*/g, "").trimEnd() + "\n";
+      if (!cleanedCfg.includes('[remote "origin"]')) {
+        cleanedCfg += `[remote "origin"]
+	url = ${DEFAULT_REMOTE_URL}
+	fetch = +refs/heads/*:refs/remotes/origin/*
+`;
+      }
+      if (!cleanedCfg.includes('[branch "main"]')) {
+        cleanedCfg += `[branch "main"]
+	remote = origin
+	merge = refs/heads/main
+`;
+      }
+      if (cleanedCfg !== cfg) {
+        import_fs.default.writeFileSync(gitConfigPath, cleanedCfg, "utf8");
+      }
+    } else {
+      const restoredConfig = `[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+	logallrefupdates = true
+[remote "origin"]
+	url = ${DEFAULT_REMOTE_URL}
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[branch "main"]
+	remote = origin
+	merge = refs/heads/main
+`;
+      import_fs.default.writeFileSync(gitConfigPath, restoredConfig, "utf8");
+    }
+  } catch {
+  }
+}
+function healCpanelGitRepo() {
+  const candidateRoots = /* @__PURE__ */ new Set([
+    process.cwd(),
+    "/home/visualsk/cold.visualsky.pro",
+    "/home/visualsk/git-coldmail"
+  ]);
+  for (const root of candidateRoots) {
+    healSingleGitDir(import_path.default.join(root, ".git"));
+  }
+}
+healCpanelGitRepo();
+try {
+  const gitHealTimer = setInterval(healCpanelGitRepo, 3e4);
+  if (gitHealTimer && typeof gitHealTimer.unref === "function") {
+    gitHealTimer.unref();
+  }
+} catch {
+}
 var lastBundleSyncCheck = 0;
 function ensureFreshPrebuiltBundle() {
-  const isProdServer = process.env.NODE_ENV === "production" || Boolean(process.argv[1] && process.argv[1].includes("server.cjs"));
-  if (!isProdServer) return;
+  const isDevTsx = Boolean(process.argv[1] && process.argv[1].endsWith("server.ts")) && process.env.NODE_ENV !== "production";
+  if (!isDevTsx) {
+    healCpanelGitRepo();
+    return;
+  }
   const now = Date.now();
-  if (now - lastBundleSyncCheck < 3e3) return;
+  if (now - lastBundleSyncCheck < 1500) return;
   lastBundleSyncCheck = now;
   try {
     const prebuiltAppJs = import_path.default.join(process.cwd(), "prebuilt", "app.js");
@@ -2759,6 +2871,7 @@ function ensureFreshPrebuiltBundle() {
       import_path.default.join(process.cwd(), "src", "lib", "workspaceSync.ts"),
       import_path.default.join(process.cwd(), "src", "lib", "firebase.ts"),
       import_path.default.join(process.cwd(), "src", "components", "campaigns", "CampaignManager.tsx"),
+      import_path.default.join(process.cwd(), "src", "components", "dashboard", "MainDashboard.tsx"),
       import_path.default.join(process.cwd(), "src", "components", "trash", "TrashManager.tsx")
     ];
     if (!import_fs.default.existsSync(mainSrc)) return;
@@ -4250,29 +4363,57 @@ app.post("/api/smtp/send", async (req, res) => {
     const isLocalhostOrigin = origin.includes("localhost") || origin.includes("127.0.0.1");
     const pixelHtml = isLocalhostOrigin ? `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />` : `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`;
     const incomingAttachments = Array.isArray(attachments) ? attachments : [];
+    const savedDriveCfg = getSavedDriveStorageSettings();
+    for (const att of incomingAttachments) {
+      if (att && att.name && att.contentBase64) {
+        const cleanB64 = String(att.contentBase64).replace(/^data:[^;]+;base64,/, "");
+        const buf = Buffer.from(cleanB64, "base64");
+        const attId = String(att.id || `out-att-${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, "_");
+        att.id = attId;
+        att.viewUrl = `/api/attachments/view/${encodeURIComponent(attId)}`;
+        att.downloadUrl = `/api/attachments/download/${encodeURIComponent(attId)}`;
+        if (buf.length > 0) {
+          storeAttachmentBinary(attId, att.name, att.mimeType || "application/octet-stream", buf, {
+            source: "outgoing",
+            senderEmail,
+            recipientEmail: cleanRecipientEmail,
+            subject: cleanSubject,
+            driveFolderUrl: att.driveFolderUrl || savedDriveCfg.folderUrl || void 0,
+            driveFileUrl: att.driveFileUrl && !String(att.driveFileUrl).includes("/folders/") ? att.driveFileUrl : void 0,
+            uploadedToDrive: Boolean(att.uploadedToDrive || att.driveFileUrl && !String(att.driveFileUrl).includes("/folders/"))
+          });
+        }
+      }
+    }
     const validBinaryAttachments = incomingAttachments.filter(
       (a) => a && a.name && a.contentBase64
     );
     const driveLinkedAttachments = incomingAttachments.filter(
-      (a) => a && a.name && (a.driveFileUrl || a.driveFolderUrl)
+      (a) => a && a.name && savedDriveCfg.autoIncludeDriveLinkInEmail !== false && (a.driveFileUrl && !String(a.driveFileUrl).includes("/folders/") || a.viewUrl || a.driveFolderUrl)
     );
     let driveLinksTextFooter = "";
     let driveLinksHtmlFooter = "";
     if (!isWeek1Warmup && driveLinkedAttachments.length > 0) {
       const textItems = driveLinkedAttachments.map((a) => {
-        const url = a.driveFileUrl || a.driveFolderUrl;
-        return `\u{1F4CE} ${a.name} (Google Drive): ${url}`;
+        const directFileUrl = a.driveFileUrl && !String(a.driveFileUrl).includes("/folders/") ? a.driveFileUrl : a.id ? `${origin}/api/attachments/view/${encodeURIComponent(a.id)}` : a.driveFolderUrl;
+        return `\u{1F4CE} ${a.name}: ${directFileUrl}`;
       });
       driveLinksTextFooter = `
 
 ---
-\u2601\uFE0F Attached via Google Drive:
+\u{1F4CE} Attached Files:
 ${textItems.join("\n")}`;
       const htmlItems = driveLinkedAttachments.map((a) => {
-        const url = String(a.driveFileUrl || a.driveFolderUrl || "").replace(/"/g, "&quot;");
+        const hasRealDriveFile = a.driveFileUrl && !String(a.driveFileUrl).includes("/folders/");
+        const viewFileUrl = String(
+          hasRealDriveFile ? a.driveFileUrl : a.id ? `${origin}/api/attachments/view/${encodeURIComponent(a.id)}` : a.driveFolderUrl || ""
+        ).replace(/"/g, "&quot;");
+        const downloadFileUrl = String(
+          a.id ? `${origin}/api/attachments/download/${encodeURIComponent(a.id)}` : viewFileUrl
+        ).replace(/"/g, "&quot;");
         const safeName = String(a.name || "Attachment").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         const kb = a.size ? ` (${Math.max(1, Math.round(Number(a.size) / 1024))} KB)` : "";
-        return `<div style="margin:6px 0;padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;display:inline-block;margin-right:8px;"><a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0284c7;text-decoration:none;font-weight:600;font-size:13px;">\u{1F4CE} ${safeName}${kb} &bull; View on Google Drive \u2197</a></div>`;
+        return `<div style="margin:6px 0;padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;display:inline-block;margin-right:8px;"><a href="${viewFileUrl}" target="_blank" rel="noopener noreferrer" style="color:#0284c7;text-decoration:none;font-weight:600;font-size:13px;">\u{1F4CE} ${safeName}${kb} &bull; View File \u2197</a> &nbsp;|&nbsp; <a href="${downloadFileUrl}" target="_blank" rel="noopener noreferrer" style="color:#059669;text-decoration:none;font-weight:600;font-size:12px;">\u2B07\uFE0F Download</a></div>`;
       }).join("");
       driveLinksHtmlFooter = `<div style="margin-top:14px;padding-top:10px;border-top:1px solid #e2e8f0;">${htmlItems}</div>`;
     }
@@ -4540,10 +4681,26 @@ ${textItems.join("\n")}`;
     });
   }
 });
+function stripHtmlAndQuotesToText(rawInput) {
+  if (!rawInput) return "";
+  let str = String(rawInput).replace(/\r\n/g, "\n");
+  if (/<[a-zA-Z!/]/.test(str)) {
+    str = str.replace(/<head[\s\S]*?<\/head>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<img[^>]*\/api\/track\/open\/[^>]*>/gi, "");
+    str = str.replace(/<div[^>]*class=["'][^"']*gmail_quote[\s\S]*$/i, "").replace(/<blockquote[^>]*class=["'][^"']*gmail_quote[\s\S]*$/i, "").replace(/<div[^>]*class=["'][^"']*gmail_attr[\s\S]*$/i, "").replace(/<div[^>]*id=["'](appendonsend|divRplyFwdMsg)["'][\s\S]*$/i, "").replace(/<blockquote[\s\S]*?<\/blockquote>/gi, "");
+    str = str.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(div|p|li|tr|h[1-6]|blockquote|section|article)>/gi, "\n");
+    str = str.replace(/<[^>]+>/g, "");
+    str = str.replace(/&nbsp;/gi, " ").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/&amp;/gi, "&").replace(/&#(\d+);/g, (_m, code) => {
+      const n = Number(code);
+      return Number.isFinite(n) ? String.fromCharCode(n) : "";
+    });
+  }
+  return str;
+}
 function extractCleanReplyBody(rawText) {
   if (!rawText) return "";
-  let text = String(rawText).replace(/\r\n/g, "\n");
-  text = text.replace(/(\n|^)\s*On\s+[\s\S]{1,320}?wrote:\s*(\n|$)[\s\S]*$/i, "");
+  let text = stripHtmlAndQuotesToText(rawText);
+  text = text.replace(/(\n|^)\s*On\s+[\s\S]{1,360}?wrote:\s*(\n|$)[\s\S]*$/i, "");
+  text = text.replace(/^\s*On\s+[\s\S]{1,360}?wrote:[\s\S]*$/i, "");
   text = text.replace(/(\n|^)\s*-{2,}\s*Original Message\s*-{2,}[\s\S]*$/i, "");
   text = text.replace(/(\n|^)\s*_{5,}[\s\S]*$/i, "");
   text = text.replace(/(\n|^)\s*From:\s+[^\n]+\n\s*Sent:\s+[^\n]+[\s\S]*$/i, "");
@@ -4563,13 +4720,175 @@ function extractCleanReplyBody(rawText) {
     }
   }
   const chosenLines = nonQuotedLines.join("\n").trim() ? nonQuotedLines : strippedQuoteLines;
-  const cleaned = chosenLines.map((l) => l.replace(/^\s*>+\s?/g, "")).join("\n").replace(/\{\{\s*website\s*\}\}/gi, "your website").replace(/\{\{\s*company\s*\}\}/gi, "your company").replace(/\{\{\s*first_name\s*\}\}/gi, "there").replace(/\{\{\s*name\s*\}\}/gi, "there").replace(/\{\{\s*niche\s*\}\}/gi, "your industry").trim();
+  const cleaned = chosenLines.map((l) => l.replace(/^\s*>+\s?/g, "")).join("\n").replace(/\n{3,}/g, "\n\n").replace(/\{\{\s*website\s*\}\}/gi, "your website").replace(/\{\{\s*company\s*\}\}/gi, "your company").replace(/\{\{\s*first_name\s*\}\}/gi, "there").replace(/\{\{\s*name\s*\}\}/gi, "there").replace(/\{\{\s*niche\s*\}\}/gi, "your industry").trim();
   return cleaned;
 }
+var ATTACHMENTS_DIR = import_path.default.join(DATA_DIR, "attachments");
+var DRIVE_FILES_INDEX_FILE = import_path.default.join(DATA_DIR, "drive-files-index.json");
+try {
+  if (!import_fs.default.existsSync(ATTACHMENTS_DIR)) {
+    import_fs.default.mkdirSync(ATTACHMENTS_DIR, { recursive: true });
+  }
+} catch {
+}
+var attachmentMemoryBuffers = /* @__PURE__ */ new Map();
+var attachmentIndexMap = /* @__PURE__ */ new Map();
+try {
+  if (import_fs.default.existsSync(DRIVE_FILES_INDEX_FILE)) {
+    const rawIdx = JSON.parse(import_fs.default.readFileSync(DRIVE_FILES_INDEX_FILE, "utf-8"));
+    if (Array.isArray(rawIdx)) {
+      for (const item of rawIdx) {
+        if (item && item.id) {
+          attachmentIndexMap.set(String(item.id), item);
+        }
+      }
+    }
+  }
+} catch {
+}
+var saveAttachmentIndexToDisk = () => {
+  try {
+    const list = Array.from(attachmentIndexMap.values()).sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()).slice(0, 500);
+    import_fs.default.writeFileSync(DRIVE_FILES_INDEX_FILE, JSON.stringify(list, null, 2), "utf-8");
+  } catch {
+  }
+};
+function storeAttachmentBinary(id, name, mimeType, buffer, meta = {}) {
+  const safeId = String(id || `att-${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, "_");
+  const cleanName = String(name || "attachment").trim() || "attachment";
+  const cleanMime = String(mimeType || "application/octet-stream").trim() || "application/octet-stream";
+  const filePath = import_path.default.join(ATTACHMENTS_DIR, safeId);
+  attachmentMemoryBuffers.set(safeId, { buffer, mimeType: cleanMime, name: cleanName });
+  if (attachmentMemoryBuffers.size > 150) {
+    const oldestKey = attachmentMemoryBuffers.keys().next().value;
+    if (oldestKey) attachmentMemoryBuffers.delete(oldestKey);
+  }
+  try {
+    import_fs.default.writeFileSync(filePath, buffer);
+  } catch {
+  }
+  const existing = attachmentIndexMap.get(safeId);
+  const savedSettings = getSavedDriveStorageSettings();
+  const record = {
+    id: safeId,
+    name: cleanName,
+    size: buffer.length || existing?.size || 0,
+    mimeType: cleanMime,
+    filePath,
+    driveFolderUrl: meta.driveFolderUrl || existing?.driveFolderUrl || savedSettings.folderUrl || void 0,
+    driveFileUrl: meta.driveFileUrl || existing?.driveFileUrl || void 0,
+    uploadedToDrive: meta.uploadedToDrive ?? existing?.uploadedToDrive ?? false,
+    source: meta.source || existing?.source || "incoming",
+    senderEmail: meta.senderEmail || existing?.senderEmail,
+    recipientEmail: meta.recipientEmail || existing?.recipientEmail,
+    subject: meta.subject || existing?.subject,
+    uploadedAt: existing?.uploadedAt || meta.uploadedAt || (/* @__PURE__ */ new Date()).toISOString()
+  };
+  attachmentIndexMap.set(safeId, record);
+  saveAttachmentIndexToDisk();
+  return record;
+}
+function getAttachmentBinaryById(rawId) {
+  const safeId = String(rawId || "").replace(/[^a-zA-Z0-9._-]/g, "_");
+  if (!safeId) return null;
+  const mem = attachmentMemoryBuffers.get(safeId);
+  if (mem) return mem;
+  const record = attachmentIndexMap.get(safeId);
+  const candidatePath = record?.filePath || import_path.default.join(ATTACHMENTS_DIR, safeId);
+  try {
+    if (import_fs.default.existsSync(candidatePath)) {
+      const buffer = import_fs.default.readFileSync(candidatePath);
+      const mimeType = record?.mimeType || "application/octet-stream";
+      const name = record?.name || safeId;
+      attachmentMemoryBuffers.set(safeId, { buffer, mimeType, name });
+      return { buffer, mimeType, name };
+    }
+  } catch {
+  }
+  return null;
+}
+async function uploadBufferToGoogleDrive(params) {
+  const saved = getSavedDriveStorageSettings();
+  const effectiveFolderUrl = String(params.folderUrl || saved.folderUrl || "").trim();
+  const matchFolder = effectiveFolderUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  const matchIdParam = effectiveFolderUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  const rawFolderId = String(params.folderId || "").trim() || matchFolder?.[1] || matchIdParam?.[1] || saved.folderId || "";
+  const effectiveFolderId = rawFolderId === "drive-folder-linked" ? matchFolder?.[1] || matchIdParam?.[1] || "" : rawFolderId;
+  const effectiveScriptUrl = String(params.appsScriptWebAppUrl || saved.appsScriptWebAppUrl || "").trim();
+  const canonicalFolderLink = effectiveFolderId && effectiveFolderId !== "drive-folder-linked" ? `https://drive.google.com/drive/folders/${effectiveFolderId}` : effectiveFolderUrl || "";
+  let driveFileUrl = canonicalFolderLink;
+  let uploadedViaBridge = false;
+  let bridgeError;
+  if (effectiveScriptUrl && effectiveScriptUrl.startsWith("https://script.google.com/") && params.buffer?.length > 0) {
+    try {
+      const cleanBase64 = params.buffer.toString("base64");
+      const bridgeRes = await fetch(effectiveScriptUrl, {
+        method: "POST",
+        redirect: "follow",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          fileName: params.fileName || "attachment",
+          mimeType: params.mimeType || "application/octet-stream",
+          size: params.buffer.length,
+          folderId: effectiveFolderId,
+          folderUrl: effectiveFolderUrl,
+          base64: cleanBase64
+        })
+      });
+      const rawText = await bridgeRes.text();
+      let bridgeData = {};
+      try {
+        bridgeData = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        bridgeError = "Apps Script response was not valid JSON. Check deployment permissions (Anyone).";
+      }
+      if (bridgeData && (bridgeData.fileUrl || bridgeData.url || bridgeData.webViewLink || bridgeData.id)) {
+        driveFileUrl = bridgeData.fileUrl || bridgeData.url || bridgeData.webViewLink || `https://drive.google.com/file/d/${bridgeData.id}/view?usp=sharing`;
+        uploadedViaBridge = true;
+      } else if (bridgeData?.error) {
+        bridgeError = String(bridgeData.error);
+      }
+    } catch (err) {
+      bridgeError = err?.message || "Failed to reach Apps Script Web App URL";
+    }
+  }
+  return {
+    uploadedViaBridge,
+    driveFolderUrl: canonicalFolderLink,
+    driveFileUrl,
+    bridgeError
+  };
+}
+app.get("/api/attachments/view/:id", (req, res) => {
+  const item = getAttachmentBinaryById(req.params.id);
+  if (!item) {
+    res.setHeader("Content-Type", "application/json");
+    return res.status(404).json({ success: false, error: "Attachment not found" });
+  }
+  const safeFileName = item.name.replace(/["\r\n]/g, "_");
+  res.setHeader("Content-Type", item.mimeType || "application/octet-stream");
+  res.setHeader("Content-Length", String(item.buffer.length));
+  res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(safeFileName)}"`);
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  return res.status(200).end(item.buffer);
+});
+app.get("/api/attachments/download/:id", (req, res) => {
+  const item = getAttachmentBinaryById(req.params.id);
+  if (!item) {
+    res.setHeader("Content-Type", "application/json");
+    return res.status(404).json({ success: false, error: "Attachment not found" });
+  }
+  const safeFileName = item.name.replace(/["\r\n]/g, "_");
+  res.setHeader("Content-Type", item.mimeType || "application/octet-stream");
+  res.setHeader("Content-Length", String(item.buffer.length));
+  res.setHeader("Content-Disposition", `attachment; filename="${safeFileName}"; filename*=UTF-8''${encodeURIComponent(safeFileName)}`);
+  return res.status(200).end(item.buffer);
+});
 var verifiedImapHostCache = /* @__PURE__ */ new Map();
 var imapUidMessageCache = /* @__PURE__ */ new Map();
 var imapClientPool = /* @__PURE__ */ new Map();
 var imapPoolBusy = /* @__PURE__ */ new Set();
+var imapIdleTimers = /* @__PURE__ */ new Map();
 app.post("/api/smtp/imap-sync", async (req, res) => {
   res.setHeader("Content-Type", "application/json");
   try {
@@ -4680,6 +4999,11 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
     };
     let connectedClient = null;
     let usingPooledClient = false;
+    const existingTimer = imapIdleTimers.get(poolKey);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      imapIdleTimers.delete(poolKey);
+    }
     const existingPooled = imapClientPool.get(poolKey);
     if (existingPooled && existingPooled.usable && !imapPoolBusy.has(poolKey)) {
       connectedClient = existingPooled;
@@ -4735,8 +5059,11 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
           }
         }
         if (recentUids.length > 0) {
-          const uncachedUids = recentUids.filter((uid) => !imapUidMessageCache.has(`${userLower}::${uid}`));
+          const cachePrefix = `v3::${userLower}`;
+          const uncachedUids = recentUids.filter((uid) => !imapUidMessageCache.has(`${cachePrefix}::${uid}`));
           if (uncachedUids.length > 0) {
+            const driveSettings = getSavedDriveStorageSettings();
+            const safeUserSlug = userLower.replace(/[^a-z0-9]/gi, "_");
             for await (const message of connectedClient.fetch(
               uncachedUids,
               { uid: true, envelope: true, source: true },
@@ -4747,8 +5074,148 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
                   const parsed = await (0, import_mailparser.simpleParser)(message.source);
                   const fromAddr = (parsed.from?.value?.[0]?.address || message.envelope?.from?.[0]?.address || "").trim();
                   const fromName = (parsed.from?.value?.[0]?.name || message.envelope?.from?.[0]?.name || "").trim();
-                  const rawText = parsed.text || (parsed.html ? String(parsed.html).replace(/<[^>]+>/g, " ") : "") || "";
-                  const cleanReplyText = extractCleanReplyBody(rawText);
+                  const msgSubject = parsed.subject || message.envelope?.subject || "No Subject";
+                  const extractedAttachments = [];
+                  const seenBase64Prefixes = /* @__PURE__ */ new Set();
+                  if (Array.isArray(parsed.attachments)) {
+                    for (let attIdx = 0; attIdx < parsed.attachments.length; attIdx++) {
+                      const att = parsed.attachments[attIdx];
+                      if (!att) continue;
+                      const rawBuf = Buffer.isBuffer(att.content) ? att.content : att.content ? Buffer.from(att.content) : Buffer.alloc(0);
+                      const mimeType = String(att.contentType || "application/octet-stream").trim();
+                      const rawFileName = String(att.filename || "").trim();
+                      if (rawFileName.startsWith("px-") || mimeType === "image/gif" && rawBuf.length > 0 && rawBuf.length <= 120) {
+                        continue;
+                      }
+                      const extFromMime = (() => {
+                        if (mimeType.includes("png")) return "png";
+                        if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return "jpg";
+                        if (mimeType.includes("gif")) return "gif";
+                        if (mimeType.includes("webp")) return "webp";
+                        if (mimeType.includes("pdf")) return "pdf";
+                        if (mimeType.includes("zip")) return "zip";
+                        if (mimeType.includes("csv")) return "csv";
+                        if (mimeType.includes("plain")) return "txt";
+                        return "bin";
+                      })();
+                      const fileName = rawFileName || (mimeType.startsWith("image/") ? `image-${message.uid}-${attIdx + 1}.${extFromMime}` : `attachment-${message.uid}-${attIdx + 1}.${extFromMime}`);
+                      const attId = `imap-att-${safeUserSlug}-${message.uid}-${attIdx}`;
+                      let driveFolderUrl = driveSettings.folderUrl || void 0;
+                      let driveFileUrl = void 0;
+                      let uploadedToDrive = false;
+                      if (rawBuf.length > 0) {
+                        if (driveSettings.appsScriptWebAppUrl) {
+                          try {
+                            const bridgeOut = await uploadBufferToGoogleDrive({
+                              fileName,
+                              mimeType,
+                              buffer: rawBuf,
+                              folderUrl: driveSettings.folderUrl,
+                              folderId: driveSettings.folderId,
+                              appsScriptWebAppUrl: driveSettings.appsScriptWebAppUrl
+                            });
+                            if (bridgeOut.driveFolderUrl) driveFolderUrl = bridgeOut.driveFolderUrl;
+                            if (bridgeOut.uploadedViaBridge && bridgeOut.driveFileUrl) {
+                              driveFileUrl = bridgeOut.driveFileUrl;
+                              uploadedToDrive = true;
+                            }
+                          } catch {
+                          }
+                        }
+                        storeAttachmentBinary(attId, fileName, mimeType, rawBuf, {
+                          source: "incoming",
+                          senderEmail: fromAddr,
+                          recipientEmail: cleanUser,
+                          subject: msgSubject,
+                          driveFolderUrl,
+                          driveFileUrl,
+                          uploadedToDrive
+                        });
+                      }
+                      const b64Str = rawBuf.length > 0 && rawBuf.length <= 4 * 1024 * 1024 ? `data:${mimeType};base64,${rawBuf.toString("base64")}` : void 0;
+                      if (b64Str) {
+                        seenBase64Prefixes.add(b64Str.slice(0, 120));
+                      }
+                      extractedAttachments.push({
+                        id: attId,
+                        name: fileName,
+                        size: rawBuf.length || att.size || 0,
+                        mimeType,
+                        viewUrl: `/api/attachments/view/${encodeURIComponent(attId)}`,
+                        downloadUrl: `/api/attachments/download/${encodeURIComponent(attId)}`,
+                        driveFolderUrl,
+                        driveFileUrl,
+                        uploadedToDrive,
+                        source: "incoming",
+                        contentBase64: b64Str
+                      });
+                    }
+                  }
+                  const rawHtmlStr = String(parsed.html || "");
+                  if (rawHtmlStr) {
+                    const unquotedHtml = rawHtmlStr.replace(/<div[^>]*class=["'][^"']*gmail_quote[\s\S]*$/i, "").replace(/<blockquote[\s\S]*?<\/blockquote>/gi, "");
+                    const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+                    let imgMatch;
+                    let inlineIdx = 0;
+                    while ((imgMatch = imgRegex.exec(unquotedHtml)) !== null) {
+                      const imgSrc = (imgMatch[1] || "").trim();
+                      if (!imgSrc || imgSrc.includes("/api/track/open/") || imgSrc.includes("px-") || imgMatch[0].includes('width="1"') || imgMatch[0].includes("width:1px") || imgMatch[0].includes("width: 1px")) {
+                        continue;
+                      }
+                      if (imgSrc.startsWith("data:image/")) {
+                        if (seenBase64Prefixes.has(imgSrc.slice(0, 120))) continue;
+                        seenBase64Prefixes.add(imgSrc.slice(0, 120));
+                        const mMime = imgSrc.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.*)$/);
+                        if (mMime && mMime[2]) {
+                          inlineIdx++;
+                          const mimeType = mMime[1];
+                          const ext = mimeType.includes("png") ? "png" : mimeType.includes("gif") ? "gif" : "jpg";
+                          const buf = Buffer.from(mMime[2], "base64");
+                          if (buf.length <= 120 && ext === "gif") continue;
+                          const attId = `imap-inline-${safeUserSlug}-${message.uid}-${inlineIdx}`;
+                          const fileName = `inline-image-${inlineIdx}.${ext}`;
+                          storeAttachmentBinary(attId, fileName, mimeType, buf, {
+                            source: "incoming",
+                            senderEmail: fromAddr,
+                            recipientEmail: cleanUser,
+                            subject: msgSubject,
+                            driveFolderUrl: driveSettings.folderUrl || void 0
+                          });
+                          extractedAttachments.push({
+                            id: attId,
+                            name: fileName,
+                            size: buf.length,
+                            mimeType,
+                            viewUrl: `/api/attachments/view/${encodeURIComponent(attId)}`,
+                            downloadUrl: `/api/attachments/download/${encodeURIComponent(attId)}`,
+                            driveFolderUrl: driveSettings.folderUrl || void 0,
+                            source: "incoming",
+                            contentBase64: buf.length <= 4 * 1024 * 1024 ? imgSrc : void 0
+                          });
+                        }
+                      } else if (/^https?:\/\//i.test(imgSrc)) {
+                        inlineIdx++;
+                        const attId = `imap-extimg-${safeUserSlug}-${message.uid}-${inlineIdx}`;
+                        extractedAttachments.push({
+                          id: attId,
+                          name: `embedded-image-${inlineIdx}.jpg`,
+                          size: 10240,
+                          mimeType: "image/jpeg",
+                          viewUrl: imgSrc,
+                          downloadUrl: imgSrc,
+                          driveFolderUrl: driveSettings.folderUrl || void 0,
+                          source: "incoming"
+                        });
+                      }
+                    }
+                  }
+                  let cleanReplyText = extractCleanReplyBody(parsed.text || "");
+                  if (!cleanReplyText && parsed.html) {
+                    cleanReplyText = extractCleanReplyBody(String(parsed.html));
+                  }
+                  if (!cleanReplyText && extractedAttachments.length > 0) {
+                    cleanReplyText = `\u{1F4CE} Sent ${extractedAttachments.length} file(s): ${extractedAttachments.map((a) => a.name).join(", ")}`;
+                  }
                   const refs = Array.isArray(parsed.references) ? parsed.references : parsed.references ? [parsed.references] : [];
                   const msgObj = {
                     uid: message.uid,
@@ -4756,21 +5223,17 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
                     from: fromAddr,
                     fromName,
                     to: parsed.to ? Array.isArray(parsed.to) ? parsed.to.map((t) => t.value?.[0]?.address) : parsed.to.value?.[0]?.address : cleanUser,
-                    subject: parsed.subject || message.envelope?.subject || "No Subject",
+                    subject: msgSubject,
                     date: parsed.date || message.envelope?.date || (/* @__PURE__ */ new Date()).toISOString(),
                     text: cleanReplyText,
                     fullText: cleanReplyText,
-                    html: parsed.html || parsed.textAsHtml || "",
+                    html: "",
+                    // Never send raw quoted HTML to prevent <div dir="ltr"> from rendering
                     inReplyTo: parsed.inReplyTo || message.envelope?.inReplyTo || "",
                     references: refs,
-                    attachments: Array.isArray(parsed.attachments) ? parsed.attachments.map((att, attIdx) => ({
-                      id: `imap-att-${message.uid}-${attIdx}`,
-                      name: att.filename || `attachment-${attIdx + 1}`,
-                      size: att.size || 0,
-                      mimeType: att.contentType || "application/octet-stream"
-                    })) : []
+                    attachments: extractedAttachments
                   };
-                  imapUidMessageCache.set(`${userLower}::${message.uid}`, msgObj);
+                  imapUidMessageCache.set(`${cachePrefix}::${message.uid}`, msgObj);
                 }
               } catch (msgErr) {
                 console.warn("Error parsing IMAP message:", msgErr);
@@ -4779,12 +5242,14 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
           }
           const sortedUids = [...recentUids].sort((a, b) => a - b);
           for (const uid of sortedUids) {
-            const cached = imapUidMessageCache.get(`${userLower}::${uid}`);
+            const cached = imapUidMessageCache.get(`${cachePrefix}::${uid}`);
             if (cached) {
+              const cleanedText = extractCleanReplyBody(cached.text || cached.fullText || "") || (Array.isArray(cached.attachments) && cached.attachments.length > 0 ? `\u{1F4CE} Sent ${cached.attachments.length} file(s): ${cached.attachments.map((a) => a.name).join(", ")}` : "");
               incomingMessages.push({
                 ...cached,
-                text: extractCleanReplyBody(cached.text || cached.fullText || ""),
-                fullText: extractCleanReplyBody(cached.text || cached.fullText || "")
+                text: cleanedText,
+                fullText: cleanedText,
+                html: ""
               });
             }
           }
@@ -4803,6 +5268,25 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
     } finally {
       if (usingPooledClient) {
         imapPoolBusy.delete(poolKey);
+        const prevTimer = imapIdleTimers.get(poolKey);
+        if (prevTimer) clearTimeout(prevTimer);
+        const idleTimer = setTimeout(() => {
+          imapIdleTimers.delete(poolKey);
+          if (!imapPoolBusy.has(poolKey)) {
+            const clientToClose = imapClientPool.get(poolKey);
+            if (clientToClose) {
+              imapClientPool.delete(poolKey);
+              try {
+                clientToClose.close();
+              } catch {
+              }
+            }
+          }
+        }, 12e3);
+        if (typeof idleTimer.unref === "function") {
+          idleTimer.unref();
+        }
+        imapIdleTimers.set(poolKey, idleTimer);
       } else {
         try {
           await connectedClient.logout();
@@ -4853,7 +5337,7 @@ app.post("/api/drive-storage/settings", (req, res) => {
     const rawUrl = req.body?.folderUrl !== void 0 ? String(req.body.folderUrl).trim() : current.folderUrl;
     const matchFolder = rawUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
     const matchIdParam = rawUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-    const extractedFolderId = matchFolder?.[1] || matchIdParam?.[1] || (req.body?.folderId ? String(req.body.folderId).trim() : "") || (rawUrl ? "drive-folder-linked" : "");
+    const extractedFolderId = matchFolder?.[1] || matchIdParam?.[1] || (req.body?.folderId && req.body.folderId !== "drive-folder-linked" ? String(req.body.folderId).trim() : "") || "";
     const updated = {
       ...current,
       folderUrl: rawUrl,
@@ -4878,50 +5362,138 @@ app.post("/api/drive-storage/settings", (req, res) => {
     });
   }
 });
+app.get("/api/drive-storage/files", (_req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  const saved = getSavedDriveStorageSettings();
+  const files = Array.from(attachmentIndexMap.values()).sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()).map((f) => ({
+    id: f.id,
+    name: f.name,
+    size: f.size,
+    mimeType: f.mimeType,
+    viewUrl: `/api/attachments/view/${encodeURIComponent(f.id)}`,
+    downloadUrl: `/api/attachments/download/${encodeURIComponent(f.id)}`,
+    driveFolderUrl: f.driveFolderUrl || saved.folderUrl || void 0,
+    driveFileUrl: f.driveFileUrl || void 0,
+    uploadedToDrive: Boolean(f.uploadedToDrive),
+    source: f.source,
+    senderEmail: f.senderEmail,
+    recipientEmail: f.recipientEmail,
+    subject: f.subject,
+    uploadedAt: f.uploadedAt
+  }));
+  return res.json({
+    success: true,
+    count: files.length,
+    files
+  });
+});
+app.delete("/api/drive-storage/files/:id", (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  const safeId = String(req.params.id || "").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const existing = attachmentIndexMap.get(safeId);
+  if (existing?.filePath) {
+    try {
+      if (import_fs.default.existsSync(existing.filePath)) import_fs.default.unlinkSync(existing.filePath);
+    } catch {
+    }
+  }
+  attachmentMemoryBuffers.delete(safeId);
+  attachmentIndexMap.delete(safeId);
+  saveAttachmentIndexToDisk();
+  return res.json({ success: true });
+});
+app.post("/api/drive-storage/sync-file/:id", async (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const safeId = String(req.params.id || "").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const binary = getAttachmentBinaryById(safeId);
+    const record = attachmentIndexMap.get(safeId);
+    if (!binary) {
+      return res.status(404).json({ success: false, error: "Attachment binary not found on server" });
+    }
+    const saved = getSavedDriveStorageSettings();
+    const folderUrl = req.body?.folderUrl || saved.folderUrl;
+    const folderId = req.body?.folderId || saved.folderId;
+    const appsScriptWebAppUrl = req.body?.appsScriptWebAppUrl || saved.appsScriptWebAppUrl;
+    if (!appsScriptWebAppUrl || !String(appsScriptWebAppUrl).startsWith("https://script.google.com/")) {
+      return res.status(400).json({
+        success: false,
+        error: "Google Drive \u09AB\u09CB\u09B2\u09CD\u09A1\u09BE\u09B0\u09C7\u09B0 \u09AD\u09C7\u09A4\u09B0\u09C7 \u09B8\u09B0\u09BE\u09B8\u09B0\u09BF \u09AB\u09BE\u0987\u09B2 \u0986\u09AA\u09B2\u09CB\u09A1 \u0995\u09B0\u09A4\u09C7 \u09A8\u09BF\u099A\u09C7 \u09E7-\u0995\u09CD\u09B2\u09BF\u0995\u09C7 Apps Script Web App URL \u09B8\u0982\u09AF\u09C1\u0995\u09CD\u09A4 \u0995\u09B0\u09C1\u09A8\u0964"
+      });
+    }
+    const result = await uploadBufferToGoogleDrive({
+      fileName: binary.name,
+      mimeType: binary.mimeType,
+      buffer: binary.buffer,
+      folderUrl,
+      folderId,
+      appsScriptWebAppUrl
+    });
+    if (result.uploadedViaBridge) {
+      if (record) {
+        record.driveFolderUrl = result.driveFolderUrl;
+        record.driveFileUrl = result.driveFileUrl;
+        record.uploadedToDrive = true;
+        attachmentIndexMap.set(safeId, record);
+        saveAttachmentIndexToDisk();
+      }
+      return res.json({
+        success: true,
+        uploadedViaBridge: true,
+        driveFolderUrl: result.driveFolderUrl,
+        driveFileUrl: result.driveFileUrl
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: result.bridgeError || "Apps Script Bridge did not return a Drive file URL. Check deployment permissions."
+      });
+    }
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "Failed to sync file to Google Drive"
+    });
+  }
+});
 app.post("/api/drive-storage/upload", async (req, res) => {
   res.setHeader("Content-Type", "application/json");
   try {
-    const { fileName, mimeType, size, contentBase64, folderUrl, folderId, appsScriptWebAppUrl } = req.body || {};
+    const { id, fileName, mimeType, size, contentBase64, folderUrl, folderId, appsScriptWebAppUrl, source } = req.body || {};
     const saved = getSavedDriveStorageSettings();
-    const effectiveFolderUrl = String(folderUrl || saved.folderUrl || "").trim();
-    const matchFolder = effectiveFolderUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
-    const matchIdParam = effectiveFolderUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-    const effectiveFolderId = String(folderId || "").trim() || matchFolder?.[1] || matchIdParam?.[1] || saved.folderId || "";
-    const effectiveScriptUrl = String(appsScriptWebAppUrl || saved.appsScriptWebAppUrl || "").trim();
-    const canonicalFolderLink = effectiveFolderId && effectiveFolderId !== "drive-folder-linked" ? `https://drive.google.com/drive/folders/${effectiveFolderId}` : effectiveFolderUrl || "https://drive.google.com/drive/my-drive";
-    let driveFileUrl = canonicalFolderLink;
-    let uploadedViaBridge = false;
-    if (effectiveScriptUrl && effectiveScriptUrl.startsWith("https://script.google.com/") && contentBase64) {
-      try {
-        const cleanBase64 = String(contentBase64).replace(/^data:[^;]+;base64,/, "");
-        const bridgeRes = await fetch(effectiveScriptUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fileName: fileName || "attachment",
-            mimeType: mimeType || "application/octet-stream",
-            size: Number(size) || 0,
-            folderId: effectiveFolderId,
-            base64: cleanBase64
-          })
-        });
-        const rawText = await bridgeRes.text();
-        const bridgeData = rawText ? JSON.parse(rawText) : {};
-        if (bridgeData && (bridgeData.fileUrl || bridgeData.url || bridgeData.id)) {
-          driveFileUrl = bridgeData.fileUrl || bridgeData.url || `https://drive.google.com/file/d/${bridgeData.id}/view?usp=sharing`;
-          uploadedViaBridge = true;
-        }
-      } catch {
-      }
+    const cleanBase64 = String(contentBase64 || "").replace(/^data:[^;]+;base64,/, "");
+    const buffer = cleanBase64 ? Buffer.from(cleanBase64, "base64") : Buffer.alloc(0);
+    const bridgeResult = await uploadBufferToGoogleDrive({
+      fileName: fileName || "attachment",
+      mimeType: mimeType || "application/octet-stream",
+      buffer,
+      folderUrl: folderUrl || saved.folderUrl,
+      folderId: folderId || saved.folderId,
+      appsScriptWebAppUrl: appsScriptWebAppUrl || saved.appsScriptWebAppUrl
+    });
+    const attId = String(id || `drv-att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`).replace(/[^a-zA-Z0-9._-]/g, "_");
+    const viewUrl = `/api/attachments/view/${encodeURIComponent(attId)}`;
+    const downloadUrl = `/api/attachments/download/${encodeURIComponent(attId)}`;
+    if (buffer.length > 0) {
+      storeAttachmentBinary(attId, fileName || "attachment", mimeType || "application/octet-stream", buffer, {
+        source: source || "outgoing",
+        driveFolderUrl: bridgeResult.driveFolderUrl || saved.folderUrl || void 0,
+        driveFileUrl: bridgeResult.uploadedViaBridge ? bridgeResult.driveFileUrl : void 0,
+        uploadedToDrive: bridgeResult.uploadedViaBridge
+      });
     }
     return res.json({
       success: true,
+      id: attId,
       fileName: fileName || "attachment",
-      size: Number(size) || 0,
+      size: buffer.length || Number(size) || 0,
       mimeType: mimeType || "application/octet-stream",
-      driveFolderUrl: canonicalFolderLink,
-      driveFileUrl,
-      uploadedViaBridge,
+      viewUrl,
+      downloadUrl,
+      driveFolderUrl: bridgeResult.driveFolderUrl || saved.folderUrl || void 0,
+      driveFileUrl: bridgeResult.uploadedViaBridge ? bridgeResult.driveFileUrl : void 0,
+      uploadedViaBridge: bridgeResult.uploadedViaBridge,
+      bridgeError: bridgeResult.bridgeError,
       zeroHostingStorage: true
     });
   } catch (err) {
@@ -5028,6 +5600,7 @@ async function startServer() {
     }
   };
   app.get("/prebuilt/app.js", (req, res) => {
+    ensureFreshPrebuiltBundle();
     return sendMemoryCachedAsset(
       req,
       res,

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { useApp, getSMTPAccountMetrics } from '../../context/AppContext';
+import { useApp, getSMTPAccountMetrics, getLeadInactiveDays } from '../../context/AppContext';
 import { Campaign, CampaignStep, Lead, SMTPAccount, EmailTemplate } from '../../types';
 import { SMTPConnectModal } from '../smtp/SMTPConnectModal';
 import { safeParseResponse } from '../../lib/safeFetch';
@@ -71,12 +71,15 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     templateCategories,
     addTemplateCategory,
     addEmailTemplate,
+    updateEmailTemplate,
     addSentEmailLog,
     sentEmails,
     threads,
     addNotification,
     activeFollowUpCohort,
-    setActiveFollowUpCohort
+    setActiveFollowUpCohort,
+    wizardLaunchRequest,
+    setWizardLaunchRequest
   } = useApp();
 
   // Filter state for Active / Running Campaigns
@@ -86,12 +89,15 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   const [showWizardModal, setShowWizardModal] = useState<boolean>(false);
   const [wizardStep, setWizardStep] = useState<number>(1);
   const [stepValidationError, setStepValidationError] = useState<string>('');
+  const [wizardNotice, setWizardNotice] = useState<string>('');
   const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
   const [campaignToDelete, setCampaignToDelete] = useState<Campaign | null>(null);
 
   // Quick Follow-up modal (7d / 14d / 30d Cohorts)
   const [showFollowUpModal, setShowFollowUpModal] = useState<boolean>(false);
   const [followUpDays, setFollowUpDays] = useState<'7d' | '14d' | '30d'>('7d');
+  const [followUpIncludeAllUnreplied, setFollowUpIncludeAllUnreplied] = useState<boolean>(false);
+  const [followUpError, setFollowUpError] = useState<string>('');
   const [followUpSubject, setFollowUpSubject] = useState<string>('Quick follow-up regarding our conversation last week');
   const [followUpBody, setFollowUpBody] = useState<string>(
     'Hi {{name}},\n\nFollowing up on my message from about a week ago regarding {{company}}\'s outbound growth stack.\n\nDid you have a quick moment to review?\n\nBest regards,\n' + (currentUser.name || 'Outreach Manager')
@@ -110,8 +116,17 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   const [newTmplTitle, setNewTmplTitle] = useState<string>('');
   const [newTmplSubject, setNewTmplSubject] = useState<string>('');
   const [newTmplBody, setNewTmplBody] = useState<string>('');
-  const [newTmplCategory, setNewTmplCategory] = useState<string>('general');
+  const [newTmplCategory, setNewTmplCategory] = useState<string>(() => templateCategories[0]?.name || 'cold_outreach');
   const [newTmplTags, setNewTmplTags] = useState<string>('Cold Outreach, High Intent');
+  const [newTmplTargetStepIdx, setNewTmplTargetStepIdx] = useState<number>(0);
+
+  // Step 4 Live Preview & Active Step Focus + Step 6 Test Email state
+  const [activeTemplateTargetStep, setActiveTemplateTargetStep] = useState<number>(0);
+  const [previewStepIndices, setPreviewStepIndices] = useState<Record<number, boolean>>({});
+  const [testRecipientEmail, setTestRecipientEmail] = useState<string>(currentUser.email || '');
+  const [testStepIndex, setTestStepIndex] = useState<number>(0);
+  const [isSendingTestEmail, setIsSendingTestEmail] = useState<boolean>(false);
+  const [testEmailResult, setTestEmailResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   // Template Browser in Step 4
   const [selectedTemplateCat, setSelectedTemplateCat] = useState<string>('all');
@@ -194,21 +209,25 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       }
 
       // Provider filter
-      if (smtpProviderFilter === 'google' && !smtp.provider.toLowerCase().includes('google') && !smtp.host.toLowerCase().includes('gmail') && !smtp.host.toLowerCase().includes('google')) return false;
-      if (smtpProviderFilter === 'cpanel' && !smtp.provider.toLowerCase().includes('cpanel') && !smtp.provider.toLowerCase().includes('hostinger') && !smtp.domainWebmailUrl) return false;
-      if (smtpProviderFilter === 'ses' && !smtp.provider.toLowerCase().includes('ses') && !smtp.provider.toLowerCase().includes('amazon')) return false;
-      if (smtpProviderFilter === 'custom' && (smtp.provider.toLowerCase().includes('google') || smtp.provider.toLowerCase().includes('amazon'))) return false;
+      const provLower = (smtp.provider || '').toLowerCase();
+      const hostLower = (smtp.host || '').toLowerCase();
+      const nameLower = (smtp.name || '').toLowerCase();
+      if (smtpProviderFilter === 'google' && !provLower.includes('google') && !hostLower.includes('gmail') && !hostLower.includes('google')) return false;
+      if (smtpProviderFilter === 'cpanel' && !provLower.includes('cpanel') && !provLower.includes('hostinger') && !smtp.domainWebmailUrl) return false;
+      if (smtpProviderFilter === 'ses' && !provLower.includes('ses') && !provLower.includes('amazon')) return false;
+      if (smtpProviderFilter === 'custom' && (provLower.includes('google') || provLower.includes('amazon'))) return false;
       if (smtpProviderFilter === 'webmail' && !smtp.domainWebmailUrl) return false;
 
       // Tag filter
       if (selectedSmtpTags.length > 0) {
         const hasTag = selectedSmtpTags.some(tag => {
+          const tagLower = (tag || '').toLowerCase();
           if (tag === 'Domain Webmail' && smtp.domainWebmailUrl) return true;
-          if (tag === 'Google Workspace' && (smtp.provider.toLowerCase().includes('google') || smtp.host.toLowerCase().includes('google'))) return true;
-          if (tag === 'cPanel / Hostinger' && (smtp.provider.toLowerCase().includes('cpanel') || smtp.provider.toLowerCase().includes('hostinger'))) return true;
-          if (tag === 'Amazon SES' && (smtp.provider.toLowerCase().includes('ses') || smtp.provider.toLowerCase().includes('amazon'))) return true;
+          if (tag === 'Google Workspace' && (provLower.includes('google') || hostLower.includes('google'))) return true;
+          if (tag === 'cPanel / Hostinger' && (provLower.includes('cpanel') || provLower.includes('hostinger'))) return true;
+          if (tag === 'Amazon SES' && (provLower.includes('ses') || provLower.includes('amazon'))) return true;
           if (tag === '99%+ Health' && (smtp.healthScore || 0) >= 99) return true;
-          if (smtp.host.toLowerCase().includes(tag.toLowerCase()) || smtp.provider.toLowerCase().includes(tag.toLowerCase()) || smtp.name.toLowerCase().includes(tag.toLowerCase())) return true;
+          if (hostLower.includes(tagLower) || provLower.includes(tagLower) || nameLower.includes(tagLower)) return true;
           return false;
         });
         if (!hasTag) return false;
@@ -234,7 +253,14 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     const primary = activeSmtps.find(s => s.id === id) || activeSmtps.find(s => poolIds.includes(s.id)) || activeSmtps[0];
     if (primary) {
       setSenderEmail(primary.fromEmail || primary.username || currentUser.email || '');
-      if (primary.fromName && (!senderName.trim() || senderName === 'Outreach Specialist' || senderName === currentUser.name)) {
+      const matchesOtherSmtpName = activeSmtps.some(s => s.fromName && s.fromName === senderName);
+      if (
+        primary.fromName &&
+        (!senderName.trim() ||
+          senderName === 'Outreach Specialist' ||
+          senderName === currentUser.name ||
+          matchesOtherSmtpName)
+      ) {
         setSenderName(primary.fromName);
       }
     }
@@ -250,12 +276,6 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
   const handleToggleSmtpSelection = (id: string) => {
     if (selectedSmtpIds.includes(id)) {
-      if (selectedSmtpIds.length === 1) {
-        // Keep it selected as active instead of leaving 0 relays selected on accidental click
-        setSelectedSmtpId(id);
-        syncSenderFromSmtp(id, [id]);
-        return;
-      }
       const remaining = selectedSmtpIds.filter(sId => sId !== id);
       setSelectedSmtpIds(remaining);
       if (remaining.length === 1) {
@@ -309,10 +329,29 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
   // Step 3: Recipients & Manage Tag Filter (Multi-tag Selection)
   const activeLeads = useMemo(() => leads.filter(l => !l.isTrash), [leads]);
-  const [recipientFilter, setRecipientFilter] = useState<'all' | '7d' | '14d' | '30d' | 'new' | 'custom'>('all');
+  const [recipientFilter, setRecipientFilter] = useState<'all' | '7d' | '14d' | '30d' | 'new' | 'unreplied' | 'custom'>('all');
   const [selectedLeadTags, setSelectedLeadTags] = useState<string[]>([]);
   const [wizardLeadSearch, setWizardLeadSearch] = useState<string>('');
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>(activeLeads.map(l => l.id));
+
+  // Combine registered leadTags with any custom tags present on activeLeads so every tag is filterable in Step 3
+  const allWizardLeadTags = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; color?: string }>();
+    leadTags.forEach(t => {
+      if (t && t.name) map.set(t.name.trim(), { id: t.id, name: t.name.trim(), color: t.color });
+    });
+    activeLeads.forEach(l => {
+      if (Array.isArray(l.tags)) {
+        l.tags.forEach(tagName => {
+          const clean = (tagName || '').trim();
+          if (clean && !map.has(clean)) {
+            map.set(clean, { id: `custom-tag-${clean}`, name: clean, color: 'cyan' });
+          }
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [leadTags, activeLeads]);
 
   // Step 3 Email Verification & Paste State
   const [wizardDnsMap, setWizardDnsMap] = useState<Record<string, EmailVerificationResult>>({});
@@ -327,6 +366,15 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     if (wizardDnsMap[key]) return wizardDnsMap[key];
     return verifyEmailSync(email || '');
   };
+
+  // Keep selectedLeadIds pruned so deleted/trashed leads never inflate the selected count
+  useEffect(() => {
+    const validLeadIdSet = new Set(activeLeads.map(l => l.id));
+    setSelectedLeadIds(prev => {
+      const filtered = prev.filter(id => validLeadIdSet.has(id));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [activeLeads]);
 
   // Check selected leads in Step 3 for broken/invalid emails
   const wizardAudienceHealth = useMemo(() => {
@@ -423,20 +471,46 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       }
 
       // Cohort filter
-      if (recipientFilter === '7d' && !(lead.daysAgo >= 7 && lead.status !== 'replied')) return false;
-      if (recipientFilter === '14d' && !(lead.daysAgo >= 14 && lead.status !== 'replied')) return false;
-      if (recipientFilter === '30d' && !(lead.daysAgo >= 30 && lead.status !== 'replied')) return false;
+      const inactiveDays = getLeadInactiveDays(lead);
+      const isUnreplied = !lead.isReplied && lead.status !== 'replied';
+      if (recipientFilter === '7d' && !(inactiveDays >= 7 && isUnreplied)) return false;
+      if (recipientFilter === '14d' && !(inactiveDays >= 14 && isUnreplied)) return false;
+      if (recipientFilter === '30d' && !(inactiveDays >= 30 && isUnreplied)) return false;
       if (recipientFilter === 'new' && lead.status !== 'new') return false;
+      if (recipientFilter === 'unreplied' && !isUnreplied) return false;
 
       // Multi-Tag filter: if tags are selected, match any of the selected tags
       if (selectedLeadTags.length > 0) {
-        const hasMatchingTag = lead.tags.some(t => selectedLeadTags.includes(t));
+        const leadTagArr = Array.isArray(lead.tags) ? lead.tags : [];
+        const hasMatchingTag = leadTagArr.some(t => selectedLeadTags.includes(t));
         if (!hasMatchingTag) return false;
       }
 
       return true;
     });
   }, [activeLeads, wizardLeadSearch, recipientFilter, selectedLeadTags]);
+
+  const filterLeadsByCohortAndTags = (
+    cohort: 'all' | '7d' | '14d' | '30d' | 'new' | 'unreplied' | 'custom',
+    tags: string[]
+  ) => {
+    return activeLeads
+      .filter(lead => {
+        const inactiveDays = getLeadInactiveDays(lead);
+        const isUnreplied = !lead.isReplied && lead.status !== 'replied';
+        if (cohort === '7d' && !(inactiveDays >= 7 && isUnreplied)) return false;
+        if (cohort === '14d' && !(inactiveDays >= 14 && isUnreplied)) return false;
+        if (cohort === '30d' && !(inactiveDays >= 30 && isUnreplied)) return false;
+        if (cohort === 'new' && lead.status !== 'new') return false;
+        if (cohort === 'unreplied' && !isUnreplied) return false;
+        if (tags.length > 0) {
+          const leadTagArr = Array.isArray(lead.tags) ? lead.tags : [];
+          if (!leadTagArr.some(t => tags.includes(t))) return false;
+        }
+        return true;
+      })
+      .map(l => l.id);
+  };
 
   const handleToggleTagFilter = (tagName: string) => {
     let nextTags: string[];
@@ -446,31 +520,19 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       nextTags = [...selectedLeadTags, tagName];
     }
     setSelectedLeadTags(nextTags);
-    if (nextTags.length > 0) {
-      const matchingIds = activeLeads
-        .filter(l => l.tags && l.tags.some(t => nextTags.includes(t)))
-        .map(l => l.id);
-      setSelectedLeadIds(matchingIds);
-    } else {
-      setSelectedLeadIds(activeLeads.map(l => l.id));
-    }
+    setSelectedLeadIds(filterLeadsByCohortAndTags(recipientFilter, nextTags));
+    setStepValidationError('');
   };
 
   const clearLeadTagFilters = () => {
     setSelectedLeadTags([]);
-    setSelectedLeadIds(activeLeads.map(l => l.id));
+    setSelectedLeadIds(filterLeadsByCohortAndTags(recipientFilter, []));
   };
 
   const selectAllMatchingTagLeads = () => {
-    if (selectedLeadTags.length === 0) {
-      const ids = displayedWizardLeads.map(l => l.id);
-      setSelectedLeadIds(Array.from(new Set([...selectedLeadIds, ...ids])));
-      return;
-    }
-    const matchingIds = activeLeads
-      .filter(l => l.tags.some(t => selectedLeadTags.includes(t)))
-      .map(l => l.id);
-    setSelectedLeadIds(Array.from(new Set([...selectedLeadIds, ...matchingIds])));
+    const ids = displayedWizardLeads.map(l => l.id);
+    setSelectedLeadIds(Array.from(new Set([...selectedLeadIds, ...ids])));
+    setStepValidationError('');
   };
 
   const selectOnlyDisplayedLeads = () => {
@@ -505,16 +567,19 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   // Track active loaded template for each step
   const [appliedTemplates, setAppliedTemplates] = useState<Record<number, { id: string; title: string; category: string }>>({});
 
+  // Non-trash email templates
+  const activeEmailTemplates = useMemo(() => emailTemplates.filter(t => !t.isTrash), [emailTemplates]);
+
   // Available unique tags from all templates
   const allTemplateTags = useMemo(() => {
     const set = new Set<string>();
-    emailTemplates.forEach(t => {
+    activeEmailTemplates.forEach(t => {
       if (t.tags && Array.isArray(t.tags)) {
         t.tags.forEach(tag => set.add(tag.trim()));
       }
     });
     return Array.from(set).filter(Boolean);
-  }, [emailTemplates]);
+  }, [activeEmailTemplates]);
 
   // Filtered templates in Step 4
   const filteredTemplates = useMemo(() => {
@@ -640,6 +705,13 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     isPausedRef.current = isPaused;
   }, [isPaused]);
 
+  const showTempWizardNotice = (msg: string) => {
+    setWizardNotice(msg);
+    setTimeout(() => {
+      setWizardNotice(prev => (prev === msg ? '' : prev));
+    }, 3500);
+  };
+
   // Listen for global activeFollowUpCohort trigger from Navbar or Dashboard
   useEffect(() => {
     if (activeFollowUpCohort) {
@@ -648,20 +720,63 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     }
   }, [activeFollowUpCohort]);
 
+  // Listen for global wizardLaunchRequest trigger from Dashboard or TemplateManager
+  useEffect(() => {
+    if (wizardLaunchRequest?.open) {
+      const req = wizardLaunchRequest;
+      setWizardLaunchRequest(null);
+      handleOpenWizard({
+        templateId: req.templateId,
+        leadIds: req.leadIds,
+        initialStep: req.initialStep
+      });
+    }
+  }, [wizardLaunchRequest]);
+
   // Handle Wizard Open for new campaign
-  const handleOpenWizard = () => {
+  const handleOpenWizard = (options?: { templateId?: string; leadIds?: string[]; initialStep?: number }) => {
     setEditingCampaignId(null);
-    setWizardStep(1);
+    setWizardStep(options?.initialStep || 1);
     setStepValidationError('');
+    setWizardNotice('');
+    setTestEmailResult(null);
+    setTestStepIndex(0);
+    setPreviewStepIndices({});
+    setActiveTemplateTargetStep(0);
     const primarySmtp = activeSmtps[0];
     setCampaignTitle('Q3 High-Intent Outreach Sequence');
     setSenderName(primarySmtp?.fromName || currentUser.name || 'Outreach Specialist');
-    setSenderEmail(primarySmtp?.fromEmail || primarySmtp?.username || currentUser.email || 'outreach@visualsky.io');
+    const defaultFrom = primarySmtp?.fromEmail || primarySmtp?.username || currentUser.email || 'outreach@visualsky.io';
+    setSenderEmail(defaultFrom);
+    setTestRecipientEmail(currentUser.email || defaultFrom);
     setCampaignNiche('B2B SaaS & Technology');
     setSelectedLeadTags([]);
     setWizardLeadSearch('');
     setRecipientFilter('all');
-    setSelectedLeadIds(activeLeads.map(l => l.id));
+    setSmtpProviderFilter('all');
+    setSelectedSmtpTags([]);
+    setSmtpSearchQuery('');
+    setSelectedTemplateCat('all');
+    setSelectedTemplateTag('all');
+    setTemplateSearchQuery('');
+    setShowWizardPasteBox(false);
+    setWizardPasteText('');
+    setWizardPastedItems([]);
+    setSendMode('instant');
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    setScheduleDate(tomorrow.toISOString().split('T')[0]);
+    setScheduleStartTime('09:00');
+    setScheduleEndTime('18:00');
+    setScheduleTimezone('America/New_York (EST)');
+    setScheduleActiveDays(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
+    setSendingInterval(15);
+    setEnableJitter(true);
+
+    const validLeadIdSet = new Set(activeLeads.map(l => l.id));
+    const requestedLeadIds = (options?.leadIds || []).filter(id => validLeadIdSet.has(id));
+    setSelectedLeadIds(requestedLeadIds.length > 0 ? requestedLeadIds : activeLeads.map(l => l.id));
+
     if (primarySmtp) {
       setSelectedSmtpIds([primarySmtp.id]);
       setSelectedSmtpId(primarySmtp.id);
@@ -669,21 +784,35 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       setSelectedSmtpIds([]);
       setSelectedSmtpId('');
     }
-    const firstTmpl = emailTemplates.find(t => !t.isTrash);
-    setWizardSteps(prev => {
-      if (prev.length > 0 && prev[0].subject.trim() && prev[0].body.trim()) return prev;
-      return [
-        {
-          stepNumber: 1,
-          delayDays: 0,
-          subject: firstTmpl?.subject || 'Quick question regarding {{company}}',
-          body:
-            firstTmpl?.body ||
-            `Hi {{first_name}},\n\nI noticed {{company}}'s recent growth and wanted to share a quick idea on scaling your outbound pipeline.\n\nWould you be open to a quick 5-minute chat this week?\n\nBest regards,\n${primarySmtp?.fromName || currentUser.name || 'Outreach Specialist'}`,
-          triggerCondition: 'all'
-        }
-      ];
-    });
+
+    const requestedTmpl = options?.templateId
+      ? emailTemplates.find(t => !t.isTrash && t.id === options.templateId)
+      : undefined;
+    const firstTmpl = requestedTmpl || emailTemplates.find(t => !t.isTrash);
+
+    if (firstTmpl) {
+      setAppliedTemplates({
+        0: { id: firstTmpl.id, title: firstTmpl.title, category: firstTmpl.category }
+      });
+    } else {
+      setAppliedTemplates({});
+    }
+
+    setWizardSteps([
+      {
+        stepNumber: 1,
+        delayDays: 0,
+        subject: firstTmpl?.subject || 'Quick question regarding {{company}}',
+        body:
+          firstTmpl?.body ||
+          `Hi {{first_name}},\n\nI noticed {{company}}'s recent growth and wanted to share a quick idea on scaling your outbound pipeline.\n\nWould you be open to a quick 5-minute chat this week?\n\nBest regards,\n${primarySmtp?.fromName || currentUser.name || 'Outreach Specialist'}`,
+        triggerCondition: 'all'
+      }
+    ]);
+
+    if (requestedTmpl) {
+      showTempWizardNotice(`✓ Loaded template "${requestedTmpl.title}" into Step 1`);
+    }
     setShowWizardModal(true);
   };
 
@@ -692,16 +821,40 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     setEditingCampaignId(camp.id);
     setWizardStep(1);
     setStepValidationError('');
+    setWizardNotice('');
+    setTestEmailResult(null);
+    setTestStepIndex(0);
+    setPreviewStepIndices({});
+    setActiveTemplateTargetStep(0);
+    setSelectedLeadTags([]);
+    setWizardLeadSearch('');
+    setRecipientFilter('all');
+    setSmtpProviderFilter('all');
+    setSelectedSmtpTags([]);
+    setSmtpSearchQuery('');
+    setSelectedTemplateCat('all');
+    setSelectedTemplateTag('all');
+    setTemplateSearchQuery('');
+    setShowWizardPasteBox(false);
     setCampaignTitle(camp.name);
     const campSmtp = smtpAccounts.find(s => s.id === camp.assignedSmtpId) || activeSmtps[0];
     setSenderName(camp.senderName || campSmtp?.fromName || currentUser.name || 'Outreach Specialist');
-    setSenderEmail(camp.senderEmail || campSmtp?.fromEmail || campSmtp?.username || currentUser.email || 'outreach@visualsky.io');
+    const resolvedFrom = camp.senderEmail || campSmtp?.fromEmail || campSmtp?.username || currentUser.email || 'outreach@visualsky.io';
+    setSenderEmail(resolvedFrom);
+    setTestRecipientEmail(currentUser.email || resolvedFrom);
     setCampaignNiche(camp.niche || 'B2B SaaS & Technology');
-    const restoredSmtpIds =
+    const validSmtpSet = new Set(activeSmtps.map(s => s.id));
+    const rawRestoredSmtpIds =
       camp.assignedSmtpIds && camp.assignedSmtpIds.length > 0
-        ? camp.assignedSmtpIds
-        : camp.assignedSmtpId && camp.assignedSmtpId !== 'round_robin'
+        ? camp.assignedSmtpIds.filter(id => validSmtpSet.has(id))
+        : camp.assignedSmtpId && camp.assignedSmtpId !== 'round_robin' && validSmtpSet.has(camp.assignedSmtpId)
         ? [camp.assignedSmtpId]
+        : camp.assignedSmtpId === 'round_robin'
+        ? activeSmtps.map(s => s.id)
+        : [];
+    const restoredSmtpIds =
+      rawRestoredSmtpIds.length > 0
+        ? rawRestoredSmtpIds
         : activeSmtps.length > 0
         ? [activeSmtps[0].id]
         : [];
@@ -709,20 +862,44 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     setSelectedSmtpId(
       restoredSmtpIds.length > 1
         ? 'round_robin'
-        : restoredSmtpIds[0] || camp.assignedSmtpId || activeSmtps[0]?.id || ''
+        : restoredSmtpIds[0] || activeSmtps[0]?.id || ''
     );
-    setSelectedLeadIds(camp.leadIds && camp.leadIds.length > 0 ? camp.leadIds : activeLeads.map(l => l.id));
-    setWizardSteps(camp.steps && camp.steps.length > 0 ? camp.steps : [
-      {
-        stepNumber: 1,
-        delayDays: 0,
-        subject: 'Scaling cold outreach pipeline for {{company}}',
-        body: 'Hi {{name}},\n\nLoved {{company}}\'s recent expansion! Quick question: are you managing cold email deliverability in-house or looking for automated 99% inbox placement?\n\nWould you be open to a 2-minute overview this Thursday?\n\nBest regards,\n' + (currentUser.name || 'Outreach Team'),
-        triggerCondition: 'all'
+    const validLeadIdSet = new Set(activeLeads.map(l => l.id));
+    const validCampLeadIds = (camp.leadIds || []).filter(id => validLeadIdSet.has(id));
+    setSelectedLeadIds(validCampLeadIds.length > 0 ? validCampLeadIds : activeLeads.map(l => l.id));
+    const restoredSteps: CampaignStep[] =
+      camp.steps && camp.steps.length > 0
+        ? camp.steps
+        : [
+            {
+              stepNumber: 1,
+              delayDays: 0,
+              subject: 'Scaling cold outreach pipeline for {{company}}',
+              body:
+                'Hi {{name}},\n\nLoved {{company}}\'s recent expansion! Quick question: are you managing cold email deliverability in-house or looking for automated 99% inbox placement?\n\nWould you be open to a 2-minute overview this Thursday?\n\nBest regards,\n' +
+                (currentUser.name || 'Outreach Team'),
+              triggerCondition: 'all'
+            }
+          ];
+    setWizardSteps(restoredSteps);
+    const matchedApplied: Record<number, { id: string; title: string; category: string }> = {};
+    restoredSteps.forEach((st, idx) => {
+      const foundTmpl = emailTemplates.find(
+        t => !t.isTrash && (t.subject === st.subject || t.body === st.body)
+      );
+      if (foundTmpl) {
+        matchedApplied[idx] = { id: foundTmpl.id, title: foundTmpl.title, category: foundTmpl.category };
       }
-    ]);
+    });
+    setAppliedTemplates(matchedApplied);
     setSendMode(camp.sendMode || 'instant');
+    if (camp.scheduledTime && camp.scheduledTime.includes('T')) {
+      const [dPart, tPart] = camp.scheduledTime.split('T');
+      if (dPart) setScheduleDate(dPart);
+      if (tPart) setScheduleStartTime(tPart.slice(0, 5));
+    }
     setSendingInterval(camp.sendingIntervalSec || 15);
+    setEnableJitter(camp.jitterRandom ?? true);
     setScheduleStartTime(camp.scheduleStartTime || '09:00');
     setScheduleEndTime(camp.scheduleEndTime || '18:00');
     setScheduleTimezone(camp.scheduleTimezone || 'America/New_York (EST)');
@@ -733,10 +910,13 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   // Open 7d / 14d / 30d Cohort Follow-up Suite
   const handleOpenFollowUpCohort = (days: '7d' | '14d' | '30d') => {
     setFollowUpDays(days);
+    setFollowUpError('');
     const dayCount = days === '7d' ? 7 : days === '14d' ? 14 : 30;
     const dormant = getDormantLeads(dayCount);
-    
-    setFollowUpSelectedLeadIds(dormant.map(l => l.id));
+    const allUnreplied = activeLeads.filter(l => !l.isReplied && l.status !== 'replied');
+    const useAllUnreplied = dormant.length === 0 && allUnreplied.length > 0;
+    setFollowUpIncludeAllUnreplied(useAllUnreplied);
+    setFollowUpSelectedLeadIds((useAllUnreplied ? allUnreplied : dormant).map(l => l.id));
     setFollowUpLeadSearch('');
     setFollowUpSmtpId(activeSmtps[0]?.id || '');
     setFollowUpInterval(15);
@@ -758,18 +938,23 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   // Filtered leads in the Follow-up Cohort modal
   const cohortDormantLeads = useMemo(() => {
     const dayCount = followUpDays === '7d' ? 7 : followUpDays === '14d' ? 14 : 30;
-    const base = getDormantLeads(dayCount);
+    const strictDormant = getDormantLeads(dayCount);
+    const base =
+      followUpIncludeAllUnreplied || strictDormant.length === 0
+        ? activeLeads.filter(l => !l.isReplied && l.status !== 'replied')
+        : strictDormant;
     if (!followUpLeadSearch.trim()) return base;
     const q = followUpLeadSearch.toLowerCase();
     return base.filter(l => 
-      l.name.toLowerCase().includes(q) ||
-      l.company.toLowerCase().includes(q) ||
-      l.email.toLowerCase().includes(q) ||
-      l.tags.some(t => t.toLowerCase().includes(q))
+      (l.name || '').toLowerCase().includes(q) ||
+      (l.company || '').toLowerCase().includes(q) ||
+      (l.email || '').toLowerCase().includes(q) ||
+      (Array.isArray(l.tags) && l.tags.some(t => (t || '').toLowerCase().includes(q)))
     );
-  }, [leads, followUpDays, followUpLeadSearch]);
+  }, [activeLeads, followUpDays, followUpIncludeAllUnreplied, followUpLeadSearch]);
 
   const toggleFollowUpLead = (id: string) => {
+    setFollowUpError('');
     if (followUpSelectedLeadIds.includes(id)) {
       setFollowUpSelectedLeadIds(followUpSelectedLeadIds.filter(lid => lid !== id));
     } else {
@@ -778,12 +963,17 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   };
 
   const handleExecuteFollowUpModal = () => {
+    setFollowUpError('');
     if (followUpSelectedLeadIds.length === 0) {
-      addNotification({
-        title: 'No Leads Selected',
-        message: 'Please select at least 1 dormant lead to launch the follow-up sequence.',
-        type: 'system'
-      });
+      setFollowUpError('⚠️ Please select at least 1 lead recipient to launch the follow-up sequence.');
+      return;
+    }
+    if (activeSmtps.length === 0) {
+      setFollowUpError('⚠️ No active Outbound SMTP Relay connected. Click "+ Connect New Relay" first.');
+      return;
+    }
+    if (!followUpSubject.trim() || !followUpBody.trim()) {
+      setFollowUpError('⚠️ Please enter both a follow-up subject line and message body.');
       return;
     }
 
@@ -851,37 +1041,147 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
   const handleAddStep = () => {
     const nextNum = wizardSteps.length + 1;
-    const delay = nextNum === 2 ? 7 : nextNum === 3 ? 14 : 30;
+    const delay = nextNum === 2 ? 3 : nextNum === 3 ? 7 : 14;
+    const newStepIdx = wizardSteps.length;
     setWizardSteps([
       ...wizardSteps,
       {
         stepNumber: nextNum,
         delayDays: delay,
-        subject: `Re: Scaled growth idea for {{company}} (Step ${nextNum})`,
-        body: `Hi {{name}},\n\nReaching out one more time regarding {{company}}. If this isn't a priority right now, no worries at all!\n\nBest regards,\n${senderName}`,
-        triggerCondition: nextNum === 3 ? 'no_reply_14d' : 'no_reply_30d'
+        subject: `Re: ${wizardSteps[0]?.subject || 'Quick question regarding {{company}}'}`,
+        body: `Hi {{first_name}},\n\nFollowing up on my earlier note regarding {{company}}. Would you be open to a quick 3-minute chat this week?\n\nBest regards,\n${senderName || '{{sender_name}}'}`,
+        triggerCondition: nextNum === 2 ? 'no_reply_7d' : nextNum === 3 ? 'no_reply_14d' : 'no_reply_30d'
       }
     ]);
+    setActiveTemplateTargetStep(newStepIdx);
   };
 
   const handleRemoveStep = (idx: number) => {
     if (wizardSteps.length <= 1) return;
     setWizardSteps(wizardSteps.filter((_, i) => i !== idx).map((s, i) => ({ ...s, stepNumber: i + 1 })));
+    setAppliedTemplates(prev => {
+      const next: Record<number, { id: string; title: string; category: string }> = {};
+      (Object.entries(prev) as [string, { id: string; title: string; category: string }][]).forEach(([k, val]) => {
+        const numK = Number(k);
+        if (numK < idx) next[numK] = val;
+        else if (numK > idx) next[numK - 1] = val;
+      });
+      return next;
+    });
+    setActiveTemplateTargetStep(prev => Math.max(0, Math.min(prev, wizardSteps.length - 2)));
   };
 
-  const handleRecipientFilterChange = (type: 'all' | '7d' | '14d' | '30d' | 'new' | 'custom') => {
-    setRecipientFilter(type);
-    if (type === 'all') {
-      setSelectedLeadIds(activeLeads.map(l => l.id));
-    } else if (type === '7d') {
-      setSelectedLeadIds(activeLeads.filter(l => l.daysAgo >= 7 && l.status !== 'replied').map(l => l.id));
-    } else if (type === '14d') {
-      setSelectedLeadIds(activeLeads.filter(l => l.daysAgo >= 14 && l.status !== 'replied').map(l => l.id));
-    } else if (type === '30d') {
-      setSelectedLeadIds(activeLeads.filter(l => l.daysAgo >= 30 && l.status !== 'replied').map(l => l.id));
-    } else if (type === 'new') {
-      setSelectedLeadIds(activeLeads.filter(l => l.status === 'new').map(l => l.id));
+  const insertTokenIntoStep = (stepIdx: number, field: 'subject' | 'body', token: string) => {
+    setWizardSteps(prev =>
+      prev.map((st, idx) => {
+        if (idx !== stepIdx) return st;
+        const currentVal = st[field] || '';
+        const separator = currentVal && !currentVal.endsWith(' ') && !currentVal.endsWith('\n') ? ' ' : '';
+        return {
+          ...st,
+          [field]: `${currentVal}${separator}${token}`
+        };
+      })
+    );
+  };
+
+  const renderPreviewTextForStep = (rawText: string) => {
+    const sampleLead =
+      wizardAudienceHealth.enrolledLeads[0] ||
+      activeLeads[0] || {
+        name: 'Sarah Jenkins',
+        company: 'Acme Cloud Inc.',
+        website: 'https://acmecloud.io',
+        title: 'VP of Growth',
+        email: 'sarah@acmecloud.io',
+        phone: '+1 (555) 234-5678',
+        location: 'San Francisco, CA',
+        icebreaker: 'Impressive work on your recent product launch.',
+        niche: campaignNiche || 'B2B SaaS'
+      };
+    const firstName = (sampleLead.name || 'there').split(' ')[0] || 'there';
+    const effSender = senderName || currentUser.name || 'Outreach Specialist';
+    return String(rawText || '')
+      .replace(/\{\{\s*first_name\s*\}\}/gi, firstName)
+      .replace(/\{\{\s*name\s*\}\}/gi, sampleLead.name || 'there')
+      .replace(/\{\{\s*company\s*\}\}/gi, sampleLead.company || 'your company')
+      .replace(/\{\{\s*website\s*\}\}/gi, sampleLead.website || sampleLead.company || 'your website')
+      .replace(/\{\{\s*title\s*\}\}/gi, sampleLead.title || 'Decision Maker')
+      .replace(/\{\{\s*email\s*\}\}/gi, sampleLead.email || '')
+      .replace(/\{\{\s*phone\s*\}\}/gi, (sampleLead as any).phone || '')
+      .replace(/\{\{\s*location\s*\}\}/gi, (sampleLead as any).location || '')
+      .replace(/\{\{\s*icebreaker\s*\}\}/gi, (sampleLead as any).icebreaker || 'Loved your recent growth!')
+      .replace(/\{\{\s*niche\s*\}\}/gi, sampleLead.niche || campaignNiche || 'your industry')
+      .replace(/\{\{\s*sender_name\s*\}\}/gi, effSender);
+  };
+
+  const handleSendWizardTestEmail = async () => {
+    const cleanTarget = testRecipientEmail.trim();
+    if (!cleanTarget || !cleanTarget.includes('@')) {
+      setTestEmailResult({ ok: false, message: 'Please enter a valid recipient email address for the test.' });
+      return;
     }
+    const validSelectedSmtps = activeSmtps.filter(s => selectedSmtpIds.includes(s.id));
+    const smtp = validSelectedSmtps[0] || activeSmtps.find(s => s.id === selectedSmtpId) || activeSmtps[0];
+    if (!smtp) {
+      setTestEmailResult({ ok: false, message: 'No active SMTP relay connected. Please connect an SMTP relay in Step 2.' });
+      return;
+    }
+    setIsSendingTestEmail(true);
+    setTestEmailResult(null);
+    try {
+      const safeIdx = Math.max(0, Math.min(testStepIndex, wizardSteps.length - 1));
+      const stepToTest = wizardSteps[safeIdx] || wizardSteps[0] || {
+        stepNumber: 1,
+        subject: campaignTitle || 'Test Outreach',
+        body: 'Hi {{first_name}}, test email.'
+      };
+      const renderedSubject = `[TEST - Step ${stepToTest.stepNumber || safeIdx + 1}] ${renderPreviewTextForStep(stepToTest.subject)}`;
+      const renderedBody = renderPreviewTextForStep(stepToTest.body);
+      const fromAddr = smtp.fromEmail || smtp.username || senderEmail || currentUser.email || 'outreach@visualsky.io';
+      const fromDisp = senderName || smtp.fromName || currentUser.name || 'Outreach Specialist';
+
+      const res = await fetch('/api/smtp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: cleanTarget,
+          toName: 'Test Recipient',
+          toCompany: 'Test Company',
+          from: fromAddr,
+          fromName: fromDisp,
+          subject: renderedSubject,
+          text: renderedBody,
+          smtpConfig: smtp,
+          trackingPixelId: `px-test-${Date.now()}`
+        })
+      });
+      const parsed = await safeParseResponse(res, 'Test email dispatch failed');
+      if (parsed.ok && parsed.data?.success) {
+        setTestEmailResult({
+          ok: true,
+          message: `✓ Test email (Step ${stepToTest.stepNumber || safeIdx + 1}) sent to ${cleanTarget} via ${smtp.name} (${fromAddr})!`
+        });
+      } else {
+        setTestEmailResult({
+          ok: false,
+          message: `✗ SMTP Error: ${parsed.data?.error || `HTTP ${res.status}`}`
+        });
+      }
+    } catch (err: any) {
+      setTestEmailResult({
+        ok: false,
+        message: `✗ Network Error: ${err?.message || 'Failed to reach SMTP server'}`
+      });
+    } finally {
+      setIsSendingTestEmail(false);
+    }
+  };
+
+  const handleRecipientFilterChange = (type: 'all' | '7d' | '14d' | '30d' | 'new' | 'unreplied' | 'custom') => {
+    setRecipientFilter(type);
+    setSelectedLeadIds(filterLeadsByCohortAndTags(type, selectedLeadTags));
+    setStepValidationError('');
   };
 
   const handleToggleLeadSelection = (id: string) => {
@@ -923,14 +1223,16 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         setStepValidationError('⚠️ No active SMTP relays connected. Please click "+ Connect New Relay" to connect an Outbound Relay to proceed.');
         return false;
       }
-      if (!selectedSmtpId) {
-        setStepValidationError('⚠️ Please select an active Outbound SMTP Relay from the list.');
+      const validSelectedSmtps = selectedSmtpIds.filter(id => activeSmtps.some(s => s.id === id));
+      if (validSelectedSmtps.length === 0 && !activeSmtps.some(s => s.id === selectedSmtpId)) {
+        setStepValidationError('⚠️ Please select at least 1 active Outbound SMTP Relay from the list.');
         return false;
       }
     }
 
     if (step === 3) {
-      if (selectedLeadIds.length === 0) {
+      const validEnrolled = selectedLeadIds.filter(id => activeLeads.some(l => l.id === id));
+      if (validEnrolled.length === 0) {
         setStepValidationError('⚠️ Please select at least 1 verified lead recipient to enroll in this campaign.');
         return false;
       }
@@ -999,11 +1301,9 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       }
       return updated;
     });
-    addNotification({
-      title: `Template Loaded: "${tmpl.title || 'Selected Template'}" 📄`,
-      message: `Subject and body applied into Sequence Step ${targetStepIndex + 1}.`,
-      type: 'campaign'
-    });
+    updateEmailTemplate(tmpl.id, { usageCount: (tmpl.usageCount || 0) + 1 });
+    setStepValidationError('');
+    showTempWizardNotice(`✓ Applied template "${tmpl.title}" to Step ${targetStepIndex + 1}`);
   };
 
   // Save new template from inside wizard with tags
@@ -1020,11 +1320,12 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       title: newTmplTitle.trim(),
       subject: newTmplSubject.trim(),
       body: newTmplBody.trim(),
-      category: newTmplCategory,
+      category: newTmplCategory || templateCategories[0]?.name || 'cold_outreach',
       tags: parsedTags.length > 0 ? parsedTags : ['Custom', 'Wizard']
     });
 
-    handleApplyTemplate(tmpl);
+    const targetIdx = Math.max(0, Math.min(newTmplTargetStepIdx, wizardSteps.length - 1));
+    handleApplyTemplate(tmpl, targetIdx);
     setNewTmplTitle('');
     setNewTmplSubject('');
     setNewTmplBody('');
@@ -1045,7 +1346,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     setShowAddCategoryModal(false);
   };
 
-  // EXECUTE LIVE REAL-TIME DISPATCH WITH CONFIGURABLE DELAY
+  // EXECUTE LIVE REAL-TIME DISPATCH WITH CONFIGURABLE DELAY & MULTI-STEP SUPPORT
   const startLiveDispatcher = async (
     targetCampaign: Campaign, 
     overrideLeadIds?: string[], 
@@ -1054,7 +1355,8 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     overrideInterval?: number,
     overrideSmtpIds?: string[],
     overrideSenderName?: string,
-    overrideSenderEmail?: string
+    overrideSenderEmail?: string,
+    stepIndexToRun = 0
   ) => {
     setShowWizardModal(false);
     setShowLiveDispatcher(true); // Open live dispatcher engine modal so user sees real-time progress!
@@ -1076,14 +1378,14 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       ? selectedLeadIds
       : activeLeads.map(l => l.id);
 
-    let targetLeads = leads.filter(l => !l.isTrash && candidateLeadIds.includes(l.id));
+    let allEnrolledLeads = leads.filter(l => !l.isTrash && candidateLeadIds.includes(l.id));
 
     // Fallback: If still 0, pick active non-trash leads
-    if (targetLeads.length === 0) {
-      targetLeads = leads.filter(l => !l.isTrash).slice(0, 20);
+    if (allEnrolledLeads.length === 0) {
+      allEnrolledLeads = leads.filter(l => !l.isTrash).slice(0, 20);
     }
 
-    if (targetLeads.length === 0) {
+    if (allEnrolledLeads.length === 0) {
       addNotification({
         title: 'Cannot Start Campaign: No Leads ⚠️',
         message: 'There are no active leads available. Please add or import leads in the Lead Directory.',
@@ -1094,6 +1396,64 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       setShowLiveDispatcher(false);
       return;
     }
+
+    const allSteps =
+      overrideSteps && overrideSteps.length > 0
+        ? overrideSteps
+        : targetCampaign?.steps && targetCampaign.steps.length > 0
+        ? targetCampaign.steps
+        : wizardSteps;
+    const chosenStepIndex = Math.max(0, Math.min(stepIndexToRun, allSteps.length - 1));
+    const initialStep = allSteps[chosenStepIndex] || allSteps[0] || {
+      stepNumber: 1,
+      delayDays: 0,
+      subject: targetCampaign?.name || 'Outreach Campaign',
+      body: 'Hi {{name}},\n\nReaching out regarding {{company}}.',
+      triggerCondition: 'all' as const
+    };
+
+    // Smart resume: if this campaign already sent to some leads on Step 1, resume from unsent leads instead of duplicating
+    const campNormName = (targetCampaign?.name || '').trim().toLowerCase();
+    const existingSentEmailsForCamp = new Set(
+      (sentEmails || [])
+        .filter(
+          s =>
+            !s.isTrash &&
+            s.status !== 'failed' &&
+            s.status !== 'bounced' &&
+            (s.campaignId === targetCampaign?.id ||
+              (campNormName && s.campaignName?.trim().toLowerCase() === campNormName))
+        )
+        .map(s => (s.recipientEmail || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+
+    // Filter leads by step triggerCondition if running a follow-up step (stepNumber > 1)
+    let eligibleLeads = allEnrolledLeads;
+    if (chosenStepIndex > 0) {
+      const cond = initialStep.triggerCondition || 'no_reply_7d';
+      if (cond.startsWith('no_reply')) {
+        eligibleLeads = allEnrolledLeads.filter(l => !l.isReplied && l.status !== 'replied');
+      } else if (cond === 'opened_no_reply') {
+        eligibleLeads = allEnrolledLeads.filter(
+          l => ((l.openCount || 0) > 0 || l.status === 'opened') && !l.isReplied && l.status !== 'replied'
+        );
+      } else if (cond.startsWith('not_opened')) {
+        eligibleLeads = allEnrolledLeads.filter(
+          l => (l.openCount || 0) === 0 && l.status !== 'opened' && !l.isReplied && l.status !== 'replied'
+        );
+      }
+      if (eligibleLeads.length === 0) eligibleLeads = allEnrolledLeads;
+    }
+
+    const unsentLeads =
+      chosenStepIndex === 0
+        ? eligibleLeads.filter(l => !existingSentEmailsForCamp.has((l.email || '').trim().toLowerCase()))
+        : eligibleLeads;
+    const isResumingPartial =
+      chosenStepIndex === 0 && unsentLeads.length > 0 && unsentLeads.length < eligibleLeads.length;
+    const targetLeads = isResumingPartial ? unsentLeads : eligibleLeads;
+    const initialSentBase = isResumingPartial ? eligibleLeads.length - unsentLeads.length : 0;
 
     const useSmtpIds =
       overrideSmtpIds && overrideSmtpIds.length > 0
@@ -1114,32 +1474,27 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       activeSmtps[0] ||
       smtpAccounts[0];
 
-    const initialStep = (overrideSteps && overrideSteps.length > 0 ? overrideSteps : (targetCampaign?.steps && targetCampaign.steps.length > 0 ? targetCampaign.steps : wizardSteps))[0] || {
-      stepNumber: 1,
-      delayDays: 0,
-      subject: targetCampaign?.name || 'Outreach Campaign',
-      body: 'Hi {{name}},\n\nReaching out regarding {{company}}.',
-      triggerCondition: 'all' as const
-    };
     const intervalSec = overrideInterval !== undefined ? overrideInterval : (targetCampaign?.sendingIntervalSec || sendingInterval);
 
     addNotification({
-      title: `Campaign Started: "${targetCampaign.name}" 🚀`,
+      title: `Campaign Started: "${targetCampaign.name}" (Step ${initialStep.stepNumber || chosenStepIndex + 1}) 🚀`,
       message: `Sequenced dispatch started for ${targetLeads.length} leads via ${isRoundRobin ? `${activePool.length} SMTP Relays` : (fixedSmtp?.name || 'Connected Relay')}.`,
       type: 'campaign'
     });
 
     setDispatchProgress({
-      currentLeadIndex: 0,
-      totalLeads: targetLeads.length,
+      currentLeadIndex: initialSentBase,
+      totalLeads: initialSentBase + targetLeads.length,
       currentLeadName: targetLeads[0]?.name || '',
       currentLeadEmail: targetLeads[0]?.email || '',
       currentLeadCompany: targetLeads[0]?.company || '',
       secondsUntilNext: 0,
-      sentLogs: []
+      sentLogs: isResumingPartial
+        ? [`[RESUME] Continuing sequence from lead ${initialSentBase + 1} of ${initialSentBase + targetLeads.length}...`]
+        : []
     });
 
-    let sentSoFar = 0;
+    let sentSoFar = initialSentBase;
 
     for (let i = 0; i < targetLeads.length; i++) {
       if (
@@ -1162,7 +1517,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
       setDispatchProgress(prev => ({
         ...prev,
-        currentLeadIndex: i + 1,
+        currentLeadIndex: initialSentBase + i + 1,
         currentLeadName: lead.name,
         currentLeadEmail: lead.email,
         currentLeadCompany: lead.company,
@@ -1175,6 +1530,9 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
       const leadFirstName = (lead.name || 'there').split(' ')[0] || 'there';
       const leadWebsite = lead.website || lead.company || 'your website';
+      const leadIcebreaker =
+        lead.icebreaker ||
+        `came across ${lead.company || 'your team'} and loved your recent work in ${lead.niche || campaignNiche || 'your space'}`;
       const effectiveSenderName =
         overrideSenderName ||
         targetCampaign?.senderName ||
@@ -1197,7 +1555,8 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
           .replace(/\{\{\s*website\s*\}\}/gi, leadWebsite)
           .replace(/\{\{\s*title\s*\}\}/gi, lead.title || 'Executive')
           .replace(/\{\{\s*email\s*\}\}/gi, lead.email || '')
-          .replace(/\{\{\s*niche\s*\}\}/gi, lead.niche || 'your industry')
+          .replace(/\{\{\s*niche\s*\}\}/gi, lead.niche || campaignNiche || 'your industry')
+          .replace(/\{\{\s*icebreaker\s*\}\}/gi, leadIcebreaker)
           .replace(/\{\{\s*sender_name\s*\}\}/gi, effectiveSenderName);
 
       const renderedSubject = replaceAllCampaignTokens(rawSubject);
@@ -1343,10 +1702,30 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     setIsDispatching(false);
     if (!abortDispatchRef.current) {
       addNotification({
-        title: `Campaign Dispatch Finished ✓`,
-        message: `Completed dispatching "${targetCampaign.name}" (${sentSoFar}/${targetLeads.length} delivered).`,
+        title: `Campaign Step ${initialStep.stepNumber || chosenStepIndex + 1} Finished ✓`,
+        message: `Completed dispatching Step ${initialStep.stepNumber || chosenStepIndex + 1} of "${targetCampaign.name}" (${sentSoFar}/${targetLeads.length} delivered).`,
         type: 'campaign'
       });
+
+      // If there is an immediate next step configured with delayDays === 0, chain it automatically
+      const nextStepIdx = chosenStepIndex + 1;
+      if (nextStepIdx < allSteps.length && (allSteps[nextStepIdx]?.delayDays || 0) === 0) {
+        setTimeout(() => {
+          if (!abortDispatchRef.current) {
+            startLiveDispatcher(
+              targetCampaign,
+              overrideLeadIds,
+              allSteps,
+              overrideSmtpId,
+              overrideInterval,
+              overrideSmtpIds,
+              overrideSenderName,
+              overrideSenderEmail,
+              nextStepIdx
+            );
+          }
+        }, 1500);
+      }
     }
   };
 
@@ -1373,19 +1752,18 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     }
   };
 
-  const handleLaunchCampaign = (forceRunAfterEdit = false) => {
-    // Full cross-step validation so launching from any step checks SMTP, Leads, and Templates properly
-    if (!campaignTitle.trim() || !senderName.trim() || !campaignNiche.trim()) {
-      setWizardStep(1);
-      validateCurrentStep(1);
-      return;
+  const handleLaunchCampaign = (forceRunImmediately = false) => {
+    // Full cross-step validation so launching from any step checks all 5 steps properly
+    for (let st = 1; st <= 5; st++) {
+      if (!validateCurrentStep(st)) {
+        setWizardStep(st);
+        return;
+      }
     }
-    if (activeSmtps.length === 0) {
-      setWizardStep(2);
-      setStepValidationError('⚠️ No active SMTP relays connected. Please click "+ Connect New Relay" to connect an Outbound Relay before launching.');
-      return;
-    }
-    const effectiveSmtpIds = selectedSmtpIds.length > 0 ? selectedSmtpIds : [activeSmtps[0].id];
+
+    const validSmtpSet = new Set(activeSmtps.map(s => s.id));
+    const filteredSelectedSmtps = selectedSmtpIds.filter(id => validSmtpSet.has(id));
+    const effectiveSmtpIds = filteredSelectedSmtps.length > 0 ? filteredSelectedSmtps : [activeSmtps[0].id];
     const effectiveSmtpId =
       effectiveSmtpIds.length > 1
         ? 'round_robin'
@@ -1394,30 +1772,31 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     const effectiveSenderEmail =
       primarySmtpObj?.fromEmail || primarySmtpObj?.username || senderEmail || currentUser.email || 'outreach@visualsky.io';
 
-    if (wizardSteps.length === 0 || !wizardSteps[0].subject.trim() || !wizardSteps[0].body.trim()) {
-      setWizardStep(4);
-      validateCurrentStep(4);
+    const validLeadSet = new Set(activeLeads.map(l => l.id));
+    const targetLeadIds = selectedLeadIds.filter(id => validLeadSet.has(id));
+    if (targetLeadIds.length === 0) {
+      setWizardStep(3);
+      setStepValidationError('⚠️ Please select at least 1 valid lead recipient to enroll in this campaign.');
       return;
     }
 
-    const targetLeadIds = selectedLeadIds.length > 0 ? selectedLeadIds : activeLeads.map(l => l.id);
-    if (targetLeadIds.length === 0) {
-      setWizardStep(3);
-      setStepValidationError('⚠️ Please select at least 1 lead recipient to enroll in this campaign.');
-      return;
-    }
+    const scheduledIso = sendMode === 'scheduled' ? `${scheduleDate}T${scheduleStartTime}:00` : undefined;
+    const isFutureScheduled =
+      !forceRunImmediately &&
+      sendMode === 'scheduled' &&
+      Boolean(scheduledIso && new Date(scheduledIso).getTime() > Date.now() + 60000);
 
     if (editingCampaignId) {
       // EDIT MODE: Update existing campaign
       const updatedPayload: Partial<Campaign> = {
-        name: campaignTitle,
-        niche: campaignNiche,
-        status: forceRunAfterEdit ? 'running' : undefined,
+        name: campaignTitle.trim(),
+        niche: campaignNiche.trim(),
+        status: forceRunImmediately ? 'running' : isFutureScheduled ? 'paused' : undefined,
         totalLeads: targetLeadIds.length,
         leadIds: targetLeadIds,
         steps: wizardSteps,
         sendMode,
-        scheduledTime: sendMode === 'scheduled' ? `${scheduleDate}T${scheduleStartTime}:00` : undefined,
+        scheduledTime: scheduledIso,
         scheduleStartTime,
         scheduleEndTime,
         scheduleTimezone,
@@ -1425,7 +1804,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         sendingIntervalSec: sendingInterval,
         assignedSmtpId: effectiveSmtpId,
         assignedSmtpIds: effectiveSmtpIds,
-        senderName,
+        senderName: senderName.trim(),
         senderEmail: effectiveSenderEmail
       };
       updateCampaign(editingCampaignId, updatedPayload);
@@ -1433,7 +1812,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       setShowWizardModal(false);
       setEditingCampaignId(null);
 
-      if (forceRunAfterEdit && existingCamp) {
+      if (forceRunImmediately && existingCamp) {
         const mergedCamp: Campaign = {
           ...existingCamp,
           ...updatedPayload,
@@ -1446,13 +1825,17 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
           effectiveSmtpId,
           sendingInterval,
           effectiveSmtpIds,
-          senderName,
+          senderName.trim(),
           effectiveSenderEmail
         );
       } else {
         addNotification({
-          title: `Campaign Updated: "${campaignTitle}" ✏️`,
-          message: 'Campaign sequences, SMTP relay, schedule, and lead configurations updated.',
+          title: isFutureScheduled
+            ? `Campaign Scheduled: "${campaignTitle}" 📅`
+            : `Campaign Updated: "${campaignTitle}" ✏️`,
+          message: isFutureScheduled
+            ? `Scheduled to dispatch on ${scheduleDate} at ${scheduleStartTime} (${scheduleTimezone}).`
+            : 'Campaign sequences, SMTP relay, schedule, and lead configurations updated.',
           type: 'campaign'
         });
       }
@@ -1461,14 +1844,14 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
     // CREATE MODE: Create new campaign
     const newCamp = createCampaign({
-      name: campaignTitle,
-      niche: campaignNiche,
-      status: 'running',
+      name: campaignTitle.trim(),
+      niche: campaignNiche.trim(),
+      status: isFutureScheduled ? 'paused' : 'running',
       totalLeads: targetLeadIds.length,
       leadIds: targetLeadIds,
       steps: wizardSteps,
       sendMode,
-      scheduledTime: sendMode === 'scheduled' ? `${scheduleDate}T${scheduleStartTime}:00` : undefined,
+      scheduledTime: scheduledIso,
       scheduleStartTime,
       scheduleEndTime,
       scheduleTimezone,
@@ -1476,9 +1859,19 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       sendingIntervalSec: sendingInterval,
       assignedSmtpId: effectiveSmtpId,
       assignedSmtpIds: effectiveSmtpIds,
-      senderName,
+      senderName: senderName.trim(),
       senderEmail: effectiveSenderEmail
     });
+
+    if (isFutureScheduled) {
+      setShowWizardModal(false);
+      addNotification({
+        title: `Campaign Scheduled: "${newCamp.name}" 📅`,
+        message: `Enrolled ${targetLeadIds.length} leads for ${scheduleDate} at ${scheduleStartTime} (${scheduleTimezone}). Click "Resume & Dispatch" anytime to run early.`,
+        type: 'campaign'
+      });
+      return;
+    }
 
     // Directly start live dispatcher with the exact selected SMTPs, steps, and leads
     startLiveDispatcher(
@@ -1488,15 +1881,39 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       effectiveSmtpId,
       sendingInterval,
       effectiveSmtpIds,
-      senderName,
+      senderName.trim(),
       effectiveSenderEmail
     );
   };
 
-  // Dormant counts
-  const dormant7d = leads.filter(l => !l.isTrash && l.daysAgo >= 7 && l.status !== 'replied').length;
-  const dormant14d = leads.filter(l => !l.isTrash && l.daysAgo >= 14 && l.status !== 'replied').length;
-  const dormant30d = leads.filter(l => !l.isTrash && l.daysAgo >= 30 && l.status !== 'replied').length;
+  // Auto-trigger scheduled campaigns when their scheduled window arrives
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (isDispatching) return;
+      const now = Date.now();
+      for (const camp of activeCampaigns) {
+        if (
+          camp.sendMode === 'scheduled' &&
+          camp.status === 'paused' &&
+          camp.scheduledTime &&
+          (camp.sentCount || 0) === 0
+        ) {
+          const schedMs = new Date(camp.scheduledTime).getTime();
+          if (!Number.isNaN(schedMs) && now >= schedMs) {
+            updateCampaign(camp.id, { status: 'running' });
+            startLiveDispatcher({ ...camp, status: 'running' });
+            break;
+          }
+        }
+      }
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [activeCampaigns, isDispatching]);
+
+  // Dormant counts (calculated accurately from lastActivityDate and daysAgo)
+  const dormant7d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 7 && l.status !== 'replied').length;
+  const dormant14d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 14 && l.status !== 'replied').length;
+  const dormant30d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 30 && l.status !== 'replied').length;
 
   return (
     <>
@@ -1687,12 +2104,14 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                   campLogs.filter(l => l.status === 'replied').length,
                   campLeads.filter(l => l.isReplied || l.status === 'replied').length
                 );
-                const liveTotalLeads = Math.max(
+                const explicitLeadTotal = Math.max(
                   camp.totalLeads || 0,
                   camp.leadIds?.length || 0,
-                  campLeads.length,
-                  liveSentCount,
-                  activeLeads.length
+                  campLeads.length
+                );
+                const liveTotalLeads = Math.max(
+                  explicitLeadTotal > 0 ? explicitLeadTotal : activeLeads.length,
+                  liveSentCount
                 );
                 const progressPct =
                   liveTotalLeads > 0 ? Math.min(100, Math.round((liveSentCount / liveTotalLeads) * 100)) : 0;
@@ -1723,6 +2142,14 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                               <span>⏸ Paused</span>
                             )}
                           </span>
+                          {camp.sendMode === 'scheduled' && camp.scheduledTime && (
+                            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40 flex items-center gap-1">
+                              <Calendar className="w-3 h-3 text-purple-400" />
+                              <span>
+                                Scheduled: {camp.scheduledTime.replace('T', ' ').slice(0, 16)}
+                              </span>
+                            </span>
+                          )}
                           <h3 className="font-black text-base text-slate-100 truncate">{camp.name}</h3>
                           <span className="text-xs text-slate-400 font-mono">({camp.niche || 'B2B Outreach'})</span>
                         </div>
@@ -1830,6 +2257,54 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                         />
                       </div>
                     </div>
+
+                    {/* Multi-Step Sequence Touchpoints Bar with Direct Step Dispatch */}
+                    {camp.steps && camp.steps.length > 0 && (
+                      <div className="pt-2 border-t border-slate-800/70 flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-extrabold uppercase text-slate-400 mr-1">
+                            Sequence Steps:
+                          </span>
+                          {camp.steps.map((st, sIdx) => (
+                            <div
+                              key={sIdx}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-950/90 border border-slate-800 text-[11px]"
+                            >
+                              <span className="w-4 h-4 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-extrabold text-[10px] flex items-center justify-center">
+                                {st.stepNumber || sIdx + 1}
+                              </span>
+                              <span className="text-slate-200 font-semibold truncate max-w-[160px]" title={st.subject}>
+                                {st.subject || `Step ${sIdx + 1}`}
+                              </span>
+                              <span className="text-[10px] font-mono text-slate-400">
+                                {sIdx === 0 ? '(Day 0)' : `(+${st.delayDays}d)`}
+                              </span>
+                              <button
+                                type="button"
+                                disabled={isDispatching}
+                                onClick={() =>
+                                  startLiveDispatcher(
+                                    camp,
+                                    camp.leadIds,
+                                    camp.steps,
+                                    camp.assignedSmtpId,
+                                    camp.sendingIntervalSec,
+                                    camp.assignedSmtpIds,
+                                    camp.senderName,
+                                    camp.senderEmail,
+                                    sIdx
+                                  )
+                                }
+                                className="ml-1 px-2 py-0.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500 text-cyan-300 hover:text-slate-950 font-extrabold text-[10px] transition cursor-pointer disabled:opacity-40"
+                                title={`Dispatch Step ${sIdx + 1} now`}
+                              >
+                                ▶ Send Step {sIdx + 1}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -2015,7 +2490,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                           </div>
 
                           <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 shrink-0">
-                            {lead.daysAgo}d inactive
+                            {getLeadInactiveDays(lead)}d inactive
                           </span>
                         </div>
                       );
@@ -2169,8 +2644,18 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                     key={sNum}
                     type="button"
                     onClick={() => {
-                      if (sNum < wizardStep) setWizardStep(sNum);
-                      else if (validateCurrentStep(wizardStep)) setWizardStep(sNum);
+                      if (sNum < wizardStep) {
+                        setStepValidationError('');
+                        setWizardStep(sNum);
+                      } else if (sNum > wizardStep) {
+                        for (let st = wizardStep; st < sNum; st++) {
+                          if (!validateCurrentStep(st)) {
+                            setWizardStep(st);
+                            return;
+                          }
+                        }
+                        setWizardStep(sNum);
+                      }
                     }}
                     className={`py-2.5 px-3 sm:px-1 border-r border-slate-800/80 shrink-0 transition cursor-pointer ${
                       isCurrent ? 'bg-cyan-500/10 text-cyan-300 border-b-2 border-b-cyan-400' :
@@ -2234,9 +2719,35 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
             {/* Step Validation Error Notification */}
             {stepValidationError && (
-              <div className="p-3 bg-rose-950/70 border-b border-rose-500/50 text-rose-200 text-xs font-semibold flex items-center gap-2 animate-in fade-in">
-                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-                <span>{stepValidationError}</span>
+              <div className="p-3 bg-rose-950/70 border-b border-rose-500/50 text-rose-200 text-xs font-semibold flex items-center justify-between gap-2 animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>{stepValidationError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setStepValidationError('')}
+                  className="text-rose-300 hover:text-white cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Instant Wizard Action Notice Banner */}
+            {wizardNotice && !stepValidationError && (
+              <div className="px-4 py-2 bg-emerald-950/70 border-b border-emerald-500/40 text-emerald-200 text-xs font-bold flex items-center justify-between gap-2 animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{wizardNotice}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setWizardNotice('')}
+                  className="text-emerald-300 hover:text-white cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
 
@@ -2352,7 +2863,14 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                         </select>
                         <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/70 border border-slate-800/80 text-[11px] text-slate-300 font-mono truncate">
                           <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
-                          <span className="truncate">From: <strong className="text-white">{senderEmail}</strong></span>
+                          <span className="truncate">
+                            From:{' '}
+                            <strong className="text-white">
+                              {selectedSmtpIds.length > 1
+                                ? `Round-Robin (${selectedSmtpIds.length} Relays • ${senderEmail})`
+                                : senderEmail}
+                            </strong>
+                          </span>
                         </div>
                       </div>
                     )}
@@ -2813,23 +3331,34 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                                     type="button"
                                     onClick={() => {
                                       const tag = selectedLeadTags[0] || leadTags[0]?.name || 'Campaign Leads';
-                                      addLeads(
-                                        validPasted.map(item => ({
-                                          name: item.name,
-                                          email: item.email,
-                                          company: item.company,
-                                          title: 'Decision Maker',
-                                          tags: [tag],
-                                        })),
-                                        tag
+                                      const nowTs = Date.now();
+                                      const leadsWithIds = validPasted.map((item, idx) => ({
+                                        id: `lead-wiz-${nowTs}-${idx}`,
+                                        name: item.name,
+                                        email: item.email,
+                                        company: item.company,
+                                        title: 'Decision Maker',
+                                        tags: [tag],
+                                      }));
+                                      const createdOrUpdated = addLeads(leadsWithIds, tag) || [];
+                                      const pastedEmailSet = new Set(validPasted.map(i => i.email.trim().toLowerCase()));
+                                      const existingMatchingIds = activeLeads
+                                        .filter(l => pastedEmailSet.has((l.email || '').trim().toLowerCase()))
+                                        .map(l => l.id);
+                                      const returnedIds = createdOrUpdated.map(l => l.id);
+                                      const newIds = leadsWithIds.map(l => l.id);
+                                      setSelectedLeadIds(prev =>
+                                        Array.from(new Set([...returnedIds, ...newIds, ...existingMatchingIds, ...prev]))
                                       );
+                                      setStepValidationError('');
                                       setWizardPasteText('');
                                       setWizardPastedItems([]);
                                       setShowWizardPasteBox(false);
+                                      showTempWizardNotice(`✓ Added & enrolled ${validPasted.length} verified lead(s) into this campaign`);
                                     }}
                                     className="px-3 py-1 rounded-lg bg-emerald-500 text-slate-950 font-extrabold text-[10px] cursor-pointer"
                                   >
-                                    + Add {validPasted.length} Verified Leads
+                                    + Add & Select {validPasted.length} Verified Leads
                                   </button>
                                 )}
                               </div>
@@ -3092,13 +3621,18 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                             </div>
 
                             <div className="shrink-0 text-right">
-                              <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
-                                lead.daysAgo === 0
-                                  ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/30'
-                                  : 'bg-slate-800 text-slate-400 border-slate-700'
-                              }`}>
-                                {lead.daysAgo === 0 ? 'Active today' : `${lead.daysAgo}d inactive`}
-                              </span>
+                              {(() => {
+                                const inactiveDays = getLeadInactiveDays(lead);
+                                return (
+                                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+                                    inactiveDays === 0
+                                      ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/30'
+                                      : 'bg-slate-800 text-slate-400 border border-slate-700'
+                                  }`}>
+                                    {inactiveDays === 0 ? 'Active today' : `${inactiveDays}d inactive`}
+                                  </span>
+                                );
+                              })()}
                             </div>
                           </div>
                         );
@@ -3121,7 +3655,18 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => setShowCreateTemplateInWizard(true)}
+                          onClick={() => {
+                            if (selectedTemplateCat !== 'all') {
+                              const foundCat = templateCategories.find(
+                                c => c.id === selectedTemplateCat || c.name === selectedTemplateCat
+                              );
+                              if (foundCat) setNewTmplCategory(foundCat.name);
+                            } else if (templateCategories[0]) {
+                              setNewTmplCategory(templateCategories[0].name);
+                            }
+                            setNewTmplTargetStepIdx(activeTemplateTargetStep);
+                            setShowCreateTemplateInWizard(true);
+                          }}
                           className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-extrabold text-[10px] flex items-center gap-1 cursor-pointer"
                         >
                           <Plus className="w-3 h-3" />
@@ -3158,20 +3703,31 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                           selectedTemplateCat === 'all' ? 'bg-cyan-500 text-black' : 'bg-slate-900 text-slate-400 border border-slate-800'
                         }`}
                       >
-                        All Categories ({emailTemplates.length})
+                        All Categories ({activeEmailTemplates.length})
                       </button>
-                      {templateCategories.map(cat => (
-                        <button
-                          key={cat.id}
-                          type="button"
-                          onClick={() => setSelectedTemplateCat(cat.id)}
-                          className={`px-2.5 py-1 rounded-lg font-bold transition whitespace-nowrap cursor-pointer ${
-                            selectedTemplateCat === cat.id ? 'bg-cyan-500 text-black' : 'bg-slate-900 text-slate-300 border border-slate-800'
-                          }`}
-                        >
-                          {cat.label}
-                        </button>
-                      ))}
+                      {templateCategories.map(cat => {
+                        const catCount = activeEmailTemplates.filter(t => {
+                          const tc = (t.category || '').toLowerCase().trim();
+                          return (
+                            tc === cat.id.toLowerCase() ||
+                            tc === cat.name.toLowerCase() ||
+                            tc === cat.label.toLowerCase() ||
+                            tc.replace(/[\s_-]+/g, '_') === cat.name.toLowerCase().replace(/[\s_-]+/g, '_')
+                          );
+                        }).length;
+                        return (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => setSelectedTemplateCat(cat.id)}
+                            className={`px-2.5 py-1 rounded-lg font-bold transition whitespace-nowrap cursor-pointer ${
+                              selectedTemplateCat === cat.id ? 'bg-cyan-500 text-black' : 'bg-slate-900 text-slate-300 border border-slate-800'
+                            }`}
+                          >
+                            {cat.label} ({catCount})
+                          </button>
+                        );
+                      })}
                     </div>
 
                     {/* Template Tag Filter Chips (Explicit User Request) */}
@@ -3217,7 +3773,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                           return (
                             <div
                               key={tmpl.id}
-                              onClick={() => handleApplyTemplate(tmpl, 0)}
+                              onClick={() => handleApplyTemplate(tmpl, activeTemplateTargetStep)}
                               className={`p-3 rounded-2xl flex flex-col justify-between gap-2 transition group cursor-pointer ${
                                 isCurrentlyActive
                                   ? 'bg-cyan-950/50 border-2 border-cyan-400 shadow-lg shadow-cyan-500/20'
@@ -3257,37 +3813,32 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                                 )}
                               </div>
 
-                              <div className="flex items-center justify-end gap-1.5 pt-2 border-t border-slate-800/80">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleApplyTemplate(tmpl, 0);
-                                  }}
-                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition shadow-sm ${
-                                    isCurrentlyActive && activeStepNum === 1
-                                      ? 'bg-cyan-500 text-black font-extrabold'
-                                      : 'bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-700/60'
-                                  }`}
-                                >
-                                  {isCurrentlyActive && activeStepNum === 1 ? '✓ Active in Step 1' : 'Insert into Step 1'}
-                                </button>
-                                {wizardSteps.length > 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleApplyTemplate(tmpl, 1);
-                                    }}
-                                    className={`px-2 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition ${
-                                      isCurrentlyActive && activeStepNum === 2
-                                        ? 'bg-cyan-500 text-black font-extrabold'
-                                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
-                                    }`}
-                                  >
-                                    {isCurrentlyActive && activeStepNum === 2 ? '✓ Active in Step 2' : 'Insert into Step 2'}
-                                  </button>
-                                )}
+                              <div className="flex items-center justify-end gap-1.5 pt-2 border-t border-slate-800/80 flex-wrap">
+                                {wizardSteps.map((stItem, stIdx) => {
+                                  const isThisStepActive = appliedTemplates[stIdx]?.id === tmpl.id;
+                                  return (
+                                    <button
+                                      key={stIdx}
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setActiveTemplateTargetStep(stIdx);
+                                        handleApplyTemplate(tmpl, stIdx);
+                                      }}
+                                      className={`px-2 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition shadow-sm ${
+                                        isThisStepActive
+                                          ? 'bg-cyan-500 text-black font-extrabold'
+                                          : stIdx === 0
+                                          ? 'bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-700/60'
+                                          : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                                      }`}
+                                    >
+                                      {isThisStepActive
+                                        ? `✓ Active in Step ${stItem.stepNumber}`
+                                        : `Insert → Step ${stItem.stepNumber}`}
+                                    </button>
+                                  );
+                                })}
                               </div>
                             </div>
                           );
@@ -3315,19 +3866,40 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                     {wizardSteps.map((step, idx) => (
                       <div
                         key={idx}
-                        className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3 relative"
+                        onClick={() => setActiveTemplateTargetStep(idx)}
+                        className={`p-4 rounded-2xl bg-slate-900/90 border space-y-3 relative transition ${
+                          activeTemplateTargetStep === idx
+                            ? 'border-cyan-500/60 shadow-lg shadow-cyan-950/30'
+                            : 'border-slate-800'
+                        }`}
                       >
                         <div className="flex items-center justify-between flex-wrap gap-2">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="w-5 h-5 rounded-full bg-cyan-500 text-black font-extrabold text-[11px] flex items-center justify-center">
                               {step.stepNumber}
                             </span>
                             <span className="font-bold text-xs text-slate-200">
-                              {idx === 0 ? 'Initial Outreach Email' : `Follow-up Step ${step.stepNumber} (After ${step.delayDays} days)`}
+                              {idx === 0 ? 'Initial Outreach Email (Day 0)' : `Follow-up Step ${step.stepNumber}`}
                             </span>
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPreviewStepIndices(prev => ({ ...prev, [idx]: !prev[idx] }));
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer flex items-center gap-1 ${
+                                previewStepIndices[idx]
+                                  ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-extrabold'
+                                  : 'bg-slate-950 text-emerald-300 border-emerald-500/40 hover:bg-emerald-950/40'
+                              }`}
+                            >
+                              <Eye className="w-3 h-3" />
+                              <span>{previewStepIndices[idx] ? 'Edit Template' : 'Preview as Lead'}</span>
+                            </button>
+
                             {/* Direct Template Loader Dropdown for this step */}
                             <select
                               value={appliedTemplates[idx]?.id || ''}
@@ -3350,7 +3922,11 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                             {idx > 0 && (
                               <button
                                 type="button"
-                                onClick={() => handleRemoveStep(idx)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRemoveStep(idx);
+                                }}
+                                title="Remove Follow-up Step"
                                 className="text-slate-500 hover:text-rose-400 transition cursor-pointer p-1"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -3358,6 +3934,54 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                             )}
                           </div>
                         </div>
+
+                        {/* Follow-up Wait Days & Trigger Condition Configurator (for Step 2+) */}
+                        {idx > 0 && (
+                          <div className="p-2.5 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-wrap items-center justify-between gap-3 text-xs">
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                              <span className="text-slate-300 font-semibold">Wait</span>
+                              <input
+                                type="number"
+                                min={0}
+                                max={90}
+                                value={step.delayDays ?? 3}
+                                onChange={(e) => {
+                                  const raw = Number(e.target.value);
+                                  const days = Number.isNaN(raw) ? 3 : Math.max(0, Math.min(90, raw));
+                                  setWizardSteps(prev =>
+                                    prev.map((s, i) => (i === idx ? { ...s, delayDays: days } : s))
+                                  );
+                                }}
+                                className="w-14 bg-slate-900 border border-purple-500/40 rounded-lg px-2 py-1 text-center font-mono font-bold text-purple-300 focus:outline-none focus:border-purple-400"
+                              />
+                              <span className="text-slate-300 font-semibold">days after previous step</span>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-400 text-[11px]">Condition:</span>
+                              <select
+                                value={step.triggerCondition || 'no_reply_7d'}
+                                onChange={(e) => {
+                                  const cond = e.target.value as any;
+                                  setWizardSteps(prev =>
+                                    prev.map((s, i) => (i === idx ? { ...s, triggerCondition: cond } : s))
+                                  );
+                                }}
+                                className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-[11px] font-bold text-cyan-300 focus:outline-none focus:border-cyan-500"
+                              >
+                                <option value="no_reply_7d">If recipient has not replied (7d+)</option>
+                                <option value="no_reply_14d">If recipient has not replied (14d+)</option>
+                                <option value="no_reply_30d">If recipient has not replied (30d+)</option>
+                                <option value="opened_no_reply">If email opened &amp; no reply</option>
+                                <option value="not_opened_7d">If email not opened (7d+)</option>
+                                <option value="not_opened_14d">If email not opened (14d+)</option>
+                                <option value="not_opened_30d">If email not opened (30d+)</option>
+                                <option value="all">Always send to all leads</option>
+                              </select>
+                            </div>
+                          </div>
+                        )}
 
                         {/* Active Attached Template Banner */}
                         {appliedTemplates[idx] && (
@@ -3383,33 +4007,94 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                           </div>
                         )}
 
-                        <div className="space-y-1">
-                          <label className="block text-[11px] font-semibold text-slate-400">Subject Line *</label>
-                          <input
-                            type="text"
-                            required
-                            value={step.subject}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setWizardSteps(prev => prev.map((s, i) => i === idx ? { ...s, subject: val } : s));
-                            }}
-                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-medium"
-                          />
-                        </div>
+                        {previewStepIndices[idx] ? (
+                          <div className="p-3.5 rounded-xl bg-emerald-950/20 border border-emerald-500/40 space-y-2 text-xs animate-in fade-in">
+                            <div className="flex items-center justify-between text-[11px] text-emerald-300 font-bold border-b border-emerald-500/20 pb-1.5">
+                              <span>
+                                👁️ Live Preview (Rendered for:{' '}
+                                {wizardAudienceHealth.enrolledLeads[0]?.name || activeLeads[0]?.name || 'Sample Lead'})
+                              </span>
+                              <span className="font-mono text-[10px] text-emerald-400">Variables Resolved</span>
+                            </div>
+                            <div className="font-bold text-slate-100">
+                              <span className="text-slate-400 font-normal mr-1.5">Subject:</span>
+                              {renderPreviewTextForStep(step.subject)}
+                            </div>
+                            <div className="whitespace-pre-wrap text-slate-200 bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 leading-relaxed font-sans">
+                              {renderPreviewTextForStep(step.body)}
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between flex-wrap gap-1">
+                                <label className="block text-[11px] font-semibold text-slate-400">Subject Line *</label>
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  {['{{first_name}}', '{{company}}', '{{name}}'].map(tok => (
+                                    <button
+                                      key={tok}
+                                      type="button"
+                                      onClick={() => insertTokenIntoStep(idx, 'subject', tok)}
+                                      className="px-1.5 py-0.5 rounded bg-slate-950 hover:bg-cyan-950 text-[10px] font-mono text-cyan-300 border border-slate-800 hover:border-cyan-500/40 cursor-pointer"
+                                      title={`Insert ${tok} into Subject`}
+                                    >
+                                      +{tok}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <input
+                                type="text"
+                                required
+                                value={step.subject}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setWizardSteps(prev => prev.map((s, i) => i === idx ? { ...s, subject: val } : s));
+                                }}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-medium"
+                              />
+                            </div>
 
-                        <div className="space-y-1">
-                          <label className="block text-[11px] font-semibold text-slate-400">Body Content *</label>
-                          <textarea
-                            rows={4}
-                            required
-                            value={step.body}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setWizardSteps(prev => prev.map((s, i) => i === idx ? { ...s, body: val } : s));
-                            }}
-                            className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-sans"
-                          />
-                        </div>
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between flex-wrap gap-1">
+                                <label className="block text-[11px] font-semibold text-slate-400">Body Content *</label>
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  {[
+                                    '{{first_name}}',
+                                    '{{name}}',
+                                    '{{company}}',
+                                    '{{website}}',
+                                    '{{title}}',
+                                    '{{email}}',
+                                    '{{niche}}',
+                                    '{{icebreaker}}',
+                                    '{{sender_name}}'
+                                  ].map(tok => (
+                                    <button
+                                      key={tok}
+                                      type="button"
+                                      onClick={() => insertTokenIntoStep(idx, 'body', tok)}
+                                      className="px-1.5 py-0.5 rounded bg-slate-950 hover:bg-cyan-950 text-[10px] font-mono text-cyan-300 border border-slate-800 hover:border-cyan-500/40 cursor-pointer"
+                                      title={`Insert ${tok} into Body`}
+                                    >
+                                      +{tok}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <textarea
+                                rows={4}
+                                required
+                                value={step.body}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setWizardSteps(prev => prev.map((s, i) => i === idx ? { ...s, body: val } : s));
+                                }}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-sans"
+                              />
+                            </div>
+                          </>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -3597,44 +4282,208 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
               {wizardStep === 6 && (
                 <div className="space-y-4 animate-in fade-in">
                   <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4">
-                    <h3 className="text-xs font-extrabold text-slate-200 uppercase tracking-wider">
-                      {editingCampaignId ? 'Campaign Update Summary' : 'Campaign Summary & Launch Confirmation'}
-                    </h3>
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <h3 className="text-xs font-extrabold text-slate-200 uppercase tracking-wider">
+                        {editingCampaignId ? 'Campaign Update Summary' : 'Campaign Summary & Launch Confirmation'}
+                      </h3>
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-extrabold">
+                        ✓ All 5 Steps Verified
+                      </span>
+                    </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Campaign Title</span>
-                        <span className="font-bold text-slate-200">{campaignTitle}</span>
+                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-slate-500 text-[10px] block">Campaign Title &amp; Niche</span>
+                          <span className="font-bold text-slate-200 block truncate">{campaignTitle}</span>
+                          <span className="text-[11px] text-slate-400 block mt-0.5 truncate">{campaignNiche}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setWizardStep(1)}
+                          className="text-[10px] text-cyan-400 hover:underline font-bold shrink-0 cursor-pointer"
+                        >
+                          Edit
+                        </button>
                       </div>
-                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Recipients Enrolled</span>
-                        <span className="font-bold text-cyan-400">{selectedLeadIds.length} Leads</span>
+                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-slate-500 text-[10px] block">Recipients Enrolled</span>
+                          <span className="font-bold text-cyan-400 block">
+                            {wizardAudienceHealth.enrolledLeads.length} Active Leads
+                          </span>
+                          {wizardAudienceHealth.brokenEnrolled.length > 0 && (
+                            <span className="text-[10px] text-rose-400 block mt-0.5">
+                              ⚠️ {wizardAudienceHealth.brokenEnrolled.length} invalid email(s) detected
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setWizardStep(3)}
+                          className="text-[10px] text-cyan-400 hover:underline font-bold shrink-0 cursor-pointer"
+                        >
+                          Edit
+                        </button>
                       </div>
-                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Connected Outbound SMTP Relay</span>
-                        <span className="font-bold text-emerald-400">
-                          {selectedSmtpIds.length > 1
-                            ? `⚡ Round-Robin (${selectedSmtpIds.length} Relays)`
-                            : (() => {
-                                const s = activeSmtps.find(a => a.id === (selectedSmtpIds[0] || selectedSmtpId)) || activeSmtps[0];
-                                return s ? `${s.name} (${s.fromEmail || s.username})` : 'No Relay Selected';
-                              })()}
+                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-slate-500 text-[10px] block">Connected Outbound SMTP Relay</span>
+                          <span className="font-bold text-emerald-400 block truncate">
+                            {selectedSmtpIds.length > 1
+                              ? `⚡ Smart Round-Robin (${selectedSmtpIds.length} Relays)`
+                              : (() => {
+                                  const s = activeSmtps.find(a => a.id === (selectedSmtpIds[0] || selectedSmtpId)) || activeSmtps[0];
+                                  return s ? `${s.name} (${s.fromEmail || s.username})` : 'No Relay Selected';
+                                })()}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setWizardStep(2)}
+                          className="text-[10px] text-cyan-400 hover:underline font-bold shrink-0 cursor-pointer"
+                        >
+                          Edit
+                        </button>
+                      </div>
+                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-slate-500 text-[10px] block">Sender Identity</span>
+                          <span className="font-bold text-slate-200 block truncate">{senderName} ({senderEmail})</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setWizardStep(1)}
+                          className="text-[10px] text-cyan-400 hover:underline font-bold shrink-0 cursor-pointer"
+                        >
+                          Edit
+                        </button>
+                      </div>
+                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-slate-500 text-[10px] block">Dispatch Mode &amp; Schedule</span>
+                          <span className="font-bold text-purple-400 block truncate">
+                            {sendMode === 'scheduled'
+                              ? `📅 Scheduled: ${scheduleDate} (${scheduleStartTime}–${scheduleEndTime})`
+                              : '⚡ Instant Live Dispatch'}
+                          </span>
+                          <span className="text-[10px] text-slate-400 block mt-0.5">
+                            Delay: {sendingInterval}s between emails {enableJitter ? '(+ Human Jitter)' : ''}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setWizardStep(5)}
+                          className="text-[10px] text-cyan-400 hover:underline font-bold shrink-0 cursor-pointer"
+                        >
+                          Edit
+                        </button>
+                      </div>
+                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-slate-500 text-[10px] block">Sequence Touchpoints</span>
+                          <span className="font-bold text-cyan-300 block">
+                            {wizardSteps.length} Step{wizardSteps.length > 1 ? 's' : ''} Configured
+                          </span>
+                          <span className="text-[10px] text-slate-400 block mt-0.5 truncate">
+                            Step 1: &ldquo;{wizardSteps[0]?.subject || 'Outreach'}&rdquo;
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setWizardStep(4)}
+                          className="text-[10px] text-cyan-400 hover:underline font-bold shrink-0 cursor-pointer"
+                        >
+                          Edit
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Sequence Steps Overview in Step 6 */}
+                    <div className="space-y-2 pt-2 border-t border-slate-800/80">
+                      <div className="text-[11px] font-extrabold text-slate-300 uppercase">
+                        Sequence Touchpoints &amp; Personalized Preview
+                      </div>
+                      <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                        {wizardSteps.map((st, sIdx) => (
+                          <div key={sIdx} className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-extrabold text-cyan-300">
+                                Step {st.stepNumber}: {sIdx === 0 ? 'Initial Email (Day 0)' : `Follow-Up (+${st.delayDays}d)`}
+                              </span>
+                              <span className="text-[10px] font-mono text-slate-400">
+                                {sIdx === 0
+                                  ? 'All enrolled leads'
+                                  : st.triggerCondition === 'opened_no_reply'
+                                  ? 'If opened & no reply'
+                                  : st.triggerCondition === 'all'
+                                  ? 'Always send'
+                                  : 'If no reply'}
+                              </span>
+                            </div>
+                            <div className="font-semibold text-slate-200 truncate">
+                              Subject: {renderPreviewTextForStep(st.subject)}
+                            </div>
+                            <div className="text-[11px] text-slate-400 line-clamp-2 whitespace-pre-line">
+                              {renderPreviewTextForStep(st.body)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Send Test Email Box inside Step 6 */}
+                    <div className="p-3.5 rounded-2xl bg-cyan-950/20 border border-cyan-500/30 space-y-2.5">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <span className="text-xs font-extrabold text-cyan-300 flex items-center gap-1.5">
+                          <Send className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Send Test Email Before Launch (Optional)</span>
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          Tests your selected SMTP relay &amp; chosen sequence step
                         </span>
                       </div>
-                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Sender Identity</span>
-                        <span className="font-bold text-slate-200">{senderName} ({senderEmail})</span>
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                        {wizardSteps.length > 1 && (
+                          <select
+                            value={testStepIndex}
+                            onChange={(e) => setTestStepIndex(Number(e.target.value))}
+                            className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-cyan-300 font-bold focus:outline-none focus:border-cyan-500 shrink-0"
+                          >
+                            {wizardSteps.map((st, idx) => (
+                              <option key={idx} value={idx}>
+                                Test Step {st.stepNumber || idx + 1}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <input
+                          type="email"
+                          value={testRecipientEmail}
+                          onChange={(e) => setTestRecipientEmail(e.target.value)}
+                          placeholder="Enter email address to receive test..."
+                          className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-cyan-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleSendWizardTestEmail}
+                          disabled={isSendingTestEmail}
+                          className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-extrabold text-xs cursor-pointer shrink-0 transition"
+                        >
+                          {isSendingTestEmail ? 'Sending Test...' : '📩 Send Test Email'}
+                        </button>
                       </div>
-                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Sending Delay Interval</span>
-                        <span className="font-bold text-purple-400">{sendingInterval}s between emails</span>
-                      </div>
-                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Sequence Touchpoints</span>
-                        <span className="font-bold text-cyan-300">
-                          {wizardSteps.length} Step{wizardSteps.length > 1 ? 's' : ''} — &ldquo;{wizardSteps[0]?.subject || 'Outreach'}&rdquo;
-                        </span>
-                      </div>
+                      {testEmailResult && (
+                        <div
+                          className={`p-2 rounded-xl text-xs font-semibold ${
+                            testEmailResult.ok
+                              ? 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-300'
+                              : 'bg-rose-950/60 border border-rose-500/40 text-rose-300'
+                          }`}
+                        >
+                          {testEmailResult.message}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -3684,7 +4533,24 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                     onClick={() => handleLaunchCampaign(false)}
                     className="px-4 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-extrabold text-xs transition cursor-pointer flex items-center gap-1.5"
                   >
-                    <span>{editingCampaignId ? '💾 Save Changes' : '🚀 Save & Launch Now'}</span>
+                    <span>
+                      {editingCampaignId
+                        ? '💾 Save Changes'
+                        : sendMode === 'scheduled'
+                        ? '📅 Save & Schedule'
+                        : '🚀 Save & Launch Now'}
+                    </span>
+                  </button>
+                )}
+
+                {wizardStep === 6 && !editingCampaignId && sendMode === 'scheduled' && (
+                  <button
+                    type="button"
+                    onClick={() => handleLaunchCampaign(true)}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center gap-1.5"
+                    title="Bypass schedule window and start sending immediately"
+                  >
+                    <span>⚡ Launch Immediately Now</span>
                   </button>
                 )}
 
@@ -3700,8 +4566,12 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                   className="px-5 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 hover:from-blue-500 hover:via-cyan-400 hover:to-indigo-500 text-white font-extrabold text-xs shadow-lg shadow-cyan-500/25 transition cursor-pointer flex items-center gap-1.5"
                 >
                   <span>
-                    {wizardStep === 6 
-                      ? (editingCampaignId ? '💾 Save & Update Campaign' : '🚀 Launch & Start Dispatch') 
+                    {wizardStep === 6
+                      ? editingCampaignId
+                        ? '💾 Save & Update Campaign'
+                        : sendMode === 'scheduled'
+                        ? '📅 Save & Schedule Campaign'
+                        : '🚀 Launch & Start Dispatch'
                       : 'Next Step →'}
                   </span>
                 </button>
@@ -3888,7 +4758,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="space-y-1">
                   <label className="block font-bold text-slate-300">Category</label>
                   <select
@@ -3898,6 +4768,21 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                   >
                     {templateCategories.map(cat => (
                       <option key={cat.id} value={cat.name}>{cat.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block font-bold text-slate-300">Apply to Sequence Step</label>
+                  <select
+                    value={newTmplTargetStepIdx}
+                    onChange={(e) => setNewTmplTargetStepIdx(Number(e.target.value))}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-cyan-300 font-bold focus:outline-none focus:border-cyan-500"
+                  >
+                    {wizardSteps.map((st, idx) => (
+                      <option key={idx} value={idx}>
+                        Step {st.stepNumber || idx + 1} {idx === 0 ? '(Initial)' : '(Follow-up)'}
+                      </option>
                     ))}
                   </select>
                 </div>
