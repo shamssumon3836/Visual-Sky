@@ -142,13 +142,11 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
     },
     {
       id: 'drive_storage',
-      label: 'Google Drive Storage',
-      description: 'Share/change Drive folder link & attach files',
+      label: 'Google Drive',
+      description: 'Google Drive folder link for email attachments',
       icon: FolderOpen,
-      badge: driveStorageSettings?.folderUrl ? '✓ Linked' : 'Set Link',
-      badgeColor: driveStorageSettings?.folderUrl
-        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
-        : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+      badge: driveStorageSettings?.folderUrl ? '✓ Linked' : undefined,
+      badgeColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
     },
     {
       id: 'sent',

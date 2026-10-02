@@ -70,12 +70,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
     },
     {
       id: 'drive_storage',
-      label: 'Google Drive Storage',
+      label: 'Google Drive',
       icon: FolderOpen,
-      badge: driveStorageSettings?.folderUrl ? '✓ Linked' : '0 KB Host',
-      badgeColor: driveStorageSettings?.folderUrl
-        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
-        : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+      badge: driveStorageSettings?.folderUrl ? '✓ Linked' : undefined,
+      badgeColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
     },
     {
       id: 'smtp',
@@ -232,15 +230,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
             <span>{Number(currentUser.quotaUsed || 0).toLocaleString()} Sent</span>
             <span>{Number(currentUser.quotaLimit || 1500).toLocaleString()} Quota</span>
           </div>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('drive_storage')}
-            className="w-full mt-1 py-2 px-3 rounded-xl bg-emerald-600/25 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-200 text-[11px] font-extrabold flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap"
-          >
-            <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
-            <span>{driveStorageSettings?.folderUrl ? '☁️ Change Drive Link' : '☁️ Add Google Drive Link'}</span>
-          </button>
 
           {onOpenBilling && (
             <button
