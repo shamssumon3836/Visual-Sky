@@ -845,6 +845,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
             <img
               src={currentUser.avatar}
               alt={currentUser.name}
+              loading="lazy"
+              decoding="async"
               className="w-7 h-7 rounded-lg object-cover ring-1 ring-cyan-500/50"
             />
             <div className="hidden xl:flex flex-col text-left">

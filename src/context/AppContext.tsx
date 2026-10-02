@@ -1367,24 +1367,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   });
 
+  const runAfterWindowLoad = (fn: () => void, delayMs = 120): (() => void) => {
+    if (typeof window === 'undefined') return () => {};
+    let timerId: any = null;
+    let fallbackTimerId: any = null;
+    let executed = false;
+    const trigger = () => {
+      if (executed) return;
+      executed = true;
+      if (fallbackTimerId) clearTimeout(fallbackTimerId);
+      timerId = setTimeout(fn, delayMs);
+    };
+    if (document.readyState === 'complete') {
+      trigger();
+      return () => {
+        if (timerId) clearTimeout(timerId);
+      };
+    }
+    window.addEventListener('load', trigger, { once: true });
+    fallbackTimerId = setTimeout(trigger, 350);
+    return () => {
+      window.removeEventListener('load', trigger);
+      if (timerId) clearTimeout(timerId);
+      if (fallbackTimerId) clearTimeout(fallbackTimerId);
+    };
+  };
+
   useEffect(() => {
-    fetch('/api/drive-storage/settings')
-      .then(r => safeParseResponse(r, 'Drive settings fetch failed'))
-      .then(parsed => {
-        const remote = parsed.data?.settings;
-        if (parsed.ok && remote && remote.folderUrl) {
-          setDriveStorageSettings(prev => {
-            if (prev.folderUrl && prev.updatedAt && remote.updatedAt && prev.updatedAt > remote.updatedAt) {
-              return prev;
-            }
-            try {
-              localStorage.setItem('visualsky_drive_storage_settings', JSON.stringify(remote));
-            } catch {}
-            return remote;
-          });
-        }
-      })
-      .catch(() => {});
+    return runAfterWindowLoad(() => {
+      fetch('/api/drive-storage/settings')
+        .then(r => safeParseResponse(r, 'Drive settings fetch failed'))
+        .then(parsed => {
+          const remote = parsed.data?.settings;
+          if (parsed.ok && remote && remote.folderUrl) {
+            setDriveStorageSettings(prev => {
+              if (prev.folderUrl && prev.updatedAt && remote.updatedAt && prev.updatedAt > remote.updatedAt) {
+                return prev;
+              }
+              try {
+                localStorage.setItem('visualsky_drive_storage_settings', JSON.stringify(remote));
+              } catch {}
+              return remote;
+            });
+          }
+        })
+        .catch(() => {});
+    }, 200);
   }, []);
 
   const updateDriveStorageSettings = (updates: Partial<GoogleDriveStorageSettings>) => {
@@ -2048,29 +2076,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   })());
 
-  // Sync all users and initial workspace on mount
+  // Sync all users and initial workspace on mount (deferred until after window.onload so hard reload completes immediately)
   const registryLoadedRef = useRef<boolean>(false);
   useEffect(() => {
-    fetch('/api/users/registry')
-      .then(r => safeParseResponse(r, 'Failed to fetch registry'))
-      .then(parsed => {
-        const d = parsed.data || {};
-        if (parsed.ok && d.success && Array.isArray(d.users)) {
-          const cleanServerUsers = filterLiveUsersClient(d.users);
-          setAllUsers(cleanServerUsers);
-          try {
-            localStorage.setItem('visualsky_users', JSON.stringify(cleanServerUsers));
-          } catch {}
-        }
-        registryLoadedRef.current = true;
-      })
-      .catch(() => {
-        registryLoadedRef.current = true;
-      });
+    return runAfterWindowLoad(() => {
+      fetch('/api/users/registry')
+        .then(r => safeParseResponse(r, 'Failed to fetch registry'))
+        .then(parsed => {
+          const d = parsed.data || {};
+          if (parsed.ok && d.success && Array.isArray(d.users)) {
+            const cleanServerUsers = filterLiveUsersClient(d.users);
+            setAllUsers(cleanServerUsers);
+            try {
+              localStorage.setItem('visualsky_users', JSON.stringify(cleanServerUsers));
+            } catch {}
+          }
+          registryLoadedRef.current = true;
+        })
+        .catch(() => {
+          registryLoadedRef.current = true;
+        });
 
-    if (isAuthenticated && currentUser?.email) {
-      loadUserWorkspace(currentUser.email, currentUser.id || currentUser.supabaseId);
-    }
+      if (isAuthenticated && currentUser?.email) {
+        loadUserWorkspace(currentUser.email, currentUser.id || currentUser.supabaseId);
+      }
+    }, 120);
   }, []);
 
   // Sync to LocalStorage (skip initial mount write since state was just hydrated from localStorage)
@@ -2159,49 +2189,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .catch(() => {});
     };
 
-    // Real-time Firestore WebSocket listener (< 150ms cross-device & cross-browser sync)
-    const unsubscribeFirestore = subscribeToUserWorkspace(
-      { userId: cleanUserId, email: cleanEmail },
-      (remoteData) => {
-        if (Date.now() - lastLocalMutationMsRef.current < 1800) return;
-        applyRemoteWorkspaceSnapshot(remoteData, true);
-      }
-    );
-
-    const unsubscribeAiCopilot = subscribeToAiCopilotSessions(
-      { userId: cleanUserId, email: cleanEmail },
-      (aiData) => {
-        if (Date.now() - lastLocalMutationMsRef.current < 1500) return;
-        if (Array.isArray(aiData.permanentlyDeletedIds) && aiData.permanentlyDeletedIds.length > 0) {
-          recordPermanentlyDeletedIds(aiData.permanentlyDeletedIds.map(String));
+    // Real-time Firestore WebSocket listener (started after window.onload so initial page reload spinner never stalls)
+    let unsubscribeFirestore = () => {};
+    let unsubscribeAiCopilot = () => {};
+    const cancelDeferredSubscribe = runAfterWindowLoad(() => {
+      unsubscribeFirestore = subscribeToUserWorkspace(
+        { userId: cleanUserId, email: cleanEmail },
+        (remoteData) => {
+          if (Date.now() - lastLocalMutationMsRef.current < 1800) return;
+          applyRemoteWorkspaceSnapshot(remoteData, true);
         }
-        const permDel = getPermanentlyDeletedSet();
-        const localList = Array.isArray(latestWorkspaceRef.current.aiChatSessions)
-          ? latestWorkspaceRef.current.aiChatSessions
-          : aiChatSessions;
-        const merged = mergeWorkspaceCollectionsById(aiData.aiChatSessions, localList, permDel).filter(
-          (s: any) => s && Array.isArray(s.messages) && s.messages.length > 0
-        );
-        if (merged.length > 0) {
-          setAiChatSessionsState(merged);
-          (latestWorkspaceRef.current as any).aiChatSessions = merged;
-          try {
-            localStorage.setItem('visualsky_ai_chat_sessions', JSON.stringify(merged));
-            localStorage.setItem(`visualsky_ai_chat_sessions_${cleanEmail}`, JSON.stringify(merged));
-          } catch {}
-          const nextActive =
-            aiData.aiActiveSessionId &&
-            aiData.aiActiveSessionId !== 'session-default' &&
-            merged.some((s: any) => s.id === aiData.aiActiveSessionId)
-              ? aiData.aiActiveSessionId
-              : merged.find((s: any) => !isUntouchedDefaultAiSession(s))?.id || merged[0]?.id;
-          if (nextActive) {
-            setAiActiveSessionIdState(nextActive);
-            (latestWorkspaceRef.current as any).aiActiveSessionId = nextActive;
+      );
+
+      unsubscribeAiCopilot = subscribeToAiCopilotSessions(
+        { userId: cleanUserId, email: cleanEmail },
+        (aiData) => {
+          if (Date.now() - lastLocalMutationMsRef.current < 1500) return;
+          if (Array.isArray(aiData.permanentlyDeletedIds) && aiData.permanentlyDeletedIds.length > 0) {
+            recordPermanentlyDeletedIds(aiData.permanentlyDeletedIds.map(String));
+          }
+          const permDel = getPermanentlyDeletedSet();
+          const localList = Array.isArray(latestWorkspaceRef.current.aiChatSessions)
+            ? latestWorkspaceRef.current.aiChatSessions
+            : aiChatSessions;
+          const merged = mergeWorkspaceCollectionsById(aiData.aiChatSessions, localList, permDel).filter(
+            (s: any) => s && Array.isArray(s.messages) && s.messages.length > 0
+          );
+          if (merged.length > 0) {
+            setAiChatSessionsState(merged);
+            (latestWorkspaceRef.current as any).aiChatSessions = merged;
+            try {
+              localStorage.setItem('visualsky_ai_chat_sessions', JSON.stringify(merged));
+              localStorage.setItem(`visualsky_ai_chat_sessions_${cleanEmail}`, JSON.stringify(merged));
+            } catch {}
+            const nextActive =
+              aiData.aiActiveSessionId &&
+              aiData.aiActiveSessionId !== 'session-default' &&
+              merged.some((s: any) => s.id === aiData.aiActiveSessionId)
+                ? aiData.aiActiveSessionId
+                : merged.find((s: any) => !isUntouchedDefaultAiSession(s))?.id || merged[0]?.id;
+            if (nextActive) {
+              setAiActiveSessionIdState(nextActive);
+              (latestWorkspaceRef.current as any).aiActiveSessionId = nextActive;
+            }
           }
         }
-      }
-    );
+      );
+    }, 180);
 
     const pollTimer = setInterval(syncFromRemote, 2500);
 
@@ -2234,6 +2268,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     window.addEventListener('storage', handleStorageEvent);
 
     return () => {
+      cancelDeferredSubscribe();
       unsubscribeFirestore();
       unsubscribeAiCopilot();
       clearInterval(pollTimer);
@@ -2272,9 +2307,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
 
-    navigator.serviceWorker
-      .register('/sw.js')
-      .catch(() => {});
+    const cancelSwInit = runAfterWindowLoad(() => {
+      navigator.serviceWorker
+        .register('/sw.js')
+        .catch(() => {});
+    }, 500);
 
     const handleSwMessage = (event: MessageEvent) => {
       const msg = event.data;
@@ -2298,6 +2335,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     navigator.serviceWorker.addEventListener('message', handleSwMessage);
     return () => {
+      cancelSwInit();
       navigator.serviceWorker.removeEventListener('message', handleSwMessage);
     };
   }, []);

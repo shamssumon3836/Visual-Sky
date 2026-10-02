@@ -1,0 +1,31 @@
+<IfModule mod_headers.c>
+  Header append Vary Accept-Encoding
+</IfModule>
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE application/javascript text/javascript text/css text/html application/json image/svg+xml
+</IfModule>
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTP:Accept-Encoding} br
+  RewriteCond %{REQUEST_FILENAME}.br -f
+  RewriteRule ^(.+\.(js|css))$ $1.br [QSA,L]
+  RewriteCond %{HTTP:Accept-Encoding} gzip
+  RewriteCond %{REQUEST_FILENAME}.gz -f
+  RewriteRule ^(.+\.(js|css))$ $1.gz [QSA,L]
+</IfModule>
+<FilesMatch "\.js\.br$">
+  ForceType application/javascript
+  Header set Content-Encoding br
+</FilesMatch>
+<FilesMatch "\.js\.gz$">
+  ForceType application/javascript
+  Header set Content-Encoding gzip
+</FilesMatch>
+<FilesMatch "\.css\.br$">
+  ForceType text/css
+  Header set Content-Encoding br
+</FilesMatch>
+<FilesMatch "\.css\.gz$">
+  ForceType text/css
+  Header set Content-Encoding gzip
+</FilesMatch>

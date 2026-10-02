@@ -3053,94 +3053,11 @@ try {
   }
 } catch {
 }
-var lastBundleSyncCheck = 0;
-function ensureFreshPrebuiltBundle() {
-  const isDevTsx = Boolean(process.argv[1] && process.argv[1].endsWith("server.ts")) && process.env.NODE_ENV !== "production";
-  if (!isDevTsx) {
-    healCpanelGitRepo();
-    return;
-  }
-  const now = Date.now();
-  if (now - lastBundleSyncCheck < 1500) return;
-  lastBundleSyncCheck = now;
-  try {
-    const prebuiltAppJs = import_path.default.join(process.cwd(), "prebuilt", "app.js");
-    const prebuiltAppCss = import_path.default.join(process.cwd(), "prebuilt", "app.css");
-    const mainSrc = import_path.default.join(process.cwd(), "src", "main.tsx");
-    const watchedFiles = [
-      mainSrc,
-      import_path.default.join(process.cwd(), "src", "components", "auth", "AuthModal.tsx"),
-      import_path.default.join(process.cwd(), "src", "context", "AppContext.tsx"),
-      import_path.default.join(process.cwd(), "src", "lib", "workspaceSync.ts"),
-      import_path.default.join(process.cwd(), "src", "lib", "firebase.ts"),
-      import_path.default.join(process.cwd(), "src", "components", "ai", "GeminiAssistant.tsx"),
-      import_path.default.join(process.cwd(), "src", "components", "inbox", "SmartInbox.tsx"),
-      import_path.default.join(process.cwd(), "src", "components", "drive", "GoogleDriveStorageView.tsx"),
-      import_path.default.join(process.cwd(), "src", "utils", "attachmentFastCache.ts"),
-      import_path.default.join(process.cwd(), "src", "components", "campaigns", "CampaignManager.tsx"),
-      import_path.default.join(process.cwd(), "src", "components", "dashboard", "MainDashboard.tsx"),
-      import_path.default.join(process.cwd(), "src", "components", "trash", "TrashManager.tsx")
-    ];
-    if (!import_fs.default.existsSync(mainSrc)) return;
-    const bundleMtime = import_fs.default.existsSync(prebuiltAppJs) ? import_fs.default.statSync(prebuiltAppJs).mtimeMs : 0;
-    const srcMtime = Math.max(
-      ...watchedFiles.map((f) => import_fs.default.existsSync(f) ? import_fs.default.statSync(f).mtimeMs : 0)
-    );
-    if (srcMtime > bundleMtime + 1e3) {
-      const esbuild = require("esbuild");
-      esbuild.buildSync({
-        entryPoints: [mainSrc],
-        bundle: true,
-        minify: true,
-        format: "esm",
-        platform: "browser",
-        target: ["es2020"],
-        outfile: prebuiltAppJs,
-        loader: {
-          ".css": "empty",
-          ".svg": "dataurl",
-          ".png": "dataurl",
-          ".jpg": "dataurl",
-          ".jpeg": "dataurl",
-          ".gif": "dataurl",
-          ".woff": "dataurl",
-          ".woff2": "dataurl"
-        },
-        define: {
-          "process.env.NODE_ENV": '"production"',
-          "import.meta.env": JSON.stringify({
-            MODE: "production",
-            PROD: true,
-            DEV: false,
-            SSR: false,
-            VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || "",
-            VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY || ""
-          })
-        }
-      });
-      if (import_fs.default.existsSync(prebuiltAppCss) && import_fs.default.existsSync(prebuiltAppJs)) {
-        const extraPopupCss = "\n.vs-auth-popup-window{width:100%!important;max-width:420px!important;max-height:88vh!important;overflow-y:auto!important;margin:auto!important;border-radius:16px!important;}.vs-legal-popup-window{width:100%!important;max-width:460px!important;max-height:82vh!important;margin:auto!important;border-radius:16px!important;}\n";
-        const cssContent = import_fs.default.readFileSync(prebuiltAppCss, "utf8") + extraPopupCss;
-        const jsContent = import_fs.default.readFileSync(prebuiltAppJs, "utf8");
-        if (!jsContent.includes("vs-tailwind-inline")) {
-          const styleInjector = `(function(){if(typeof document!=='undefined'&&!document.getElementById('vs-tailwind-inline')){var s=document.createElement('style');s.id='vs-tailwind-inline';s.textContent=${JSON.stringify(
-            cssContent
-          )};document.head.appendChild(s);}})();
-`;
-          import_fs.default.writeFileSync(prebuiltAppJs, styleInjector + jsContent, "utf8");
-        }
-      }
-    }
-  } catch {
-  }
-}
 app.get("/api/health", (_req, res) => {
-  ensureFreshPrebuiltBundle();
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.json({ status: "ok", version: "20260928-v6", timestamp: (/* @__PURE__ */ new Date()).toISOString() });
 });
 app.get("/api/client-app.js", (_req, res) => {
-  ensureFreshPrebuiltBundle();
   res.setHeader("Content-Type", "application/javascript; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.sendFile(import_path.default.join(process.cwd(), "prebuilt", "app.js"));
@@ -6095,11 +6012,12 @@ async function startServer() {
   const prebuiltCandidate = import_path.default.join(process.cwd(), "prebuilt");
   const publicCandidate = import_path.default.join(process.cwd(), "public");
   const prebuiltAppJsPath = import_path.default.join(prebuiltCandidate, "app.js");
+  const prebuiltFirebaseJsPath = import_path.default.join(prebuiltCandidate, "firebase-runtime.js");
   const prebuiltAppCssPath = import_path.default.join(prebuiltCandidate, "app.css");
   const runtimeAppJsCandidate = import_path.default.join(DATA_DIR, "runtime-app.js");
   const isDevTsx = Boolean(process.argv[1] && process.argv[1].endsWith("server.ts")) && process.env.NODE_ENV !== "production";
   const isProdServer = !isDevTsx;
-  if (isDevTsx) {
+  if (isDevTsx && (!import_fs.default.existsSync(prebuiltAppJsPath) || !import_fs.default.existsSync(`${prebuiltAppJsPath}.br`))) {
     try {
       const cp = await import("child_process");
       cp.execSync("node scripts/sync-prebuilt.cjs", { cwd: process.cwd(), stdio: "inherit" });
@@ -6133,21 +6051,47 @@ async function startServer() {
       return cached;
     }
     const raw = import_fs.default.readFileSync(filePath);
+    const gzPath = `${filePath}.gz`;
+    const brPath = `${filePath}.br`;
+    let gzip;
+    let br;
+    try {
+      if (import_fs.default.existsSync(gzPath) && import_fs.default.statSync(gzPath).mtimeMs >= mtimeMs) {
+        gzip = import_fs.default.readFileSync(gzPath);
+      } else {
+        gzip = import_zlib.default.gzipSync(raw, { level: 1 });
+      }
+    } catch {
+      gzip = raw;
+    }
+    try {
+      if (import_fs.default.existsSync(brPath) && import_fs.default.statSync(brPath).mtimeMs >= mtimeMs) {
+        br = import_fs.default.readFileSync(brPath);
+      } else {
+        br = import_zlib.default.brotliCompressSync(raw, {
+          params: { [import_zlib.default.constants.BROTLI_PARAM_QUALITY]: 1 }
+        });
+      }
+    } catch {
+      br = gzip;
+    }
     const etag = `"v-${Math.floor(mtimeMs).toString(36)}-${raw.byteLength.toString(36)}"`;
-    const entry = { mtimeMs, etag, raw };
+    const entry = { mtimeMs, etag, raw, gzip, br };
     memoryAssetCache.set(filePath, entry);
     return entry;
   };
   try {
     getCachedAsset(getActiveAppJsPath());
+    getCachedAsset(prebuiltFirebaseJsPath);
     getCachedAsset(prebuiltAppCssPath);
   } catch {
   }
   const getDynamicAssetVersion = () => {
     try {
       const targetJs = getActiveAppJsPath();
-      if (import_fs.default.existsSync(targetJs)) {
-        return Math.floor(import_fs.default.statSync(targetJs).mtimeMs).toString(36);
+      const cached = memoryAssetCache.get(targetJs) || getCachedAsset(targetJs);
+      if (cached) {
+        return Math.floor(cached.mtimeMs).toString(36);
       }
     } catch {
     }
@@ -6161,17 +6105,32 @@ async function startServer() {
       }
       res.setHeader("Content-Type", contentType);
       res.setHeader("ETag", asset.etag);
-      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Vary", "Accept-Encoding");
+      res.setHeader(
+        "Cache-Control",
+        req.query && req.query.v ? "public, max-age=31536000, immutable" : "public, max-age=0, must-revalidate"
+      );
       if (req.headers["if-none-match"] === asset.etag) {
         return res.status(304).end();
       }
+      const acceptEncoding = String(req.headers["accept-encoding"] || "");
+      if (acceptEncoding.includes("br") && asset.br && asset.br.byteLength < asset.raw.byteLength) {
+        res.setHeader("Content-Encoding", "br");
+        res.setHeader("Content-Length", String(asset.br.byteLength));
+        return res.status(200).end(asset.br);
+      }
+      if (acceptEncoding.includes("gzip") && asset.gzip && asset.gzip.byteLength < asset.raw.byteLength) {
+        res.setHeader("Content-Encoding", "gzip");
+        res.setHeader("Content-Length", String(asset.gzip.byteLength));
+        return res.status(200).end(asset.gzip);
+      }
+      res.setHeader("Content-Length", String(asset.raw.byteLength));
       return res.status(200).end(asset.raw);
     } catch {
       return res.sendFile(filePath);
     }
   };
   app.get("/prebuilt/app.js", (req, res) => {
-    ensureFreshPrebuiltBundle();
     return sendMemoryCachedAsset(
       req,
       res,
@@ -6179,13 +6138,23 @@ async function startServer() {
       "application/javascript; charset=utf-8"
     );
   });
+  app.get("/prebuilt/firebase-runtime.js", (req, res) => {
+    return sendMemoryCachedAsset(
+      req,
+      res,
+      prebuiltFirebaseJsPath,
+      "application/javascript; charset=utf-8"
+    );
+  });
   app.get("/prebuilt/app.css", (req, res) => {
     return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, "text/css; charset=utf-8");
   });
-  app.use("/prebuilt", import_express.default.static(prebuiltCandidate, { etag: true, maxAge: "1h" }));
+  app.use("/prebuilt", import_express.default.static(prebuiltCandidate, { etag: true, maxAge: "1y" }));
   if (import_fs.default.existsSync(publicCandidate)) {
-    app.use(import_express.default.static(publicCandidate, { index: false, etag: true, maxAge: "1h" }));
+    app.use(import_express.default.static(publicCandidate, { index: false, etag: true, maxAge: "1d" }));
   }
+  let cachedHtmlVersion = "";
+  let cachedHtmlString = "";
   const sendFreshIndexHtml = (res) => {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -6195,8 +6164,13 @@ async function startServer() {
     const htmlPath = import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "index.html")) ? import_path.default.join(prebuiltCandidate, "index.html") : import_fs.default.existsSync(import_path.default.join(distCandidate, "index.html")) ? import_path.default.join(distCandidate, "index.html") : import_path.default.join(process.cwd(), "index.html");
     try {
       const v = getDynamicAssetVersion();
+      if (cachedHtmlString && cachedHtmlVersion === v) {
+        return res.send(cachedHtmlString);
+      }
       let html = import_fs.default.readFileSync(htmlPath, "utf8");
       html = html.replace(/\/prebuilt\/app\.css(\?v=[^"']*)?/g, `/prebuilt/app.css?v=${v}`).replace(/\/prebuilt\/app\.js(\?v=[^"']*)?/g, `/prebuilt/app.js?v=${v}`);
+      cachedHtmlVersion = v;
+      cachedHtmlString = html;
       return res.send(html);
     } catch {
       return res.sendFile(htmlPath);

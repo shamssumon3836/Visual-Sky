@@ -1,16 +1,15 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 // Read environment variables as requested
-const supabaseUrl: string = (import.meta.env.VITE_SUPABASE_URL as string) || '';
-const supabaseAnonKey: string = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || '';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-export const isSupabaseConfigured = Boolean(
-  supabaseUrl && 
-  supabaseAnonKey && 
+export const isSupabaseConfigured: boolean =
+  supabaseUrl !== '' &&
+  supabaseAnonKey !== '' &&
   !supabaseUrl.includes('YOUR_SUPABASE') &&
   !supabaseAnonKey.includes('YOUR_SUPABASE') &&
-  supabaseUrl.startsWith('https://')
-);
+  supabaseUrl.startsWith('https://');
 
 // Create Supabase client instance
 export const supabase: SupabaseClient | null = isSupabaseConfigured

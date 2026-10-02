@@ -267,12 +267,19 @@ export const GeminiAssistant: React.FC = () => {
       } catch {}
     };
 
-    runCopilotSync();
+    const initTimer = setTimeout(() => {
+      if (document.readyState === 'complete') {
+        runCopilotSync();
+      } else {
+        window.addEventListener('load', () => setTimeout(runCopilotSync, 150), { once: true });
+      }
+    }, 150);
     const timer = setInterval(runCopilotSync, 2200);
     const onFocus = () => runCopilotSync();
     window.addEventListener('focus', onFocus);
     return () => {
       cancelled = true;
+      clearTimeout(initTimer);
       clearInterval(timer);
       window.removeEventListener('focus', onFocus);
     };
