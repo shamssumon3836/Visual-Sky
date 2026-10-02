@@ -1,5 +1,4 @@
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
-import { db } from './firebase';
+import { getFirebaseRuntime } from './firebase';
 import { supabase, isSupabaseConfigured } from './supabase';
 import { safeParseResponse } from './safeFetch';
 
@@ -317,26 +316,38 @@ export function subscribeToUserWorkspace(
   const docId = getCanonicalWorkspaceDocId(identifiers.email, identifiers.userId);
   if (!docId) return () => {};
 
-  try {
-    const docRef = doc(db, 'workspaces', docId);
-    const unsubscribe = onSnapshot(
-      docRef,
-      (snapshot) => {
-        if (!snapshot.exists()) return;
-        const raw = snapshot.data();
-        if (raw && typeof raw === 'object') {
-          const scrubbed = scrubWorkspaceCollections(raw);
-          onUpdate(scrubbed);
-        }
-      },
-      () => {
-        // Ignore transient snapshot errors; polling fallback stays active
-      }
-    );
-    return unsubscribe;
-  } catch {
-    return () => {};
-  }
+  let cancelled = false;
+  let unsubscribe = () => {};
+
+  getFirebaseRuntime()
+    .then((fb) => {
+      if (cancelled || !fb) return;
+      try {
+        const docRef = fb.doc(fb.db, 'workspaces', docId);
+        unsubscribe = fb.onSnapshot(
+          docRef,
+          (snapshot: any) => {
+            if (!snapshot.exists()) return;
+            const raw = snapshot.data();
+            if (raw && typeof raw === 'object') {
+              const scrubbed = scrubWorkspaceCollections(raw);
+              onUpdate(scrubbed);
+            }
+          },
+          () => {
+            // Ignore transient snapshot errors; polling fallback stays active
+          }
+        );
+      } catch {}
+    })
+    .catch(() => {});
+
+  return () => {
+    cancelled = true;
+    try {
+      unsubscribe();
+    } catch {}
+  };
 }
 
 /**
@@ -453,8 +464,10 @@ export async function queryUserWorkspace(identifiers: {
     (async () => {
       if (!canonicalDocId) return;
       try {
-        const docRef = doc(db, 'workspaces', canonicalDocId);
-        const snap = await withTimeout(getDoc(docRef), 1200);
+        const fb = await getFirebaseRuntime();
+        if (!fb) return;
+        const docRef = fb.doc(fb.db, 'workspaces', canonicalDocId);
+        const snap = await withTimeout(fb.getDoc(docRef), 1200);
         if (snap && snap.exists()) {
           const firestoreData = snap.data();
           if (firestoreData && typeof firestoreData === 'object') {
@@ -468,8 +481,10 @@ export async function queryUserWorkspace(identifiers: {
     (async () => {
       if (!canonicalAiDocId) return;
       try {
-        const aiDocRef = doc(db, 'workspaces', canonicalAiDocId);
-        const aiSnap = await withTimeout(getDoc(aiDocRef), 1200);
+        const fb = await getFirebaseRuntime();
+        if (!fb) return;
+        const aiDocRef = fb.doc(fb.db, 'workspaces', canonicalAiDocId);
+        const aiSnap = await withTimeout(fb.getDoc(aiDocRef), 1200);
         if (aiSnap && aiSnap.exists()) {
           const aiData = aiSnap.data();
           if (aiData && typeof aiData === 'object' && Array.isArray(aiData.aiChatSessions)) {
@@ -638,11 +653,13 @@ export async function persistUserWorkspace(params: {
 
   // 1. Save to Google Cloud Firestore (Real-time cross-device & cross-browser sync)
   const firestorePromise = (async () => {
+    const fb = await getFirebaseRuntime();
+    if (!fb) return false;
     let ok = false;
     if (canonicalDocId) {
       try {
         const cleanFirestorePayload = sanitizeForFirestore(payloadToSave);
-        await setDoc(doc(db, 'workspaces', canonicalDocId), cleanFirestorePayload);
+        await fb.setDoc(fb.doc(fb.db, 'workspaces', canonicalDocId), cleanFirestorePayload);
         ok = true;
       } catch (err) {
         console.warn('Firestore workspace save warning:', err);
@@ -650,7 +667,7 @@ export async function persistUserWorkspace(params: {
     }
     if (canonicalAiDocId && Array.isArray(payloadToSave.aiChatSessions) && hasRealAiCopilotSessions(payloadToSave.aiChatSessions)) {
       try {
-        await setDoc(doc(db, 'workspaces', canonicalAiDocId), {
+        await fb.setDoc(fb.doc(fb.db, 'workspaces', canonicalAiDocId), {
           email: cleanEmail,
           userId: cleanUserId,
           aiChatSessions: payloadToSave.aiChatSessions.slice(0, 50),
@@ -826,8 +843,10 @@ export async function persistAiCopilotSessionsNow(params: {
     (async () => {
       if (!canonicalAiDocId) return false;
       try {
+        const fb = await getFirebaseRuntime();
+        if (!fb) return false;
         const cleanFirestoreSessions = JSON.parse(JSON.stringify(filteredSessions.slice(0, 50)));
-        await setDoc(doc(db, 'workspaces', canonicalAiDocId), {
+        await fb.setDoc(fb.doc(fb.db, 'workspaces', canonicalAiDocId), {
           email: cleanEmail,
           userId: cleanUserId,
           aiChatSessions: cleanFirestoreSessions,
@@ -906,8 +925,10 @@ export async function syncAiCopilotSessions(params: {
     (async () => {
       if (!canonicalAiDocId) return;
       try {
-        const docRef = doc(db, 'workspaces', canonicalAiDocId);
-        const snap = await withFastTimeout(getDoc(docRef), 1200);
+        const fb = await getFirebaseRuntime();
+        if (!fb) return;
+        const docRef = fb.doc(fb.db, 'workspaces', canonicalAiDocId);
+        const snap = await withFastTimeout(fb.getDoc(docRef), 1200);
         if (snap && snap.exists()) {
           const d: any = snap.data();
           if (Array.isArray(d?.permanentlyDeletedIds)) {
@@ -926,8 +947,10 @@ export async function syncAiCopilotSessions(params: {
     (async () => {
       if (!canonicalWsDocId) return;
       try {
-        const docRef = doc(db, 'workspaces', canonicalWsDocId);
-        const snap = await withFastTimeout(getDoc(docRef), 1500);
+        const fb = await getFirebaseRuntime();
+        if (!fb) return;
+        const docRef = fb.doc(fb.db, 'workspaces', canonicalWsDocId);
+        const snap = await withFastTimeout(fb.getDoc(docRef), 1500);
         if (snap && snap.exists()) {
           const d: any = snap.data();
           if (Array.isArray(d?.permanentlyDeletedIds)) {
@@ -1005,24 +1028,38 @@ export function subscribeToAiCopilotSessions(
 ): () => void {
   const docId = getCanonicalAiCopilotDocId(identifiers.email, identifiers.userId);
   if (!docId) return () => {};
-  try {
-    const docRef = doc(db, 'workspaces', docId);
-    return onSnapshot(
-      docRef,
-      (snap) => {
-        if (!snap.exists()) return;
-        const d: any = snap.data();
-        if (d && Array.isArray(d.aiChatSessions)) {
-          onUpdate({
-            aiChatSessions: d.aiChatSessions,
-            aiActiveSessionId: d.aiActiveSessionId,
-            permanentlyDeletedIds: d.permanentlyDeletedIds
-          });
-        }
-      },
-      () => {}
-    );
-  } catch {
-    return () => {};
-  }
+
+  let cancelled = false;
+  let unsubscribe = () => {};
+
+  getFirebaseRuntime()
+    .then((fb) => {
+      if (cancelled || !fb) return;
+      try {
+        const docRef = fb.doc(fb.db, 'workspaces', docId);
+        unsubscribe = fb.onSnapshot(
+          docRef,
+          (snap: any) => {
+            if (!snap.exists()) return;
+            const d: any = snap.data();
+            if (d && Array.isArray(d.aiChatSessions)) {
+              onUpdate({
+                aiChatSessions: d.aiChatSessions,
+                aiActiveSessionId: d.aiActiveSessionId,
+                permanentlyDeletedIds: d.permanentlyDeletedIds
+              });
+            }
+          },
+          () => {}
+        );
+      } catch {}
+    })
+    .catch(() => {});
+
+  return () => {
+    cancelled = true;
+    try {
+      unsubscribe();
+    } catch {}
+  };
 }

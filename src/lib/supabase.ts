@@ -1,27 +1,9 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
-// Read environment variables safely across Vite, esbuild, and Node ESM runtimes
-const metaEnv: Record<string, any> =
-  (typeof import.meta !== 'undefined' && (import.meta as any).env) || {};
-const supabaseUrl = String(metaEnv.VITE_SUPABASE_URL || '');
-const supabaseAnonKey = String(metaEnv.VITE_SUPABASE_ANON_KEY || '');
+export const isSupabaseConfigured: boolean = false;
 
-export const isSupabaseConfigured: boolean =
-  Boolean(supabaseUrl && supabaseAnonKey) &&
-  !supabaseUrl.includes('YOUR_SUPABASE') &&
-  !supabaseAnonKey.includes('YOUR_SUPABASE') &&
-  supabaseUrl.startsWith('https://');
-
-// Create Supabase client instance
-export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        autoRefreshToken: true,
-        persistSession: true,
-        detectSessionInUrl: true,
-      },
-    })
-  : null;
+// Supabase client instance (null when using Firebase Firestore + Backend Database)
+export const supabase: SupabaseClient | null = null;
 
 export interface SupabaseAuthResponse {
   success: boolean;

@@ -7443,6 +7443,7 @@ async function startServer() {
   const publicCandidate = path.join(process.cwd(), 'public');
   const prebuiltAppJsPath = path.join(prebuiltCandidate, 'app.js');
   const prebuiltAppCssPath = path.join(prebuiltCandidate, 'app.css');
+  const prebuiltFirebaseRuntimePath = path.join(prebuiltCandidate, 'firebase-runtime.js');
   const runtimeAppJsCandidate = path.join(DATA_DIR, 'runtime-app.js');
 
   const isDevTsx =
@@ -7477,10 +7478,10 @@ async function startServer() {
     return prebuiltAppJsPath;
   };
 
-  // Ultra-fast in-memory RAM cache for bundles
+  // Ultra-fast in-memory RAM cache for bundles (raw + pre-compressed Gzip)
   const memoryAssetCache = new Map<
     string,
-    { mtimeMs: number; etag: string; raw: Buffer }
+    { mtimeMs: number; etag: string; raw: Buffer; gzip: Buffer }
   >();
 
   const getCachedAsset = (filePath: string) => {
@@ -7492,8 +7493,9 @@ async function startServer() {
       return cached;
     }
     const raw = fs.readFileSync(filePath);
+    const gzip = zlib.gzipSync(raw, { level: 6 });
     const etag = `"v-${Math.floor(mtimeMs).toString(36)}-${raw.byteLength.toString(36)}"`;
-    const entry = { mtimeMs, etag, raw };
+    const entry = { mtimeMs, etag, raw, gzip };
     memoryAssetCache.set(filePath, entry);
     return entry;
   };
@@ -7502,6 +7504,7 @@ async function startServer() {
   try {
     getCachedAsset(getActiveAppJsPath());
     getCachedAsset(prebuiltAppCssPath);
+    getCachedAsset(prebuiltFirebaseRuntimePath);
   } catch {}
 
   const getDynamicAssetVersion = () => {
@@ -7528,11 +7531,30 @@ async function startServer() {
       }
       res.setHeader('Content-Type', contentType);
       res.setHeader('ETag', asset.etag);
-      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Vary', 'Accept-Encoding');
+      const hasVersionQuery = Boolean(req.query && req.query.v);
+      res.setHeader(
+        'Cache-Control',
+        hasVersionQuery
+          ? 'public, max-age=31536000, immutable'
+          : 'public, max-age=300, stale-while-revalidate=86400'
+      );
       if (req.headers['if-none-match'] === asset.etag) {
         return res.status(304).end();
       }
+      const acceptEncoding = String(req.headers['accept-encoding'] || '');
+      if (acceptEncoding.includes('gzip')) {
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Content-Length', String(asset.gzip.byteLength));
+        if (req.method === 'HEAD') {
+          return res.status(200).end();
+        }
+        return res.status(200).end(asset.gzip);
+      }
       res.setHeader('Content-Length', String(asset.raw.byteLength));
+      if (req.method === 'HEAD') {
+        return res.status(200).end();
+      }
       return res.status(200).end(asset.raw);
     } catch {
       return res.sendFile(filePath);
@@ -7553,7 +7575,15 @@ async function startServer() {
     return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, 'text/css; charset=utf-8');
   });
 
-  app.get('/prebuilt/firebase-runtime.js', (_req, res) => {
+  app.get('/prebuilt/firebase-runtime.js', (req, res) => {
+    if (fs.existsSync(prebuiltFirebaseRuntimePath)) {
+      return sendMemoryCachedAsset(
+        req,
+        res,
+        prebuiltFirebaseRuntimePath,
+        'application/javascript; charset=utf-8'
+      );
+    }
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
     return res.status(200).end('export {};\n');
@@ -7565,13 +7595,15 @@ async function startServer() {
   }
 
   let cachedHtmlVersion = '';
-  let cachedHtmlString = '';
+  let cachedHtmlRaw: Buffer | null = null;
+  let cachedHtmlGzip: Buffer | null = null;
 
-  const sendFreshIndexHtml = (res: express.Response) => {
+  const sendFreshIndexHtml = (req: express.Request, res: express.Response) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
+    res.setHeader('Vary', 'Accept-Encoding');
     const distCandidate = path.join(process.cwd(), 'dist');
     const htmlPath = fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
       ? path.join(prebuiltCandidate, 'index.html')
@@ -7580,24 +7612,37 @@ async function startServer() {
       : path.join(process.cwd(), 'index.html');
     try {
       const v = getDynamicAssetVersion();
-      if (cachedHtmlString && cachedHtmlVersion === v) {
-        return res.send(cachedHtmlString);
+      if (!cachedHtmlRaw || !cachedHtmlGzip || cachedHtmlVersion !== v) {
+        let html = fs.readFileSync(htmlPath, 'utf8');
+        html = html
+          .replace(/\/prebuilt\/(bundle|app)\.css(\?v=[^"']*)?/g, `/prebuilt/bundle.css?v=${v}`)
+          .replace(/\/prebuilt\/(bundle|app)\.js(\?v=[^"']*)?/g, `/prebuilt/bundle.js?v=${v}`);
+        cachedHtmlVersion = v;
+        cachedHtmlRaw = Buffer.from(html, 'utf8');
+        cachedHtmlGzip = zlib.gzipSync(cachedHtmlRaw, { level: 6 });
       }
-      let html = fs.readFileSync(htmlPath, 'utf8');
-      html = html
-        .replace(/\/prebuilt\/(bundle|app)\.css(\?v=[^"']*)?/g, `/prebuilt/bundle.css?v=${v}`)
-        .replace(/\/prebuilt\/(bundle|app)\.js(\?v=[^"']*)?/g, `/prebuilt/bundle.js?v=${v}`);
-      cachedHtmlVersion = v;
-      cachedHtmlString = html;
-      return res.send(html);
+      const acceptEncoding = String(req.headers['accept-encoding'] || '');
+      if (acceptEncoding.includes('gzip') && cachedHtmlGzip) {
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Content-Length', String(cachedHtmlGzip.byteLength));
+        if (req.method === 'HEAD') {
+          return res.status(200).end();
+        }
+        return res.status(200).end(cachedHtmlGzip);
+      }
+      res.setHeader('Content-Length', String(cachedHtmlRaw.byteLength));
+      if (req.method === 'HEAD') {
+        return res.status(200).end();
+      }
+      return res.status(200).end(cachedHtmlRaw);
     } catch {
       return res.sendFile(htmlPath);
     }
   };
 
-  app.get(['/', '/index.html'], (_req, res, next) => {
+  app.get(['/', '/index.html'], (req, res, next) => {
     if (fs.existsSync(prebuiltAppJsPath) && fs.existsSync(path.join(prebuiltCandidate, 'index.html'))) {
-      return sendFreshIndexHtml(res);
+      return sendFreshIndexHtml(req, res);
     }
     return next();
   });
@@ -7610,8 +7655,8 @@ async function startServer() {
     })
   );
 
-  app.get('*', (_req, res) => {
-    return sendFreshIndexHtml(res);
+  app.get('*', (req, res) => {
+    return sendFreshIndexHtml(req, res);
   });
 
   app.listen(PORT, '0.0.0.0', () => {
