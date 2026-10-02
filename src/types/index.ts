@@ -357,3 +357,21 @@ export interface SimulatedReplyPayload {
   subject?: string;
   delaySeconds?: number;
 }
+
+export interface AIChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+  modelUsed?: string;
+  tokensUsed?: number;
+}
+
+export interface AIChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt?: string;
+  messages: AIChatMessage[];
+}
+

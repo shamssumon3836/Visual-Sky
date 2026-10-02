@@ -2,6 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { EmailAttachment } from '../../types';
 import {
+  getFastAttachmentViewSrc,
+  buildAttachmentDownloadUrl,
+  warmAttachmentInBackground,
+  triggerInstantAttachmentDownload
+} from '../../utils/attachmentFastCache';
+import {
   FolderOpen,
   Link2,
   Paperclip,
@@ -85,6 +91,8 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
   const [isTestingDrive, setIsTestingDrive] = useState<boolean>(false);
   const [syncingAttachmentId, setSyncingAttachmentId] = useState<string | null>(null);
   const [previewAtt, setPreviewAtt] = useState<EmailAttachment | null>(null);
+  const [previewBlobReadyUrl, setPreviewBlobReadyUrl] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchServerFiles = async () => {
@@ -148,6 +156,23 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
     }
     return Array.from(map.values());
   }, [stagedAttachments, serverFiles, threads, driveStorageSettings.folderUrl]);
+
+  useEffect(() => {
+    allVaultAttachments.slice(0, 8).forEach(att => {
+      warmAttachmentInBackground(att as any);
+    });
+  }, [allVaultAttachments]);
+
+  useEffect(() => {
+    if (!previewAtt) {
+      setPreviewBlobReadyUrl(null);
+      return;
+    }
+    setPreviewBlobReadyUrl(getFastAttachmentViewSrc(previewAtt as any));
+    warmAttachmentInBackground(previewAtt as any, (blobUrl) => {
+      setPreviewBlobReadyUrl(blobUrl);
+    });
+  }, [previewAtt]);
 
   const formatFileSize = (bytes: number): string => {
     if (!bytes || bytes <= 0) return '1 KB';
@@ -362,68 +387,31 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
 
   const getVaultAttachmentViewUrl = (att: EmailAttachment & { _msgId?: string; _idx?: number }): string => {
     if (!att) return '';
-    if (att.contentBase64 && att.contentBase64.startsWith('data:')) return att.contentBase64;
-    if (att.viewUrl && /^https?:\/\//i.test(att.viewUrl)) return att.viewUrl;
-    const params = new URLSearchParams();
-    if (att.name) params.set('name', att.name);
-    if (att._msgId) params.set('msgId', att._msgId);
-    if (typeof att._idx === 'number') params.set('idx', String(att._idx));
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    return `/api/attachments/view/${encodeURIComponent(att.id || 'attachment')}${qs}`;
+    return getFastAttachmentViewSrc(att);
   };
 
   const getVaultAttachmentDownloadUrl = (att: EmailAttachment & { _msgId?: string; _idx?: number }): string => {
     if (!att) return '';
-    if (att.downloadUrl && /^https?:\/\//i.test(att.downloadUrl)) return att.downloadUrl;
-    const params = new URLSearchParams();
-    if (att.name) params.set('name', att.name);
-    if (att._msgId) params.set('msgId', att._msgId);
-    if (typeof att._idx === 'number') params.set('idx', String(att._idx));
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    return `/api/attachments/download/${encodeURIComponent(att.id || 'attachment')}${qs}`;
+    return buildAttachmentDownloadUrl(att);
   };
 
-  const handleDownload = async (att: EmailAttachment & { _msgId?: string; _idx?: number }) => {
-    const fileName = att.name || 'attachment';
-    try {
-      if (att.contentBase64 && att.contentBase64.startsWith('data:')) {
-        const res = await fetch(att.contentBase64);
-        const blob = await res.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-        return;
-      }
-      const url = getVaultAttachmentDownloadUrl(att);
-      const res = await fetch(url);
-      if (res.ok) {
-        const blob = await res.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-        return;
-      }
-    } catch {}
+  const handleDownload = (att: EmailAttachment & { _msgId?: string; _idx?: number }) => {
+    if (!att) return;
+    const key = att.id || att.name || 'att';
+    setDownloadingId(key);
+    setTimeout(() => {
+      setDownloadingId(prev => (prev === key ? null : prev));
+    }, 1200);
 
-    if (att.driveFileUrl && !att.driveFileUrl.includes('/folders/')) {
-      window.open(att.driveFileUrl, '_blank', 'noopener,noreferrer');
-      return;
+    const started = triggerInstantAttachmentDownload(att);
+    if (!started) {
+      const fileName = att.name || 'attachment';
+      addNotification({
+        title: '⚠️ Syncing Attachment...',
+        message: `Fetching "${fileName}" from mail server. Please try again in a moment.`,
+        type: 'system'
+      });
     }
-    addNotification({
-      title: '⚠️ Syncing Attachment...',
-      message: `Fetching "${fileName}" from mail server. Please try again in a moment.`,
-      type: 'system'
-    });
   };
 
   const handleCopyAppsScript = () => {
@@ -843,6 +831,7 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
               return (
                 <div
                   key={att.id}
+                  onMouseEnter={() => warmAttachmentInBackground(att as any)}
                   className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 hover:border-emerald-500/40 flex flex-col justify-between gap-3 transition"
                 >
                   <div className="flex items-start gap-2.5 min-w-0">
@@ -874,7 +863,7 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
                       className="px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[11px] font-black flex items-center gap-1 cursor-pointer"
                     >
                       <Download className="w-3 h-3" />
-                      <span>Download</span>
+                      <span>{downloadingId === (att.id || att.name || 'att') ? 'Downloading...' : 'Download'}</span>
                     </button>
                     {att.uploadedToDrive && att.driveFileUrl ? (
                       <a
@@ -946,13 +935,15 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
               {String(previewAtt.mimeType || '').toLowerCase().startsWith('image/') ||
               /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(previewAtt.name || '') ? (
                 <img
-                  src={getVaultAttachmentViewUrl(previewAtt as any)}
+                  src={previewBlobReadyUrl || getVaultAttachmentViewUrl(previewAtt as any)}
                   alt={previewAtt.name}
+                  decoding="sync"
+                  loading="eager"
                   className="max-h-[70vh] max-w-full object-contain rounded-lg"
                 />
               ) : (
                 <iframe
-                  src={getVaultAttachmentViewUrl(previewAtt as any)}
+                  src={previewBlobReadyUrl || getVaultAttachmentViewUrl(previewAtt as any)}
                   title={previewAtt.name}
                   className="w-full h-[65vh] rounded-lg bg-white border-0"
                 />

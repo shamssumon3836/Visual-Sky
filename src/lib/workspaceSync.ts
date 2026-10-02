@@ -13,6 +13,8 @@ export interface WorkspaceData {
   threads?: any[];
   sentEmails?: any[];
   minedLeads?: any[];
+  aiChatSessions?: any[];
+  aiActiveSessionId?: string;
   columnSettings?: any[];
   notificationSettings?: any;
   driveStorageSettings?: any;
@@ -117,6 +119,8 @@ export function scrubWorkspaceCollections(rawWorkspace: any, extraTombstones?: I
       : undefined,
     sentEmails: Array.isArray(rawWorkspace.sentEmails) ? filterAlive(rawWorkspace.sentEmails) : undefined,
     minedLeads: Array.isArray(rawWorkspace.minedLeads) ? filterAlive(rawWorkspace.minedLeads) : undefined,
+    aiChatSessions: Array.isArray(rawWorkspace.aiChatSessions) ? filterAlive(rawWorkspace.aiChatSessions) : undefined,
+    aiActiveSessionId: rawWorkspace.aiActiveSessionId ? String(rawWorkspace.aiActiveSessionId) : undefined,
     deletedThreadIds: allDeletedArr.slice(-4000),
     permanentlyDeletedIds: allDeletedArr
   };
@@ -144,6 +148,9 @@ function sanitizeForFirestore(payload: WorkspaceData): WorkspaceData {
     if (Array.isArray(clone.minedLeads) && clone.minedLeads.length > 300) {
       clone.minedLeads = clone.minedLeads.slice(0, 300);
     }
+    if (Array.isArray(clone.aiChatSessions) && clone.aiChatSessions.length > 50) {
+      clone.aiChatSessions = clone.aiChatSessions.slice(0, 50);
+    }
     if (clone.notificationSettings?.customAudioBase64 && String(clone.notificationSettings.customAudioBase64).length > 150000) {
       delete clone.notificationSettings.customAudioBase64;
     }
@@ -151,6 +158,102 @@ function sanitizeForFirestore(payload: WorkspaceData): WorkspaceData {
   } catch {
     return payload;
   }
+}
+
+export function mergeWorkspaceCollectionsById(
+  primArr?: any[],
+  secArr?: any[],
+  deletedSet?: Set<string>
+): any[] {
+  const primList = Array.isArray(primArr) ? primArr : [];
+  const secList = Array.isArray(secArr) ? secArr : [];
+  if (primList.length === 0 && secList.length === 0) return [];
+
+  const isAllowed = (item: any) => {
+    if (!item || !item.id) return false;
+    const idStr = String(item.id);
+    if (idStr.startsWith('camp-live-') || idStr.startsWith('camp-restored-')) return false;
+    if (DEMO_IDS.has(idStr)) return false;
+    if (deletedSet) {
+      if (deletedSet.has(idStr) || deletedSet.has(`thread:${idStr}`)) return false;
+      if (item.name) {
+        const cleanNameLower = String(item.name).trim().toLowerCase();
+        const slug = cleanNameLower.replace(/[^a-z0-9]+/g, '-');
+        if (deletedSet.has(`camp-name:${cleanNameLower}`) || deletedSet.has(`camp-restored-${slug}`)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  const mergedMap = new Map<string, any>();
+
+  // 1. Seed with secondary (older) items first
+  for (const item of secList) {
+    if (!isAllowed(item)) continue;
+    mergedMap.set(String(item.id), item);
+  }
+
+  // 2. Overlay primary (newer) items, merging nested messages for threads & AI chat sessions
+  for (const item of primList) {
+    if (!isAllowed(item)) continue;
+    const key = String(item.id);
+    const existing = mergedMap.get(key);
+    if (existing && Array.isArray(existing.messages) && Array.isArray(item.messages)) {
+      const msgMap = new Map<string, any>();
+      for (const m of existing.messages) {
+        if (!m) continue;
+        const mKey = String(m.id || `${m.role || m.sender || ''}-${m.timestamp || ''}-${String(m.content || m.body || '').slice(0, 60)}`);
+        if (deletedSet && m.id && deletedSet.has(String(m.id))) continue;
+        msgMap.set(mKey, m);
+      }
+      for (const m of item.messages) {
+        if (!m) continue;
+        const mKey = String(m.id || `${m.role || m.sender || ''}-${m.timestamp || ''}-${String(m.content || m.body || '').slice(0, 60)}`);
+        if (deletedSet && m.id && deletedSet.has(String(m.id))) continue;
+        msgMap.set(mKey, m);
+      }
+      const combinedMessages = Array.from(msgMap.values());
+      const defaultTitles = new Set(['New Outreach Session', 'High-Converting Cold Outreach']);
+      const resolvedTitle =
+        item.title && !defaultTitles.has(item.title)
+          ? item.title
+          : existing.title && !defaultTitles.has(existing.title)
+          ? existing.title
+          : item.title || existing.title;
+
+      mergedMap.set(key, {
+        ...existing,
+        ...item,
+        ...(resolvedTitle !== undefined ? { title: resolvedTitle } : {}),
+        messages: combinedMessages
+      });
+    } else {
+      mergedMap.set(key, existing ? { ...existing, ...item } : item);
+    }
+  }
+
+  // Preserve primary order first, followed by any remaining secondary items
+  const result: any[] = [];
+  const seen = new Set<string>();
+  for (const item of primList) {
+    if (!item || !item.id) continue;
+    const k = String(item.id);
+    if (mergedMap.has(k) && !seen.has(k)) {
+      seen.add(k);
+      result.push(mergedMap.get(k));
+    }
+  }
+  for (const item of secList) {
+    if (!item || !item.id) continue;
+    const k = String(item.id);
+    if (mergedMap.has(k) && !seen.has(k)) {
+      seen.add(k);
+      result.push(mergedMap.get(k));
+    }
+  }
+  return result;
 }
 
 /**
@@ -255,41 +358,25 @@ export async function queryUserWorkspace(identifiers: {
     const primary = isNewer ? scrubbedCandidate : scrubWorkspaceCollections(bestData, cumulativeTombstones);
     const secondary = isNewer ? scrubWorkspaceCollections(bestData, cumulativeTombstones) : scrubbedCandidate;
 
-    const pickAuthoritative = (primArr?: any[], secArr?: any[]) => {
-      if (Array.isArray(primArr)) return primArr;
-      if (Array.isArray(secArr)) return secArr;
-      return [];
-    };
-
     const allDeletedArr = Array.from(cumulativeTombstones).slice(-5000);
 
     bestData = {
       ...secondary,
       ...primary,
-      leads: pickAuthoritative(primary.leads, secondary.leads),
-      leadTags: Array.isArray(primary.leadTags)
-        ? primary.leadTags
-        : Array.isArray(secondary.leadTags)
-        ? secondary.leadTags
-        : undefined,
-      campaigns: pickAuthoritative(primary.campaigns, secondary.campaigns),
-      smtpAccounts: pickAuthoritative(primary.smtpAccounts, secondary.smtpAccounts),
-      emailTemplates: Array.isArray(primary.emailTemplates)
-        ? primary.emailTemplates
-        : Array.isArray(secondary.emailTemplates)
-        ? secondary.emailTemplates
-        : undefined,
-      templateCategories: Array.isArray(primary.templateCategories)
-        ? primary.templateCategories
-        : Array.isArray(secondary.templateCategories)
-        ? secondary.templateCategories
-        : undefined,
-      threads: pickAuthoritative(primary.threads, secondary.threads),
+      leads: mergeWorkspaceCollectionsById(primary.leads, secondary.leads, cumulativeTombstones),
+      leadTags: mergeWorkspaceCollectionsById(primary.leadTags, secondary.leadTags, cumulativeTombstones),
+      campaigns: mergeWorkspaceCollectionsById(primary.campaigns, secondary.campaigns, cumulativeTombstones),
+      smtpAccounts: mergeWorkspaceCollectionsById(primary.smtpAccounts, secondary.smtpAccounts, cumulativeTombstones),
+      emailTemplates: mergeWorkspaceCollectionsById(primary.emailTemplates, secondary.emailTemplates, cumulativeTombstones),
+      templateCategories: mergeWorkspaceCollectionsById(primary.templateCategories, secondary.templateCategories, cumulativeTombstones),
+      threads: mergeWorkspaceCollectionsById(primary.threads, secondary.threads, cumulativeTombstones),
       deletedThreadIds: allDeletedArr.slice(-4000),
       permanentlyDeletedIds: allDeletedArr,
       userDeletedCampaigns: anyUserDeletedCampaigns || Boolean(primary.userDeletedCampaigns || secondary.userDeletedCampaigns),
-      sentEmails: pickAuthoritative(primary.sentEmails, secondary.sentEmails),
-      minedLeads: pickAuthoritative(primary.minedLeads, secondary.minedLeads),
+      sentEmails: mergeWorkspaceCollectionsById(primary.sentEmails, secondary.sentEmails, cumulativeTombstones),
+      minedLeads: mergeWorkspaceCollectionsById(primary.minedLeads, secondary.minedLeads, cumulativeTombstones),
+      aiChatSessions: mergeWorkspaceCollectionsById(primary.aiChatSessions, secondary.aiChatSessions, cumulativeTombstones),
+      aiActiveSessionId: primary.aiActiveSessionId || secondary.aiActiveSessionId,
       userProfile: {
         ...(secondary.userProfile || {}),
         ...(primary.userProfile || {})

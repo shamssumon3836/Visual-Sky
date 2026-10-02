@@ -2677,41 +2677,104 @@ function smartMergeWorkspaces(existing: any, incoming: any): any {
       return true;
     };
 
-  const rawThreads = Array.isArray(inc.threads)
-    ? inc.threads
-    : Array.isArray(e.threads)
-    ? e.threads
-    : [];
-  const cleanThreads = rawThreads.filter(
+  const mergeById = (incArr: any, existingArr: any) => {
+    const incList = Array.isArray(incArr) ? incArr : [];
+    const exList = Array.isArray(existingArr) ? existingArr : [];
+    if (incList.length === 0 && exList.length === 0) return [];
+
+    const map = new Map<string, any>();
+    for (const item of exList) {
+      if (!isNotDeleted(item)) continue;
+      map.set(String(item.id), item);
+    }
+    for (const item of incList) {
+      if (!isNotDeleted(item)) continue;
+      const key = String(item.id);
+      const ex = map.get(key);
+      if (ex && Array.isArray(ex.messages) && Array.isArray(item.messages)) {
+        const msgMap = new Map<string, any>();
+        for (const m of ex.messages) {
+          if (!m) continue;
+          if (m.id && (permanentlyDeletedIds.has(String(m.id)) || deletedThreadIds.has(String(m.id)))) continue;
+          const mKey = String(m.id || `${m.role || m.sender || ''}-${m.timestamp || ''}-${String(m.content || m.body || '').slice(0, 60)}`);
+          msgMap.set(mKey, m);
+        }
+        for (const m of item.messages) {
+          if (!m) continue;
+          if (m.id && (permanentlyDeletedIds.has(String(m.id)) || deletedThreadIds.has(String(m.id)))) continue;
+          const mKey = String(m.id || `${m.role || m.sender || ''}-${m.timestamp || ''}-${String(m.content || m.body || '').slice(0, 60)}`);
+          msgMap.set(mKey, m);
+        }
+        const defaultTitles = new Set(['New Outreach Session', 'High-Converting Cold Outreach']);
+        const resolvedTitle =
+          item.title && !defaultTitles.has(item.title)
+            ? item.title
+            : ex.title && !defaultTitles.has(ex.title)
+            ? ex.title
+            : item.title || ex.title;
+        map.set(key, {
+          ...ex,
+          ...item,
+          ...(resolvedTitle !== undefined ? { title: resolvedTitle } : {}),
+          messages: Array.from(msgMap.values())
+        });
+      } else {
+        map.set(key, ex ? { ...ex, ...item } : item);
+      }
+    }
+
+    const out: any[] = [];
+    const seen = new Set<string>();
+    for (const item of incList) {
+      if (!item || !item.id) continue;
+      const k = String(item.id);
+      if (map.has(k) && !seen.has(k)) {
+        seen.add(k);
+        out.push(map.get(k));
+      }
+    }
+    for (const item of exList) {
+      if (!item || !item.id) continue;
+      const k = String(item.id);
+      if (map.has(k) && !seen.has(k)) {
+        seen.add(k);
+        out.push(map.get(k));
+      }
+    }
+    return out;
+  };
+
+  const mergedThreads = mergeById(inc.threads, e.threads).filter(
     (t: any) =>
       isNotDeleted(t) &&
       !deletedThreadIds.has(`thread:${String(t.id).replace(/-split-\d+$/, '')}`)
   );
 
-  const pickCollection = (incArr: any, existingArr: any) => {
-    const chosen = Array.isArray(incArr) ? incArr : (Array.isArray(existingArr) ? existingArr : []);
-    return chosen.filter(isNotDeleted);
-  };
-
   return {
     ...e,
     ...inc,
-    leads: pickCollection(inc.leads, e.leads),
-    leadTags: (Array.isArray(inc.leadTags) ? inc.leadTags : (Array.isArray(e.leadTags) ? e.leadTags : [])).filter(isNotDeleted),
-    campaigns: pickCollection(inc.campaigns, e.campaigns),
-    smtpAccounts: pickCollection(inc.smtpAccounts, e.smtpAccounts),
-    emailTemplates: pickCollection(inc.emailTemplates, e.emailTemplates),
-    templateCategories: (Array.isArray(inc.templateCategories) ? inc.templateCategories : (Array.isArray(e.templateCategories) ? e.templateCategories : [])).filter(isNotDeleted),
-    threads: cleanThreads,
+    leads: mergeById(inc.leads, e.leads),
+    leadTags: mergeById(inc.leadTags, e.leadTags),
+    campaigns: mergeById(inc.campaigns, e.campaigns),
+    smtpAccounts: mergeById(inc.smtpAccounts, e.smtpAccounts),
+    emailTemplates: mergeById(inc.emailTemplates, e.emailTemplates),
+    templateCategories: mergeById(inc.templateCategories, e.templateCategories),
+    threads: mergedThreads,
     deletedThreadIds: Array.from(deletedThreadIds).slice(-4000),
     permanentlyDeletedIds: Array.from(permanentlyDeletedIds).slice(-5000),
     userDeletedCampaigns: Boolean(inc.userDeletedCampaigns ?? e.userDeletedCampaigns),
-    sentEmails: pickCollection(inc.sentEmails, e.sentEmails),
-    minedLeads: (Array.isArray(inc.minedLeads) ? inc.minedLeads : (Array.isArray(e.minedLeads) ? e.minedLeads : [])).filter(isNotDeleted),
+    sentEmails: mergeById(inc.sentEmails, e.sentEmails),
+    minedLeads: mergeById(inc.minedLeads, e.minedLeads),
+    aiChatSessions: mergeById(inc.aiChatSessions, e.aiChatSessions),
+    aiActiveSessionId: inc.aiActiveSessionId || e.aiActiveSessionId,
     columnSettings: Array.isArray(inc.columnSettings) && inc.columnSettings.length > 0 ? inc.columnSettings : (Array.isArray(e.columnSettings) && e.columnSettings.length > 0 ? e.columnSettings : []),
     notificationSettings: {
       ...(e.notificationSettings || {}),
       ...(inc.notificationSettings || {})
+    },
+    driveStorageSettings: {
+      ...(e.driveStorageSettings || {}),
+      ...(inc.driveStorageSettings || {})
     },
     userProfile: {
       ...(e.userProfile || {}),
@@ -3205,6 +3268,12 @@ function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null
       if (Array.isArray(mergedWorkspace.sentEmails)) {
         mergedWorkspace.sentEmails = mergedWorkspace.sentEmails.filter(keepAlive);
       }
+      if (Array.isArray(mergedWorkspace.minedLeads)) {
+        mergedWorkspace.minedLeads = mergedWorkspace.minedLeads.filter(keepAlive);
+      }
+      if (Array.isArray(mergedWorkspace.aiChatSessions)) {
+        mergedWorkspace.aiChatSessions = mergedWorkspace.aiChatSessions.filter(keepAlive);
+      }
     }
 
     return mergedWorkspace;
@@ -3432,7 +3501,7 @@ app.post('/api/user-data/:email/resource/:resource', (req, res) => {
     };
 
     workspace[resource] = items.filter(isAliveItem);
-    for (const col of ['leads', 'campaigns', 'smtpAccounts', 'emailTemplates', 'threads', 'sentEmails', 'leadTags', 'templateCategories', 'minedLeads']) {
+    for (const col of ['leads', 'campaigns', 'smtpAccounts', 'emailTemplates', 'threads', 'sentEmails', 'leadTags', 'templateCategories', 'minedLeads', 'aiChatSessions']) {
       if (Array.isArray(workspace[col])) {
         workspace[col] = workspace[col].filter(isAliveItem);
       }
@@ -5866,8 +5935,61 @@ try {
     if (Array.isArray(rawIdx)) {
       for (const item of rawIdx) {
         if (item && item.id) {
-          attachmentIndexMap.set(String(item.id), item);
+          const key = String(item.id);
+          attachmentIndexMap.set(key, item);
+          // Pre-warm attachment binary into RAM on startup for <1ms View & Download response
+          try {
+            const pathsToTry = [
+              path.join(ATTACHMENTS_DIR, key),
+              item.filePath
+            ].filter(Boolean);
+            for (const p of pathsToTry) {
+              if (fs.existsSync(p)) {
+                const buf = fs.readFileSync(p);
+                if (buf.length > 0) {
+                  const mime = item.mimeType || 'application/octet-stream';
+                  const fname = item.name || key;
+                  attachmentMemoryBuffers.set(key, { buffer: buf, mimeType: mime, name: fname });
+                  const uidSuffixMatch = key.match(/[-_](\d+)[-_](\d+)$/);
+                  if (uidSuffixMatch) {
+                    attachmentMemoryBuffers.set(`imap-att-${uidSuffixMatch[1]}-${uidSuffixMatch[2]}`, {
+                      buffer: buf,
+                      mimeType: mime,
+                      name: fname
+                    });
+                  }
+                  break;
+                }
+              }
+            }
+          } catch {}
         }
+      }
+    }
+  }
+  // Also pre-warm any additional files inside ATTACHMENTS_DIR
+  if (fs.existsSync(ATTACHMENTS_DIR)) {
+    const diskFiles = fs.readdirSync(ATTACHMENTS_DIR);
+    for (const f of diskFiles) {
+      if (!attachmentMemoryBuffers.has(f)) {
+        try {
+          const fullP = path.join(ATTACHMENTS_DIR, f);
+          const buf = fs.readFileSync(fullP);
+          if (buf.length > 0) {
+            const rec = attachmentIndexMap.get(f);
+            const mime = rec?.mimeType || 'application/octet-stream';
+            const fname = rec?.name || f;
+            attachmentMemoryBuffers.set(f, { buffer: buf, mimeType: mime, name: fname });
+            const uidSuffixMatch = f.match(/[-_](\d+)[-_](\d+)$/);
+            if (uidSuffixMatch) {
+              attachmentMemoryBuffers.set(`imap-att-${uidSuffixMatch[1]}-${uidSuffixMatch[2]}`, {
+                buffer: buf,
+                mimeType: mime,
+                name: fname
+              });
+            }
+          }
+        } catch {}
       }
     }
   }
@@ -5939,18 +6061,23 @@ function getAttachmentBinaryById(
     if (mem && mem.buffer?.length > 0) return mem;
 
     const record = attachmentIndexMap.get(key);
-    const candidatePath = record?.filePath || path.join(ATTACHMENTS_DIR, key);
-    try {
-      if (fs.existsSync(candidatePath)) {
-        const buffer = fs.readFileSync(candidatePath);
-        if (buffer.length > 0) {
-          const mimeType = record?.mimeType || guessMimeFromFilename(record?.name || key);
-          const name = record?.name || queryName || key;
-          attachmentMemoryBuffers.set(key, { buffer, mimeType, name });
-          return { buffer, mimeType, name };
+    const candidatePaths = [
+      path.join(ATTACHMENTS_DIR, key),
+      record?.filePath
+    ].filter(Boolean) as string[];
+    for (const candidatePath of candidatePaths) {
+      try {
+        if (fs.existsSync(candidatePath)) {
+          const buffer = fs.readFileSync(candidatePath);
+          if (buffer.length > 0) {
+            const mimeType = record?.mimeType || guessMimeFromFilename(record?.name || key);
+            const name = record?.name || queryName || key;
+            attachmentMemoryBuffers.set(key, { buffer, mimeType, name });
+            return { buffer, mimeType, name };
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
     return null;
   };
 

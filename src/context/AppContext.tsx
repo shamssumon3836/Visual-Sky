@@ -16,12 +16,14 @@ import {
   DirectSendMailPayload,
   NotificationSettings,
   EmailAttachment,
-  GoogleDriveStorageSettings
+  GoogleDriveStorageSettings,
+  AIChatSession,
+  AIChatMessage
 } from '../types';
 import confetti from 'canvas-confetti';
 import { audioEngine } from '../utils/audioPlayer';
 import { supabase, isSupabaseConfigured, signOutSupabase } from '../lib/supabase';
-import { queryUserWorkspace, persistUserWorkspace, subscribeToUserWorkspace, WorkspaceData } from '../lib/workspaceSync';
+import { queryUserWorkspace, persistUserWorkspace, subscribeToUserWorkspace, mergeWorkspaceCollectionsById, WorkspaceData } from '../lib/workspaceSync';
 import { safeParseResponse } from '../lib/safeFetch';
 
 // Helper to calculate automatic 4-Week SMTP Warm-up Schedule limits:
@@ -410,6 +412,8 @@ interface AppContextType {
   setAllUsers: React.Dispatch<React.SetStateAction<UserAccount[]>>;
   updateUserRole: (userId: string, role: 'client' | 'agency' | 'owner' | 'manager' | 'rep' | 'customer') => void;
   updateUserPermissions: (userId: string, permissions: any) => void;
+  updateUserProfile: (updates: Partial<UserAccount>) => void;
+  changeUserPassword: (currentPass: string, newPass: string) => { success: boolean; message: string };
   deleteUserAccount: (userId: string) => void;
   resetUserPasswordByEmail: (email: string, newPass: string) => boolean;
   deductAiTokens: (tokensUsed: number) => void;
@@ -418,9 +422,14 @@ interface AppContextType {
   setIsLogoutConfirmOpen: (open: boolean) => void;
   requestLogout: () => void;
 
-  // AI Mined Cache
+  // AI Mined Cache & AI Outreach Copilot Sessions (Synced Across All Browsers & Devices)
   minedLeads: Lead[];
   setMinedLeads: React.Dispatch<React.SetStateAction<Lead[]>>;
+  aiChatSessions: AIChatSession[];
+  setAiChatSessions: React.Dispatch<React.SetStateAction<AIChatSession[]>>;
+  aiActiveSessionId: string;
+  setAiActiveSessionId: (id: string) => void;
+  deleteAiChatSession: (sessionId: string) => void;
   
   // Cross-Browser Cloud Workspace Sync
   loadUserWorkspace: (userEmail?: string, userId?: string, seedWorkspaceData?: any) => Promise<boolean>;
@@ -1200,24 +1209,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  // Mined leads cache
-  const [minedLeads, setMinedLeads] = useState<Lead[]>(() => {
+  // Mined leads cache (Cross-Device Synced)
+  const [minedLeads, setMinedLeadsState] = useState<Lead[]>(() => {
     try {
+      const permDeleted = getPermanentlyDeletedSet();
       const saved = localStorage.getItem('visualsky_mined_leads');
       if (!saved) return [];
       const parsed: Lead[] = JSON.parse(saved);
       const seen = new Set<string>();
-      return parsed.map((l, idx) => {
-        let finalId = l.id;
-        if (!finalId || seen.has(finalId)) {
-          finalId = `mined-${Date.now()}-${Math.random().toString(36).substring(2, 7)}-${idx}`;
-        }
-        seen.add(finalId);
-        return { ...l, id: finalId };
-      });
+      return parsed
+        .filter(l => l && (!l.id || !permDeleted.has(String(l.id))))
+        .map((l, idx) => {
+          let finalId = l.id;
+          if (!finalId || seen.has(finalId)) {
+            finalId = `mined-${Date.now()}-${Math.random().toString(36).substring(2, 7)}-${idx}`;
+          }
+          seen.add(finalId);
+          return { ...l, id: finalId };
+        });
     } catch {
       return [];
     }
+  });
+
+  // AI Outreach Copilot Sessions (Cross-Device Synced)
+  const createDefaultAiChatSession = (userName?: string): AIChatSession => ({
+    id: 'session-default',
+    title: 'High-Converting Cold Outreach',
+    createdAt: 'Today',
+    messages: [
+      {
+        id: 'msg-init',
+        role: 'assistant',
+        content: `Hello${userName ? ` **${userName.split(' ')[0]}**` : ''}! 👋 I am your **Visual Sky AI Outreach Copilot** — powered by Google Gemini & Multi-LLM Routing.
+
+### What I can do for you (just like ChatGPT & Gemini):
+1. 🎯 **Hyper-Personalized Cold Emails & Sequences**: Write 1-to-1 hooks, 3-step sequences, and follow-ups for any niche.
+2. 🛡️ **Spam Word & Deliverability Audit**: Rewrite copy for **100% Primary Inbox** landing.
+3. 🧠 **Objection Busters & Sales Replies**: Turn *"No budget"* or *"Send more info"* into booked calls.
+4. 💬 **Ask Anything (Bangla, Banglish, or English)**: Business strategy, lead generation, coding, copywriting, or general Q&A.
+
+💡 *Tip: Press **Enter** to send your message, or **Shift + Enter** to add a new line below!*`,
+        timestamp: 'Just now',
+        modelUsed: 'Gemini 3.8 Flash',
+        tokensUsed: 160
+      }
+    ]
+  });
+
+  const [aiChatSessions, setAiChatSessionsState] = useState<AIChatSession[]>(() => {
+    try {
+      const permDeleted = getPermanentlyDeletedSet();
+      const saved = localStorage.getItem('visualsky_ai_chat_sessions');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const valid = parsed.filter(
+            (s: any) =>
+              s &&
+              typeof s.id === 'string' &&
+              !permDeleted.has(String(s.id)) &&
+              Array.isArray(s.messages) &&
+              s.messages.length > 0
+          );
+          if (valid.length > 0) return valid;
+        }
+      }
+    } catch {}
+    return [createDefaultAiChatSession(currentUser?.name)];
+  });
+
+  const [aiActiveSessionId, setAiActiveSessionIdState] = useState<string>(() => {
+    try {
+      const savedId = localStorage.getItem('visualsky_ai_active_session_id');
+      if (savedId) return savedId;
+    } catch {}
+    return 'session-default';
   });
 
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(() => {
@@ -1331,6 +1398,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     threads,
     sentEmails,
     minedLeads,
+    aiChatSessions,
+    aiActiveSessionId,
     columnSettings,
     notificationSettings,
     driveStorageSettings,
@@ -1358,6 +1427,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       threads,
       sentEmails,
       minedLeads,
+      aiChatSessions,
+      aiActiveSessionId,
       columnSettings,
       notificationSettings,
       driveStorageSettings,
@@ -1383,6 +1454,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     threads,
     sentEmails,
     minedLeads,
+    aiChatSessions,
+    aiActiveSessionId,
     columnSettings,
     notificationSettings,
     driveStorageSettings,
@@ -1441,6 +1514,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const finalTags = Array.isArray(latestWorkspaceRef.current.leadTags) ? latestWorkspaceRef.current.leadTags : leadTags;
       const finalThreads = sanitizeThreadsArray(Array.isArray(latestWorkspaceRef.current.threads) ? latestWorkspaceRef.current.threads : threads);
       const finalSent = filterNotDeleted(Array.isArray(latestWorkspaceRef.current.sentEmails) ? latestWorkspaceRef.current.sentEmails : sentEmails);
+      const finalMined = filterNotDeleted(Array.isArray(latestWorkspaceRef.current.minedLeads) ? latestWorkspaceRef.current.minedLeads : minedLeads);
+      const finalAiSessions = filterNotDeleted(Array.isArray(latestWorkspaceRef.current.aiChatSessions) ? latestWorkspaceRef.current.aiChatSessions : aiChatSessions);
       const deletedThreadIds = Array.from(permDeleted);
 
       const payload: any = {
@@ -1455,6 +1530,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         permanentlyDeletedIds: deletedThreadIds,
         userDeletedCampaigns: userDeletedCampaignsRef.current,
         sentEmails: finalSent,
+        minedLeads: finalMined,
+        aiChatSessions: finalAiSessions,
+        aiActiveSessionId: latestWorkspaceRef.current.aiActiveSessionId || aiActiveSessionId,
         updatedAt: nowIso,
         userProfile: {
           quotaUsed: currentUser.quotaUsed,
@@ -1508,6 +1586,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       threads: 'visualsky_threads',
       sentEmails: 'visualsky_sent_emails',
       minedLeads: 'visualsky_mined_leads',
+      aiChatSessions: 'visualsky_ai_chat_sessions',
       columnSettings: 'visualsky_cols'
     };
     const targetStorageKey = storageKeyMap[resource];
@@ -1603,8 +1682,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const resolveCollection = <T extends { id?: string; name?: string }>(
       remoteArr: T[],
-      demoSet: Set<string>
+      demoSet: Set<string>,
+      localArr?: T[]
     ): T[] => {
+      const merged = mergeWorkspaceCollectionsById(remoteArr, localArr, permDeletedSet);
       const isAllowed = (item: any) => {
         if (!item || !item.id) return false;
         const idStr = String(item.id);
@@ -1613,12 +1694,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (item.name && permDeletedSet.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) return false;
         return true;
       };
-      return (Array.isArray(remoteArr) ? remoteArr : []).filter(isAllowed);
+      return merged.filter(isAllowed);
     };
 
     // 1. Leads Hydration (Authoritative cross-device sync)
     if (Array.isArray(data.leads)) {
-      const liveLeads = resolveCollection(data.leads, DEMO_LEAD_IDS);
+      const liveLeads = resolveCollection(data.leads, DEMO_LEAD_IDS, latestWorkspaceRef.current.leads);
       setLeads(liveLeads);
       try { localStorage.setItem('visualsky_leads', JSON.stringify(liveLeads)); } catch {}
       (latestWorkspaceRef.current as any).leads = liveLeads;
@@ -1626,7 +1707,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 2. Lead Tags Hydration (strip permanently deleted tags)
     if (Array.isArray(data.leadTags)) {
-      const cleanTags = data.leadTags.filter(
+      const mergedTags = mergeWorkspaceCollectionsById(
+        data.leadTags,
+        latestWorkspaceRef.current.leadTags,
+        permDeletedSet
+      );
+      const cleanTags = mergedTags.filter(
         (t: any) =>
           t &&
           !permDeletedSet.has(String(t.id)) &&
@@ -1639,7 +1725,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 3. SMTP Accounts Hydration (Authoritative cross-device sync)
     if (Array.isArray(data.smtpAccounts)) {
-      const liveSmtp = resolveCollection(data.smtpAccounts, DEMO_SMTP_IDS);
+      const liveSmtp = resolveCollection(data.smtpAccounts, DEMO_SMTP_IDS, latestWorkspaceRef.current.smtpAccounts);
       setSmtpAccounts(liveSmtp);
       try { localStorage.setItem('visualsky_smtp', JSON.stringify(liveSmtp)); } catch {}
       (latestWorkspaceRef.current as any).smtpAccounts = liveSmtp;
@@ -1647,7 +1733,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 4. Campaigns Hydration (Authoritative cross-device sync)
     if (Array.isArray(data.campaigns)) {
-      const liveCampaigns = resolveCollection(data.campaigns, DEMO_CAMPAIGN_IDS);
+      const liveCampaigns = resolveCollection(data.campaigns, DEMO_CAMPAIGN_IDS, latestWorkspaceRef.current.campaigns);
       setCampaigns(liveCampaigns);
       try { localStorage.setItem('visualsky_campaigns', JSON.stringify(liveCampaigns)); } catch {}
       (latestWorkspaceRef.current as any).campaigns = liveCampaigns;
@@ -1655,7 +1741,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 5. Email Templates Hydration (Authoritative cross-device sync)
     if (Array.isArray(data.emailTemplates)) {
-      const liveTemplates = resolveCollection(data.emailTemplates, new Set());
+      const liveTemplates = resolveCollection(data.emailTemplates, new Set(), latestWorkspaceRef.current.emailTemplates);
       setEmailTemplates(liveTemplates);
       try { localStorage.setItem('visualsky_templates', JSON.stringify(liveTemplates)); } catch {}
       (latestWorkspaceRef.current as any).emailTemplates = liveTemplates;
@@ -1663,7 +1749,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 6. Template Categories Hydration (strip permanently deleted categories)
     if (Array.isArray(data.templateCategories)) {
-      const cleanCats = data.templateCategories.filter((c: any) => c && !permDeletedSet.has(String(c.id)));
+      const mergedCats = mergeWorkspaceCollectionsById(
+        data.templateCategories,
+        latestWorkspaceRef.current.templateCategories,
+        permDeletedSet
+      );
+      const cleanCats = mergedCats.filter((c: any) => c && !permDeletedSet.has(String(c.id)));
       if (cleanCats.length > 0) {
         setTemplateCategories(cleanCats);
         try { localStorage.setItem('visualsky_tmpl_categories', JSON.stringify(cleanCats)); } catch {}
@@ -1673,7 +1764,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 7. Threads Hydration (Authoritative cross-device sync)
     if (Array.isArray(data.threads)) {
-      const resolvedThreads = resolveCollection(data.threads, DEMO_THREAD_IDS);
+      const resolvedThreads = resolveCollection(data.threads, DEMO_THREAD_IDS, latestWorkspaceRef.current.threads);
       const liveThreads = sanitizeThreadsArray(resolvedThreads);
       setThreads(liveThreads);
       try { localStorage.setItem('visualsky_threads', JSON.stringify(liveThreads)); } catch {}
@@ -1682,7 +1773,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 8. Sent Emails Hydration (Authoritative cross-device sync)
     if (Array.isArray(data.sentEmails)) {
-      const liveSent = resolveCollection(data.sentEmails, DEMO_SENT_IDS);
+      const liveSent = resolveCollection(data.sentEmails, DEMO_SENT_IDS, latestWorkspaceRef.current.sentEmails);
       setSentEmails(liveSent);
       try { localStorage.setItem('visualsky_sent_emails', JSON.stringify(liveSent)); } catch {}
       (latestWorkspaceRef.current as any).sentEmails = liveSent;
@@ -1690,10 +1781,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 9. Mined Leads Hydration
     if (Array.isArray(data.minedLeads)) {
-      const cleanMined = data.minedLeads.filter((m: any) => m && !permDeletedSet.has(String(m.id)));
-      setMinedLeads(cleanMined);
+      const mergedMined = mergeWorkspaceCollectionsById(
+        data.minedLeads,
+        latestWorkspaceRef.current.minedLeads,
+        permDeletedSet
+      );
+      const cleanMined = mergedMined.filter((m: any) => m && !permDeletedSet.has(String(m.id)));
+      setMinedLeadsState(cleanMined);
       try { localStorage.setItem('visualsky_mined_leads', JSON.stringify(cleanMined)); } catch {}
       (latestWorkspaceRef.current as any).minedLeads = cleanMined;
+    }
+
+    // 9b. AI Outreach Copilot Sessions Hydration (Cross-Browser & Cross-Device Sync)
+    if (Array.isArray(data.aiChatSessions) && data.aiChatSessions.length > 0) {
+      const currentLocalSessions = Array.isArray(latestWorkspaceRef.current.aiChatSessions)
+        ? latestWorkspaceRef.current.aiChatSessions
+        : aiChatSessions;
+      const mergedSessions = mergeWorkspaceCollectionsById(
+        data.aiChatSessions,
+        currentLocalSessions,
+        permDeletedSet
+      ).filter((s: any) => s && Array.isArray(s.messages) && s.messages.length > 0);
+
+      if (mergedSessions.length > 0) {
+        setAiChatSessionsState(mergedSessions);
+        try {
+          localStorage.setItem('visualsky_ai_chat_sessions', JSON.stringify(mergedSessions));
+        } catch {}
+        (latestWorkspaceRef.current as any).aiChatSessions = mergedSessions;
+      }
+    } else if (!isBackgroundPoll) {
+      // If remote workspace does not yet have aiChatSessions but this browser has user sessions in localStorage, push them to cloud!
+      const localSessions = Array.isArray(latestWorkspaceRef.current.aiChatSessions)
+        ? latestWorkspaceRef.current.aiChatSessions
+        : aiChatSessions;
+      const hasRealUserChat = localSessions.some(
+        (s: any) =>
+          s &&
+          (s.id !== 'session-default' ||
+            (Array.isArray(s.messages) && s.messages.some((m: any) => m.role === 'user')))
+      );
+      if (hasRealUserChat) {
+        setTimeout(() => {
+          persistResourceDirectly('aiChatSessions', localSessions).catch(() => {});
+        }, 300);
+      }
+    }
+
+    if (data.aiActiveSessionId && typeof data.aiActiveSessionId === 'string') {
+      setAiActiveSessionIdState(data.aiActiveSessionId);
+      try {
+        localStorage.setItem('visualsky_ai_active_session_id', data.aiActiveSessionId);
+      } catch {}
+      (latestWorkspaceRef.current as any).aiActiveSessionId = data.aiActiveSessionId;
     }
 
     // 10. Column Settings Hydration
@@ -1732,6 +1872,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isHydratingRef.current = false;
       if (!isBackgroundPoll) {
         setHydrationTick(t => t + 1);
+        saveWorkspaceToDatabase().catch(() => {});
       }
     }, 180);
 
@@ -1771,9 +1912,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return applied;
       } else {
         if (!isBackgroundPoll) {
-          const hasLocalData = (latestWorkspaceRef.current.leads && latestWorkspaceRef.current.leads.length > 0) ||
-                               (latestWorkspaceRef.current.campaigns && latestWorkspaceRef.current.campaigns.length > 0) ||
-                               (latestWorkspaceRef.current.smtpAccounts && latestWorkspaceRef.current.smtpAccounts.length > 0);
+          const hasLocalData =
+            (latestWorkspaceRef.current.leads && latestWorkspaceRef.current.leads.length > 0) ||
+            (latestWorkspaceRef.current.campaigns && latestWorkspaceRef.current.campaigns.length > 0) ||
+            (latestWorkspaceRef.current.smtpAccounts && latestWorkspaceRef.current.smtpAccounts.length > 0) ||
+            (latestWorkspaceRef.current.threads && latestWorkspaceRef.current.threads.length > 0) ||
+            (latestWorkspaceRef.current.minedLeads && latestWorkspaceRef.current.minedLeads.length > 0) ||
+            (latestWorkspaceRef.current.aiChatSessions && latestWorkspaceRef.current.aiChatSessions.length > 0);
           if (hasLocalData) {
             await persistUserWorkspace({
               userId: cleanUserId,
@@ -1925,6 +2070,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         else if (e.key === 'visualsky_tmpl_categories') setTemplateCategories(JSON.parse(e.newValue));
         else if (e.key === 'visualsky_threads') setThreads(JSON.parse(e.newValue));
         else if (e.key === 'visualsky_sent_emails') setSentEmails(JSON.parse(e.newValue));
+        else if (e.key === 'visualsky_mined_leads') setMinedLeadsState(JSON.parse(e.newValue));
+        else if (e.key === 'visualsky_ai_chat_sessions') setAiChatSessionsState(JSON.parse(e.newValue));
+        else if (e.key === 'visualsky_ai_active_session_id') setAiActiveSessionIdState(e.newValue);
         else if (e.key === 'visualsky_drive_storage_settings') setDriveStorageSettings(JSON.parse(e.newValue));
       } catch {}
     };
@@ -4777,15 +4925,130 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
+  // Synced setter for AI Mined Leads (automatically persists across all browsers & devices)
+  const setMinedLeads: React.Dispatch<React.SetStateAction<Lead[]>> = (updater) => {
+    setMinedLeadsState(prev => {
+      const next = typeof updater === 'function' ? (updater as (p: Lead[]) => Lead[])(prev) : updater;
+      const safeNext = Array.isArray(next) ? next : [];
+      const nextIds = new Set(safeNext.map(l => String(l.id)));
+      const removedIds = prev
+        .map(l => String(l.id))
+        .filter(id => id && !nextIds.has(id));
+      if (removedIds.length > 0) {
+        recordPermanentlyDeletedIds(removedIds);
+      }
+      persistResourceDirectly('minedLeads', safeNext);
+      return safeNext;
+    });
+  };
+
+  // Synced setters for AI Outreach Copilot Sessions (automatically persists across all browsers & devices)
+  const setAiChatSessions: React.Dispatch<React.SetStateAction<AIChatSession[]>> = (updater) => {
+    setAiChatSessionsState(prev => {
+      const next = typeof updater === 'function' ? (updater as (p: AIChatSession[]) => AIChatSession[])(prev) : updater;
+      const safeNext = Array.isArray(next) && next.length > 0 ? next : [createDefaultAiChatSession(currentUser?.name)];
+      const nextIds = new Set(safeNext.map(s => String(s.id)));
+      const removedIds = prev
+        .map(s => String(s.id))
+        .filter(id => id && id !== 'session-default' && !nextIds.has(id));
+      if (removedIds.length > 0) {
+        recordPermanentlyDeletedIds(removedIds);
+      }
+      persistResourceDirectly('aiChatSessions', safeNext);
+      return safeNext;
+    });
+  };
+
+  const setAiActiveSessionId = (id: string) => {
+    setAiActiveSessionIdState(id);
+    try {
+      localStorage.setItem('visualsky_ai_active_session_id', id);
+    } catch {}
+    if (latestWorkspaceRef.current) {
+      (latestWorkspaceRef.current as any).aiActiveSessionId = id;
+    }
+    setTimeout(() => {
+      saveWorkspaceToDatabase().catch(() => {});
+    }, 150);
+  };
+
+  const deleteAiChatSession = (sessionId: string) => {
+    if (sessionId && sessionId !== 'session-default') {
+      recordPermanentlyDeletedIds([sessionId]);
+    }
+    setAiChatSessionsState(prev => {
+      if (prev.length <= 1) {
+        const resetSession: AIChatSession = {
+          id: `session-${Date.now()}`,
+          title: 'New Outreach Session',
+          createdAt: 'Just now',
+          messages: createDefaultAiChatSession(currentUser?.name).messages
+        };
+        setAiActiveSessionId(resetSession.id);
+        persistResourceDirectly('aiChatSessions', [resetSession]);
+        return [resetSession];
+      }
+      const remaining = prev.filter(s => s.id !== sessionId);
+      if (aiActiveSessionId === sessionId) {
+        setAiActiveSessionId(remaining[0]?.id || 'session-default');
+      }
+      persistResourceDirectly('aiChatSessions', remaining);
+      return remaining;
+    });
+  };
+
+  const updateUserProfile = (updates: Partial<UserAccount>) => {
+    setCurrentUserState(prev => {
+      const next = { ...prev, ...updates };
+      try {
+        localStorage.setItem('visualsky_current_user', JSON.stringify(next));
+      } catch {}
+      setAllUsers(usersPrev => {
+        const updatedUsers = usersPrev.map(u =>
+          u.id === next.id || u.email?.toLowerCase() === next.email?.toLowerCase() ? { ...u, ...updates } : u
+        );
+        try {
+          localStorage.setItem('visualsky_users', JSON.stringify(updatedUsers));
+        } catch {}
+        return updatedUsers;
+      });
+      fetch('/api/users/admin-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: next.id, email: next.email, updates })
+      }).catch(() => {});
+      setTimeout(() => {
+        saveWorkspaceToDatabase().catch(() => {});
+      }, 100);
+      return next;
+    });
+  };
+
+  const changeUserPassword = (currentPass: string, newPass: string): { success: boolean; message: string } => {
+    if (!newPass || newPass.length < 6) {
+      return { success: false, message: 'Password must be at least 6 characters long.' };
+    }
+    if (currentUser.password && currentPass && currentUser.password !== currentPass) {
+      return { success: false, message: 'Current password is incorrect.' };
+    }
+    resetUserPasswordByEmail(currentUser.email, newPass);
+    setCurrentUserState(prev => ({ ...prev, password: newPass }));
+    return { success: true, message: 'Password updated successfully!' };
+  };
+
   const deductAiTokens = (tokensUsed: number) => {
     if (!tokensUsed || tokensUsed <= 0) return;
     const cleanTokens = Math.max(1, Math.round(tokensUsed));
     setCurrentUserState(prev => {
       const updatedCredits = Math.max(0, (prev.aiCredits || 0) - cleanTokens);
-      return {
+      const next = {
         ...prev,
         aiCredits: updatedCredits
       };
+      if (latestWorkspaceRef.current?.userProfile) {
+        latestWorkspaceRef.current.userProfile.aiCredits = updatedCredits;
+      }
+      return next;
     });
     setAllUsers(prev => prev.map(u => u.id === currentUser.id ? { ...u, aiCredits: Math.max(0, (u.aiCredits || 0) - cleanTokens) } : u));
   };
@@ -5168,6 +5431,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setAllUsers,
         updateUserRole,
         updateUserPermissions,
+        updateUserProfile,
+        changeUserPassword,
         deleteUserAccount,
         resetUserPasswordByEmail,
         deductAiTokens,
@@ -5177,6 +5442,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         requestLogout,
         minedLeads,
         setMinedLeads,
+        aiChatSessions,
+        setAiChatSessions,
+        aiActiveSessionId,
+        setAiActiveSessionId,
+        deleteAiChatSession,
         loadUserWorkspace,
         saveWorkspaceToDatabase,
         persistResourceDirectly,

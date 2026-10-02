@@ -3,6 +3,12 @@ import { useApp, cleanEmailBodyText } from '../../context/AppContext';
 import { safeParseResponse } from '../../lib/safeFetch';
 import { EmailThread, LeadStatus, EmailAttachment } from '../../types';
 import { verifyEmailSync, verifyEmailsWithDns, EmailVerificationResult } from '../../utils/emailVerifier';
+import {
+  getFastAttachmentViewSrc,
+  buildAttachmentDownloadUrl,
+  warmAttachmentInBackground,
+  triggerInstantAttachmentDownload
+} from '../../utils/attachmentFastCache';
 import { 
   Inbox, 
   Search, 
@@ -187,6 +193,8 @@ export const SmartInbox: React.FC = () => {
   const [composeAttachments, setComposeAttachments] = useState<EmailAttachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState<boolean>(false);
   const [previewAttachment, setPreviewAttachment] = useState<EmailAttachment | null>(null);
+  const [previewBlobReadyUrl, setPreviewBlobReadyUrl] = useState<string | null>(null);
+  const [downloadingAttId, setDownloadingAttId] = useState<string | null>(null);
   const [syncingDriveAttId, setSyncingDriveAttId] = useState<string | null>(null);
   const [copiedAppsScriptCode, setCopiedAppsScriptCode] = useState<boolean>(false);
 
@@ -231,87 +239,67 @@ export const SmartInbox: React.FC = () => {
 
   const getAttachmentViewSrc = (att: EmailAttachment & { _msgId?: string; _idx?: number }): string => {
     if (!att) return '';
-    if (att.contentBase64 && att.contentBase64.startsWith('data:')) return att.contentBase64;
-    if (att.viewUrl && /^https?:\/\//i.test(att.viewUrl)) return att.viewUrl;
-    const params = new URLSearchParams();
-    if (att.name) params.set('name', att.name);
-    if (att._msgId) params.set('msgId', att._msgId);
-    if (typeof att._idx === 'number') params.set('idx', String(att._idx));
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    const targetId = att.id || 'attachment';
-    return `/api/attachments/view/${encodeURIComponent(targetId)}${qs}`;
+    return getFastAttachmentViewSrc(att);
   };
 
   const getAttachmentDownloadSrc = (att: EmailAttachment & { _msgId?: string; _idx?: number }): string => {
     if (!att) return '';
-    if (att.downloadUrl && /^https?:\/\//i.test(att.downloadUrl)) return att.downloadUrl;
-    const params = new URLSearchParams();
-    if (att.name) params.set('name', att.name);
-    if (att._msgId) params.set('msgId', att._msgId);
-    if (typeof att._idx === 'number') params.set('idx', String(att._idx));
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    const targetId = att.id || 'attachment';
-    return `/api/attachments/download/${encodeURIComponent(targetId)}${qs}`;
+    return buildAttachmentDownloadUrl(att);
   };
 
-  const handleDownloadAttachment = async (
+  // Pre-warm attachments into RAM blob cache in the background so clicking View or Download is 0ms instant
+  useEffect(() => {
+    const attachmentsToWarm: Array<EmailAttachment & { _msgId?: string; _idx?: number }> = [];
+    for (const t of threads.slice(0, 12)) {
+      for (const m of t.messages || []) {
+        const atts = (m as any).attachments;
+        if (Array.isArray(atts)) {
+          atts.forEach((a: EmailAttachment, idx: number) => {
+            if (a) {
+              attachmentsToWarm.push({ ...a, _msgId: String(m.id || ''), _idx: idx });
+            }
+          });
+        }
+      }
+    }
+    attachmentsToWarm.slice(0, 10).forEach(att => {
+      warmAttachmentInBackground(att);
+    });
+  }, [threads]);
+
+  useEffect(() => {
+    if (!previewAttachment) {
+      setPreviewBlobReadyUrl(null);
+      return;
+    }
+    const fastSrc = getFastAttachmentViewSrc(previewAttachment as any);
+    setPreviewBlobReadyUrl(fastSrc);
+    warmAttachmentInBackground(previewAttachment as any, (blobUrl) => {
+      setPreviewBlobReadyUrl(blobUrl);
+    });
+  }, [previewAttachment]);
+
+  const handleDownloadAttachment = (
     att: EmailAttachment & { _msgId?: string; _idx?: number },
     e?: React.MouseEvent
   ) => {
     if (e) e.stopPropagation();
     if (!att) return;
-    const fileName = att.name || 'attachment';
+    const attKey = att.id || att.name || 'att';
+    setDownloadingAttId(attKey);
+    setTimeout(() => {
+      setDownloadingAttId(prev => (prev === attKey ? null : prev));
+    }, 1200);
 
-    try {
-      if (att.contentBase64 && att.contentBase64.startsWith('data:')) {
-        const res = await fetch(att.contentBase64);
-        const blob = await res.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = blobUrl;
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-        return;
-      }
-
-      const downloadUrl = getAttachmentDownloadSrc(att);
-      if (downloadUrl) {
-        const res = await fetch(downloadUrl);
-        if (res.ok) {
-          const blob = await res.blob();
-          const blobUrl = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = blobUrl;
-          link.download = fileName;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-          return;
-        }
-      }
-    } catch {}
-
-    // Only open a direct Google Drive file link if one exists (never click a 404 URL with link.download)
-    if (att.driveFileUrl && !att.driveFileUrl.includes('/folders/')) {
-      const link = document.createElement('a');
-      link.href = att.driveFileUrl;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      return;
+    const started = triggerInstantAttachmentDownload(att);
+    if (!started) {
+      const fileName = att.name || 'attachment';
+      addNotification({
+        title: '⚠️ Syncing Attachment from Mail Server...',
+        message: `Fetching "${fileName}" from your mailbox. Please click Sync or try again in a moment.`,
+        type: 'system'
+      });
     }
-
-    addNotification({
-      title: '⚠️ Syncing Attachment from Mail Server...',
-      message: `Fetching "${fileName}" from your mailbox. Please click Sync or try again in a moment.`,
-      type: 'system'
-    });
   };
 
   const handleSyncAttachmentToDrive = async (att: EmailAttachment, e?: React.MouseEvent) => {
@@ -2475,6 +2463,7 @@ export const SmartInbox: React.FC = () => {
                                 return (
                                   <div
                                     key={att.id || attIdx}
+                                    onMouseEnter={() => warmAttachmentInBackground(enrichedAtt as any)}
                                     onClick={(e) => e.stopPropagation()}
                                     className="px-3 py-2 rounded-xl bg-slate-950/95 border border-emerald-500/30 hover:border-emerald-400/60 flex items-center justify-between gap-3 text-xs text-slate-100 transition shadow-sm"
                                   >
@@ -2507,7 +2496,7 @@ export const SmartInbox: React.FC = () => {
                                           setPreviewAttachment(enrichedAtt as any);
                                         }}
                                         className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 text-[10px] font-extrabold cursor-pointer transition"
-                                        title="Click to View File / Image"
+                                        title="Click to View File / Image Instantly"
                                       >
                                         👁️ View
                                       </button>
@@ -2515,9 +2504,9 @@ export const SmartInbox: React.FC = () => {
                                         type="button"
                                         onClick={(e) => handleDownloadAttachment(enrichedAtt as any, e)}
                                         className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black cursor-pointer transition"
-                                        title="Click to Download File"
+                                        title="Click to Download File Instantly"
                                       >
-                                        ⬇️ Download
+                                        {downloadingAttId === (att.id || att.name || 'att') ? '✅ Downloading...' : '⬇️ Download'}
                                       </button>
                                       {hasRealDriveFile ? (
                                         <a
@@ -3507,7 +3496,7 @@ export const SmartInbox: React.FC = () => {
 
             <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-slate-950 min-h-[320px]">
               {(() => {
-                const viewSrc = getAttachmentViewSrc(previewAttachment);
+                const viewSrc = previewBlobReadyUrl || getAttachmentViewSrc(previewAttachment);
                 const mime = String(previewAttachment.mimeType || '').toLowerCase();
                 const name = String(previewAttachment.name || '').toLowerCase();
 
@@ -3516,6 +3505,8 @@ export const SmartInbox: React.FC = () => {
                     <img
                       src={viewSrc}
                       alt={previewAttachment.name}
+                      decoding="sync"
+                      loading="eager"
                       className="max-h-[75vh] max-w-full object-contain rounded-xl shadow-2xl"
                     />
                   );

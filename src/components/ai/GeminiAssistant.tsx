@@ -140,7 +140,19 @@ ${userName || '{{sender_name}}'}
 }
 
 export const GeminiAssistant: React.FC = () => {
-  const { currentUser, leads, emailTemplates, addEmailTemplate, addNotification, deductAiTokens } = useApp();
+  const {
+    currentUser,
+    leads,
+    emailTemplates,
+    addEmailTemplate,
+    addNotification,
+    deductAiTokens,
+    aiChatSessions: sessions,
+    setAiChatSessions: setSessions,
+    aiActiveSessionId: activeSessionId,
+    setAiActiveSessionId: setActiveSessionId,
+    deleteAiChatSession
+  } = useApp();
 
   const defaultWelcomeMessage = (name?: string): ChatMessage => ({
     id: 'msg-init',
@@ -157,38 +169,6 @@ export const GeminiAssistant: React.FC = () => {
     timestamp: 'Just now',
     modelUsed: 'Gemini 3.8 Flash',
     tokensUsed: 160
-  });
-
-  const [sessions, setSessions] = useState<ChatSession[]>(() => {
-    try {
-      const saved = localStorage.getItem('visualsky_ai_chat_sessions');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const valid = parsed.filter(
-            (s: any) => s && typeof s.id === 'string' && Array.isArray(s.messages) && s.messages.length > 0
-          );
-          if (valid.length > 0) return valid;
-        }
-      }
-    } catch {}
-
-    return [
-      {
-        id: 'session-default',
-        title: 'High-Converting Cold Outreach',
-        createdAt: 'Today',
-        messages: [defaultWelcomeMessage(currentUser?.name)]
-      }
-    ];
-  });
-
-  const [activeSessionId, setActiveSessionId] = useState<string>(() => {
-    try {
-      const savedId = localStorage.getItem('visualsky_ai_active_session_id');
-      if (savedId) return savedId;
-    } catch {}
-    return 'session-default';
   });
 
   const [inputPrompt, setInputPrompt] = useState<string>('');
@@ -227,14 +207,6 @@ export const GeminiAssistant: React.FC = () => {
       setActiveSessionId(sessions[0].id);
     }
   }, [sessions, activeSessionId]);
-
-  // Sync sessions to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem('visualsky_ai_chat_sessions', JSON.stringify(sessions));
-      localStorage.setItem('visualsky_ai_active_session_id', activeSession?.id || activeSessionId);
-    } catch {}
-  }, [sessions, activeSessionId, activeSession?.id]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -340,22 +312,7 @@ export const GeminiAssistant: React.FC = () => {
 
   const handleDeleteSession = (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (sessions.length <= 1) {
-      const resetSession: ChatSession = {
-        id: `session-${Date.now()}`,
-        title: 'New Outreach Session',
-        createdAt: 'Just now',
-        messages: [defaultWelcomeMessage(currentUser?.name)]
-      };
-      setSessions([resetSession]);
-      setActiveSessionId(resetSession.id);
-      return;
-    }
-    const remaining = sessions.filter(s => s.id !== sessionId);
-    setSessions(remaining);
-    if (activeSessionId === sessionId) {
-      setActiveSessionId(remaining[0]?.id || 'session-default');
-    }
+    deleteAiChatSession(sessionId);
   };
 
   const handleStopGeneration = () => {
