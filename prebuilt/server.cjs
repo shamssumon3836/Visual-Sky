@@ -42,7 +42,6 @@ var import_imapflow = require("imapflow");
 var import_mailparser = require("mailparser");
 var import_crypto = __toESM(require("crypto"), 1);
 var import_dns = __toESM(require("dns"), 1);
-var import_zlib = __toESM(require("zlib"), 1);
 import_dotenv.default.config();
 process.env.GOMAXPROCS = "1";
 process.env.UV_THREADPOOL_SIZE = "1";
@@ -56,40 +55,6 @@ process.on("unhandledRejection", (reason) => {
 var OTP_SECRET = process.env.OTP_SECRET || "visualsky-secure-otp-signature-key-2026";
 var app = (0, import_express.default)();
 var PORT = Number(process.env.PORT) || 3e3;
-app.use((req, res, next) => {
-  const acceptEncoding = String(req.headers["accept-encoding"] || "");
-  if (!acceptEncoding.includes("gzip") || req.method === "HEAD" || req.url.startsWith("/api/attachments/")) {
-    return next();
-  }
-  let writeCalled = false;
-  const origWrite = res.write;
-  const origEnd = res.end;
-  res.write = function(chunk, ...args) {
-    writeCalled = true;
-    return origWrite.apply(this, [chunk, ...args]);
-  };
-  res.end = function(chunk, ...args) {
-    if (!writeCalled && chunk && !res.getHeader("Content-Encoding")) {
-      const contentType = String(res.getHeader("Content-Type") || "").toLowerCase();
-      const isCompressible = contentType.includes("javascript") || contentType.includes("json") || contentType.includes("text/") || contentType.includes("svg") || req.url.endsWith(".tsx") || req.url.endsWith(".ts") || req.url.endsWith(".js") || req.url.endsWith(".css");
-      if (isCompressible) {
-        try {
-          const buf = Buffer.isBuffer(chunk) ? chunk : typeof chunk === "string" ? Buffer.from(chunk, typeof args[0] === "string" ? args[0] : "utf8") : null;
-          if (buf && buf.byteLength > 1024) {
-            const compressed = import_zlib.default.gzipSync(buf, { level: 1 });
-            res.setHeader("Content-Encoding", "gzip");
-            res.setHeader("Vary", "Accept-Encoding");
-            res.setHeader("Content-Length", String(compressed.byteLength));
-            return origEnd.call(this, compressed);
-          }
-        } catch {
-        }
-      }
-    }
-    return origEnd.apply(this, [chunk, ...args]);
-  };
-  next();
-});
 app.use(import_express.default.json({ limit: "50mb" }));
 app.use((err, _req, res, next) => {
   if (err instanceof SyntaxError && "body" in err) {
@@ -1090,11 +1055,18 @@ var sanitizeLiveUsers = (list) => {
       }
       u.role = "agency";
       u.isOwner = true;
+      u.plan = u.plan || "Enterprise";
+      u.quotaUsed = Number.isFinite(Number(u.quotaUsed)) ? Number(u.quotaUsed) : 0;
+      u.quotaLimit = Number.isFinite(Number(u.quotaLimit)) && Number(u.quotaLimit) > 0 ? Number(u.quotaLimit) : 1e5;
+      u.aiCredits = Number.isFinite(Number(u.aiCredits)) && Number(u.aiCredits) >= 0 ? Number(u.aiCredits) : 5e4;
       return true;
     }
     if (!u.paymentInfo || !u.paymentInfo.trxId) {
       return false;
     }
+    u.quotaUsed = Number.isFinite(Number(u.quotaUsed)) ? Number(u.quotaUsed) : 0;
+    u.quotaLimit = Number.isFinite(Number(u.quotaLimit)) && Number(u.quotaLimit) > 0 ? Number(u.quotaLimit) : 1500;
+    u.aiCredits = Number.isFinite(Number(u.aiCredits)) && Number(u.aiCredits) >= 0 ? Number(u.aiCredits) : 500;
     return true;
   });
 };
@@ -6012,12 +5984,11 @@ async function startServer() {
   const prebuiltCandidate = import_path.default.join(process.cwd(), "prebuilt");
   const publicCandidate = import_path.default.join(process.cwd(), "public");
   const prebuiltAppJsPath = import_path.default.join(prebuiltCandidate, "app.js");
-  const prebuiltFirebaseJsPath = import_path.default.join(prebuiltCandidate, "firebase-runtime.js");
   const prebuiltAppCssPath = import_path.default.join(prebuiltCandidate, "app.css");
   const runtimeAppJsCandidate = import_path.default.join(DATA_DIR, "runtime-app.js");
   const isDevTsx = Boolean(process.argv[1] && process.argv[1].endsWith("server.ts")) && process.env.NODE_ENV !== "production";
   const isProdServer = !isDevTsx;
-  if (isDevTsx && (!import_fs.default.existsSync(prebuiltAppJsPath) || !import_fs.default.existsSync(`${prebuiltAppJsPath}.br`))) {
+  if (isDevTsx && !import_fs.default.existsSync(prebuiltAppJsPath)) {
     try {
       const cp = await import("child_process");
       cp.execSync("node scripts/sync-prebuilt.cjs", { cwd: process.cwd(), stdio: "inherit" });
@@ -6051,38 +6022,13 @@ async function startServer() {
       return cached;
     }
     const raw = import_fs.default.readFileSync(filePath);
-    const gzPath = `${filePath}.gz`;
-    const brPath = `${filePath}.br`;
-    let gzip;
-    let br;
-    try {
-      if (import_fs.default.existsSync(gzPath) && import_fs.default.statSync(gzPath).mtimeMs >= mtimeMs) {
-        gzip = import_fs.default.readFileSync(gzPath);
-      } else {
-        gzip = import_zlib.default.gzipSync(raw, { level: 1 });
-      }
-    } catch {
-      gzip = raw;
-    }
-    try {
-      if (import_fs.default.existsSync(brPath) && import_fs.default.statSync(brPath).mtimeMs >= mtimeMs) {
-        br = import_fs.default.readFileSync(brPath);
-      } else {
-        br = import_zlib.default.brotliCompressSync(raw, {
-          params: { [import_zlib.default.constants.BROTLI_PARAM_QUALITY]: 1 }
-        });
-      }
-    } catch {
-      br = gzip;
-    }
     const etag = `"v-${Math.floor(mtimeMs).toString(36)}-${raw.byteLength.toString(36)}"`;
-    const entry = { mtimeMs, etag, raw, gzip, br };
+    const entry = { mtimeMs, etag, raw };
     memoryAssetCache.set(filePath, entry);
     return entry;
   };
   try {
     getCachedAsset(getActiveAppJsPath());
-    getCachedAsset(prebuiltFirebaseJsPath);
     getCachedAsset(prebuiltAppCssPath);
   } catch {
   }
@@ -6105,24 +6051,9 @@ async function startServer() {
       }
       res.setHeader("Content-Type", contentType);
       res.setHeader("ETag", asset.etag);
-      res.setHeader("Vary", "Accept-Encoding");
-      res.setHeader(
-        "Cache-Control",
-        req.query && req.query.v ? "public, max-age=31536000, immutable" : "public, max-age=0, must-revalidate"
-      );
+      res.setHeader("Cache-Control", "no-cache");
       if (req.headers["if-none-match"] === asset.etag) {
         return res.status(304).end();
-      }
-      const acceptEncoding = String(req.headers["accept-encoding"] || "");
-      if (acceptEncoding.includes("br") && asset.br && asset.br.byteLength < asset.raw.byteLength) {
-        res.setHeader("Content-Encoding", "br");
-        res.setHeader("Content-Length", String(asset.br.byteLength));
-        return res.status(200).end(asset.br);
-      }
-      if (acceptEncoding.includes("gzip") && asset.gzip && asset.gzip.byteLength < asset.raw.byteLength) {
-        res.setHeader("Content-Encoding", "gzip");
-        res.setHeader("Content-Length", String(asset.gzip.byteLength));
-        return res.status(200).end(asset.gzip);
       }
       res.setHeader("Content-Length", String(asset.raw.byteLength));
       return res.status(200).end(asset.raw);
@@ -6138,16 +6069,13 @@ async function startServer() {
       "application/javascript; charset=utf-8"
     );
   });
-  app.get("/prebuilt/firebase-runtime.js", (req, res) => {
-    return sendMemoryCachedAsset(
-      req,
-      res,
-      prebuiltFirebaseJsPath,
-      "application/javascript; charset=utf-8"
-    );
-  });
   app.get("/prebuilt/app.css", (req, res) => {
     return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, "text/css; charset=utf-8");
+  });
+  app.get("/prebuilt/firebase-runtime.js", (_req, res) => {
+    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    return res.status(200).end("export {};\n");
   });
   app.use("/prebuilt", import_express.default.static(prebuiltCandidate, { etag: true, maxAge: "1y" }));
   if (import_fs.default.existsSync(publicCandidate)) {

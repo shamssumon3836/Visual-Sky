@@ -235,13 +235,13 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
                 Monthly Quota
               </span>
               <span className="text-cyan-400 font-mono font-bold">
-                {currentUser.quotaUsed.toLocaleString()} / {currentUser.quotaLimit.toLocaleString()}
+                {Number(currentUser.quotaUsed || 0).toLocaleString()} / {Number(currentUser.quotaLimit || 1500).toLocaleString()}
               </span>
             </div>
             <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">
               <div
                 className="bg-gradient-to-r from-blue-500 to-cyan-400 h-full rounded-full"
-                style={{ width: `${Math.min((currentUser.quotaUsed / Math.max(currentUser.quotaLimit, 1)) * 100, 100)}%` }}
+                style={{ width: `${Math.min((Number(currentUser.quotaUsed || 0) / Math.max(Number(currentUser.quotaLimit || 1500), 1)) * 100, 100)}%` }}
               />
             </div>
           </div>

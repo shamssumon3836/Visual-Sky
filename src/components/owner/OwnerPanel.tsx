@@ -934,9 +934,9 @@ export const OwnerPanel: React.FC = () => {
 
                       {/* Plan & Quota */}
                       <td className="py-3.5 px-3">
-                        <div className="font-semibold text-cyan-400">{user.plan} Plan</div>
+                        <div className="font-semibold text-cyan-400">{user.plan || 'Pro'} Plan</div>
                         <div className="text-[11px] text-slate-400 font-mono tabular-nums">
-                          {user.quotaUsed.toLocaleString()} / {user.quotaLimit.toLocaleString()} leads
+                          {Number(user.quotaUsed || 0).toLocaleString()} / {Number(user.quotaLimit || 1500).toLocaleString()} leads
                         </div>
                       </td>
 
@@ -945,7 +945,7 @@ export const OwnerPanel: React.FC = () => {
                         {user.paymentInfo ? (
                           <div className="space-y-1 font-mono text-[11px]">
                             <div className="text-[#f43f8e] font-semibold">
-                              bKash &middot; BDT {user.paymentInfo.amountBDT.toLocaleString()}
+                              bKash &middot; BDT {Number(user.paymentInfo.amountBDT || 0).toLocaleString()}
                             </div>
                             <div className="text-slate-300">
                               From: {user.paymentInfo.senderPhone}
@@ -1149,7 +1149,7 @@ export const OwnerPanel: React.FC = () => {
                           <td className="py-3.5 px-3">
                             <div className="text-cyan-400 font-semibold">{p.planName}</div>
                             <div className="text-[11px] text-slate-400 font-mono tabular-nums">
-                              Quota: {client.quotaLimit.toLocaleString()} leads
+                              Quota: {Number(client.quotaLimit || 1500).toLocaleString()} leads
                             </div>
                           </td>
                           <td className="py-3.5 px-3 font-semibold text-[#f43f8e]">
@@ -1356,10 +1356,10 @@ export const OwnerPanel: React.FC = () => {
 
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-semibold text-cyan-400">
-                        {user.plan} Plan
+                        {user.plan || 'Pro'} Plan
                       </span>
                       <span className="text-xs font-mono text-slate-400 tabular-nums">
-                        &middot; {user.quotaUsed.toLocaleString()} / {user.quotaLimit.toLocaleString()} sent
+                        &middot; {Number(user.quotaUsed || 0).toLocaleString()} / {Number(user.quotaLimit || 1500).toLocaleString()} sent
                       </span>
 
                       {!isOwner && (

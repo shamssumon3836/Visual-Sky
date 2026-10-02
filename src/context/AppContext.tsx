@@ -758,37 +758,105 @@ export const isStrictGmailAddress = (email: string): boolean => {
   return /^[a-z0-9._%+-]+@gmail\.com$/.test(clean);
 };
 
+const DEFAULT_AVATAR_DATA_URI =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#06b6d4"/><stop offset="100%" stop-color="#3b82f6"/></linearGradient></defs><rect width="80" height="80" rx="20" fill="#0f172a"/><circle cx="40" cy="30" r="14" fill="url(#g)"/><path d="M16 68c4-14 14-20 24-20s20 6 24 20" fill="url(#g)"/></svg>'
+  );
+
+const normalizeUserAccount = (u: any): UserAccount => {
+  if (!u || typeof u !== 'object') {
+    return {
+      id: '',
+      name: 'Guest',
+      email: '',
+      avatar: DEFAULT_AVATAR_DATA_URI,
+      role: 'client',
+      isOwner: false,
+      plan: 'Pro',
+      bdtPlanLabel: 'Starter Growth',
+      quotaUsed: 0,
+      quotaLimit: 1500,
+      aiCredits: 500
+    };
+  }
+  const isAgency = u.role === 'agency' || u.role === 'owner' || Boolean(u.isOwner);
+  const quotaUsed = Number.isFinite(Number(u.quotaUsed)) ? Number(u.quotaUsed) : 0;
+  const quotaLimit =
+    Number.isFinite(Number(u.quotaLimit)) && Number(u.quotaLimit) > 0
+      ? Number(u.quotaLimit)
+      : isAgency
+      ? 100000
+      : 1500;
+  const aiCredits =
+    Number.isFinite(Number(u.aiCredits)) && Number(u.aiCredits) >= 0
+      ? Number(u.aiCredits)
+      : isAgency
+      ? 50000
+      : 500;
+  const rawAvatar = typeof u.avatar === 'string' && u.avatar.trim() ? u.avatar.trim() : '';
+  const avatar =
+    !rawAvatar || rawAvatar.includes('images.unsplash.com')
+      ? DEFAULT_AVATAR_DATA_URI
+      : rawAvatar;
+
+  return {
+    id: u.id || (u.email ? `usr-${String(u.email).trim().toLowerCase().replace(/[^a-z0-9]/g, '-')}` : ''),
+    name: u.name || (u.email ? String(u.email).split('@')[0] : 'User'),
+    email: u.email ? String(u.email).trim() : '',
+    ...u,
+    role: isAgency ? 'agency' : (u.role || 'client'),
+    isOwner: isAgency || Boolean(u.isOwner),
+    plan: isAgency ? (u.plan || 'Enterprise') : (u.plan || 'Pro'),
+    bdtPlanLabel: u.bdtPlanLabel || (isAgency ? 'Agency Master Admin (Free Unlimited)' : 'Starter Growth'),
+    quotaUsed,
+    quotaLimit,
+    aiCredits,
+    avatar,
+    paymentInfo: u.paymentInfo
+      ? {
+          ...u.paymentInfo,
+          amountBDT: Number.isFinite(Number(u.paymentInfo.amountBDT))
+            ? Number(u.paymentInfo.amountBDT)
+            : 0
+        }
+      : undefined
+  };
+};
+
 const filterLiveUsersClient = (users: UserAccount[]): UserAccount[] => {
   if (!Array.isArray(users)) return [];
   const seenAgencyGmails = new Set<string>();
 
-  return users.filter((u) => {
-    if (!u || !u.email) return false;
-    const em = u.email.trim().toLowerCase();
-    if (em === 'client@growthagency.com' || em === 'test@example.com' || em === 'test@visualsky.io' || u.id === 'user-client-1') {
-      return false;
-    }
-    if (u.paymentInfo?.trxId === 'BKA9823KL12') return false;
-    const isAgency = u.role === 'agency' || Boolean(u.isOwner);
-
-    if (isAgency) {
-      if (!isStrictGmailAddress(em)) {
+  return users
+    .filter((u) => {
+      if (!u || !u.email) return false;
+      const em = u.email.trim().toLowerCase();
+      if (em === 'client@growthagency.com' || em === 'test@example.com' || em === 'test@visualsky.io' || u.id === 'user-client-1') {
         return false;
       }
-      if (!seenAgencyGmails.has(em)) {
-        if (seenAgencyGmails.size >= MAX_AGENCY_GMAIL_ACCOUNTS) {
+      if (u.paymentInfo?.trxId === 'BKA9823KL12') return false;
+      const isAgency = u.role === 'agency' || Boolean(u.isOwner);
+
+      if (isAgency) {
+        if (!isStrictGmailAddress(em)) {
           return false;
         }
-        seenAgencyGmails.add(em);
+        if (!seenAgencyGmails.has(em)) {
+          if (seenAgencyGmails.size >= MAX_AGENCY_GMAIL_ACCOUNTS) {
+            return false;
+          }
+          seenAgencyGmails.add(em);
+        }
+        return true;
+      }
+
+      if (!u.paymentInfo || !u.paymentInfo.trxId) {
+        return false;
       }
       return true;
-    }
-
-    if (!u.paymentInfo || !u.paymentInfo.trxId) {
-      return false;
-    }
-    return true;
-  });
+    })
+    .map((u) => normalizeUserAccount(u));
 };
 
 // Initial Email Templates & Categories
@@ -859,7 +927,7 @@ const EMPTY_GUEST_USER: UserAccount = {
   id: '',
   name: 'Guest',
   email: '',
-  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+  avatar: DEFAULT_AVATAR_DATA_URI,
   role: 'client',
   isOwner: false,
   plan: 'Pro',
@@ -958,7 +1026,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && parsed.email) {
-          return parsed;
+          return normalizeUserAccount(parsed);
         }
       }
       return EMPTY_GUEST_USER;
@@ -987,12 +1055,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const loginUser = (user: UserAccount, targetTab?: string) => {
     const isAgency = isAgencyUser(user);
-    const safeUser: UserAccount = {
+    const safeUser: UserAccount = normalizeUserAccount({
       ...user,
       role: isAgency ? 'agency' : (user.role || 'client'),
       isOwner: isAgency || Boolean(user.isOwner),
       plan: isAgency ? 'Enterprise' : (user.plan || 'Pro')
-    };
+    });
 
     setCurrentUserState(safeUser);
     setIsAuthenticatedState(true);
@@ -1025,13 +1093,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const setCurrentUser = (user: UserAccount) => {
-    setCurrentUserState(user);
-    if (!isAgencyUser(user) && activeTab === 'owner') {
+    const safeUser = normalizeUserAccount(user);
+    setCurrentUserState(safeUser);
+    if (!isAgencyUser(safeUser) && activeTab === 'owner') {
       setActiveTabState('dashboard');
       try { localStorage.setItem('visualsky_active_tab', 'dashboard'); } catch {}
     }
-    if (user?.email && user.email.toLowerCase() !== loadedWorkspaceEmailRef.current) {
-      loadUserWorkspace(user.email, user.id || user.supabaseId);
+    if (safeUser?.email && safeUser.email.toLowerCase() !== loadedWorkspaceEmailRef.current) {
+      loadUserWorkspace(safeUser.email, safeUser.id || safeUser.supabaseId);
     }
   };
 
@@ -1982,8 +2051,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 12. User Profile Hydration
-    if (data.userProfile && typeof data.userProfile === 'object') {
-      setCurrentUserState(prev => ({ ...prev, ...data.userProfile }));
+    if (data.userProfile && typeof data.userProfile === 'object' && Object.keys(data.userProfile).length > 0) {
+      setCurrentUserState(prev => normalizeUserAccount({ ...prev, ...data.userProfile }));
     }
 
     if (data.updatedAt) {

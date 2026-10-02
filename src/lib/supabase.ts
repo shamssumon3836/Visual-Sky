@@ -1,12 +1,13 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-// Read environment variables as requested
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// Read environment variables safely across Vite, esbuild, and Node ESM runtimes
+const metaEnv: Record<string, any> =
+  (typeof import.meta !== 'undefined' && (import.meta as any).env) || {};
+const supabaseUrl = String(metaEnv.VITE_SUPABASE_URL || '');
+const supabaseAnonKey = String(metaEnv.VITE_SUPABASE_ANON_KEY || '');
 
 export const isSupabaseConfigured: boolean =
-  supabaseUrl !== '' &&
-  supabaseAnonKey !== '' &&
+  Boolean(supabaseUrl && supabaseAnonKey) &&
   !supabaseUrl.includes('YOUR_SUPABASE') &&
   !supabaseAnonKey.includes('YOUR_SUPABASE') &&
   supabaseUrl.startsWith('https://');

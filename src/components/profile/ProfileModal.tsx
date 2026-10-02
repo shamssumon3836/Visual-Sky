@@ -378,7 +378,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
                     <div className="flex items-center gap-2">
                       <span className="text-slate-400">TrxID:</span>
                       <span className="font-mono font-bold text-amber-300">{currentUser.paymentInfo.trxId}</span>
-                      <span className="font-black text-emerald-400">BDT {currentUser.paymentInfo.amountBDT.toLocaleString()}</span>
+                      <span className="font-black text-emerald-400">BDT {Number(currentUser.paymentInfo.amountBDT || 0).toLocaleString()}</span>
                     </div>
                   </div>
                 )}

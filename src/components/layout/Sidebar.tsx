@@ -224,13 +224,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
           <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
             <div
               className="bg-gradient-to-r from-blue-500 to-cyan-400 h-full rounded-full transition-all duration-500"
-              style={{ width: `${Math.min((currentUser.quotaUsed / currentUser.quotaLimit) * 100, 100)}%` }}
+              style={{ width: `${Math.min((Number(currentUser.quotaUsed || 0) / Math.max(Number(currentUser.quotaLimit || 1500), 1)) * 100, 100)}%` }}
             ></div>
           </div>
 
           <div className="flex items-center justify-between text-[10px] text-slate-400">
-            <span>{currentUser.quotaUsed.toLocaleString()} Sent</span>
-            <span>{currentUser.quotaLimit.toLocaleString()} Quota</span>
+            <span>{Number(currentUser.quotaUsed || 0).toLocaleString()} Sent</span>
+            <span>{Number(currentUser.quotaLimit || 1500).toLocaleString()} Quota</span>
           </div>
 
           <button

@@ -531,10 +531,68 @@ const MainContent: React.FC = () => {
   );
 };
 
+class RootErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any) {
+    console.warn('[VisualSky Root Recovery]:', error);
+    try {
+      const savedUser = localStorage.getItem('visualsky_current_user');
+      if (savedUser) {
+        const parsed = JSON.parse(savedUser);
+        if (parsed && typeof parsed === 'object') {
+          parsed.quotaUsed = Number(parsed.quotaUsed) || 0;
+          parsed.quotaLimit = Number(parsed.quotaLimit) || 100000;
+          parsed.aiCredits = Number(parsed.aiCredits) || 50000;
+          localStorage.setItem('visualsky_current_user', JSON.stringify(parsed));
+        }
+      }
+    } catch {}
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-[#080c14] text-slate-100 flex items-center justify-center p-6">
+          <div className="max-w-md w-full bg-slate-900/90 border border-slate-800 rounded-2xl p-6 text-center space-y-4">
+            <h2 className="text-lg font-bold text-white">Workspace Restored</h2>
+            <p className="text-xs text-slate-400">
+              Your session cache was automatically repaired. Click below to continue.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                this.setState({ hasError: false });
+                window.location.reload();
+              }}
+              className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs transition cursor-pointer"
+            >
+              Reload Workspace
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
-    <AppProvider>
-      <MainContent />
-    </AppProvider>
+    <RootErrorBoundary>
+      <AppProvider>
+        <MainContent />
+      </AppProvider>
+    </RootErrorBoundary>
   );
 }

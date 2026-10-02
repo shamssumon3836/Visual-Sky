@@ -20,9 +20,7 @@ for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
           const isPrebuiltCore =
             dir === prebuiltDir &&
             (f === 'app.js' ||
-              f === 'app.js.gz' ||
               f === 'app.css' ||
-              f === 'app.css.gz' ||
               f === 'tailwind-bundle.css' ||
               f === 'server.cjs' ||
               f === 'index.html' ||
@@ -129,23 +127,10 @@ try {
   console.warn('[sync-prebuilt] app esbuild warning:', err && err.message);
 }
 
-// 3b. Pre-compress app.js and app.css with Gzip (level 9) for instant 0ms RAM serving
-for (const fileName of ['app.js', 'app.css']) {
-  const targetPath = path.join(prebuiltDir, fileName);
-  if (fs.existsSync(targetPath)) {
-    try {
-      const rawBuf = fs.readFileSync(targetPath);
-      const gzBuf = zlib.gzipSync(rawBuf, { level: 9 });
-      fs.writeFileSync(`${targetPath}.gz`, gzBuf);
-    } catch (e) {
-      console.warn('[sync-prebuilt] pre-compress warning for', fileName, e && e.message);
-    }
-  }
-}
-
-// 4. Write clean index.html and prebuilt/index.html with parallel modulepreload + style preload
+// 4. Write clean index.html, prebuilt/index.html, and dist/index.html with parallel modulepreload + style preload
 const rootIndexHtml = path.join(__dirname, '..', 'index.html');
 const prebuiltIndexHtml = path.join(prebuiltDir, 'index.html');
+const distIndexHtml = path.join(distDir, 'index.html');
 const prebuiltAppJsPath = path.join(prebuiltDir, 'app.js');
 const versionTag = fs.existsSync(prebuiltAppJsPath)
   ? Math.floor(fs.statSync(prebuiltAppJsPath).mtimeMs).toString(36)
@@ -195,4 +180,17 @@ const cleanHtml = `<!doctype html>
 
 fs.writeFileSync(rootIndexHtml, cleanHtml, 'utf8');
 fs.writeFileSync(prebuiltIndexHtml, cleanHtml, 'utf8');
-console.log('[sync-prebuilt] Wrote clean index.html & prebuilt/index.html with preload hints & pre-compressed Gzip assets');
+try {
+  if (fs.existsSync(distDir)) {
+    fs.writeFileSync(distIndexHtml, cleanHtml, 'utf8');
+    const distPrebuiltDir = path.join(distDir, 'prebuilt');
+    fs.mkdirSync(distPrebuiltDir, { recursive: true });
+    if (fs.existsSync(path.join(prebuiltDir, 'app.js'))) {
+      fs.copyFileSync(path.join(prebuiltDir, 'app.js'), path.join(distPrebuiltDir, 'app.js'));
+    }
+    if (fs.existsSync(path.join(prebuiltDir, 'app.css'))) {
+      fs.copyFileSync(path.join(prebuiltDir, 'app.css'), path.join(distPrebuiltDir, 'app.css'));
+    }
+  }
+} catch {}
+console.log('[sync-prebuilt] Wrote clean index.html, prebuilt/index.html & dist/index.html with preload hints');

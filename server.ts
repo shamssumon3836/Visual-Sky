@@ -31,58 +31,6 @@ const OTP_SECRET = process.env.OTP_SECRET || 'visualsky-secure-otp-signature-key
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-// Fast built-in HTTP Gzip compression middleware for Vite modules, JS/CSS bundles, and JSON APIs
-app.use((req, res, next) => {
-  const acceptEncoding = String(req.headers['accept-encoding'] || '');
-  if (!acceptEncoding.includes('gzip') || req.method === 'HEAD' || req.url.startsWith('/api/attachments/')) {
-    return next();
-  }
-
-  let writeCalled = false;
-  const origWrite = res.write;
-  const origEnd = res.end;
-
-  res.write = function (chunk: any, ...args: any[]) {
-    writeCalled = true;
-    return (origWrite as any).apply(this, [chunk, ...args]);
-  } as any;
-
-  res.end = function (chunk?: any, ...args: any[]) {
-    if (!writeCalled && chunk && !res.getHeader('Content-Encoding')) {
-      const contentType = String(res.getHeader('Content-Type') || '').toLowerCase();
-      const isCompressible =
-        contentType.includes('javascript') ||
-        contentType.includes('json') ||
-        contentType.includes('text/') ||
-        contentType.includes('svg') ||
-        req.url.endsWith('.tsx') ||
-        req.url.endsWith('.ts') ||
-        req.url.endsWith('.js') ||
-        req.url.endsWith('.css');
-
-      if (isCompressible) {
-        try {
-          const buf = Buffer.isBuffer(chunk)
-            ? chunk
-            : typeof chunk === 'string'
-            ? Buffer.from(chunk, typeof args[0] === 'string' ? (args[0] as BufferEncoding) : 'utf8')
-            : null;
-          if (buf && buf.byteLength > 1024) {
-            const compressed = zlib.gzipSync(buf, { level: 1 });
-            res.setHeader('Content-Encoding', 'gzip');
-            res.setHeader('Vary', 'Accept-Encoding');
-            res.setHeader('Content-Length', String(compressed.byteLength));
-            return (origEnd as any).call(this, compressed);
-          }
-        } catch {}
-      }
-    }
-    return (origEnd as any).apply(this, [chunk, ...args]);
-  } as any;
-
-  next();
-});
-
 app.use(express.json({ limit: '50mb' }));
 
 // Prevent raw HTML SyntaxErrors from broken or malformed client JSON
@@ -1300,6 +1248,10 @@ const sanitizeLiveUsers = (list: any[]): any[] => {
       }
       u.role = 'agency';
       u.isOwner = true;
+      u.plan = u.plan || 'Enterprise';
+      u.quotaUsed = Number.isFinite(Number(u.quotaUsed)) ? Number(u.quotaUsed) : 0;
+      u.quotaLimit = Number.isFinite(Number(u.quotaLimit)) && Number(u.quotaLimit) > 0 ? Number(u.quotaLimit) : 100000;
+      u.aiCredits = Number.isFinite(Number(u.aiCredits)) && Number(u.aiCredits) >= 0 ? Number(u.aiCredits) : 50000;
       return true;
     }
 
@@ -1307,6 +1259,9 @@ const sanitizeLiveUsers = (list: any[]): any[] => {
     if (!u.paymentInfo || !u.paymentInfo.trxId) {
       return false;
     }
+    u.quotaUsed = Number.isFinite(Number(u.quotaUsed)) ? Number(u.quotaUsed) : 0;
+    u.quotaLimit = Number.isFinite(Number(u.quotaLimit)) && Number(u.quotaLimit) > 0 ? Number(u.quotaLimit) : 1500;
+    u.aiCredits = Number.isFinite(Number(u.aiCredits)) && Number(u.aiCredits) >= 0 ? Number(u.aiCredits) : 500;
     return true;
   });
 };
@@ -3838,10 +3793,10 @@ try {
   }
 } catch {}
 
-// Auto-sync prebuilt client bundle ONLY when pre-compressed bundle is missing in local dev mode
+// Auto-sync prebuilt client bundle ONLY when prebuilt/app.js is missing in local dev mode
 let lastBundleSyncCheck = 0;
 function ensureFreshPrebuiltBundle() {
-  if (fs.existsSync(path.join(process.cwd(), 'prebuilt', 'app.js.gz'))) {
+  if (fs.existsSync(path.join(process.cwd(), 'prebuilt', 'app.js'))) {
     return;
   }
   const isDevTsx =
@@ -7483,8 +7438,8 @@ async function startServer() {
     process.env.NODE_ENV !== 'production';
   const isProdServer = !isDevTsx;
 
-  // Refresh prebuilt assets on dev startup only if pre-compressed bundles are missing
-  if (isDevTsx && (!fs.existsSync(prebuiltAppJsPath) || !fs.existsSync(`${prebuiltAppJsPath}.gz`))) {
+  // Refresh prebuilt assets on dev startup only if prebuilt/app.js is missing
+  if (isDevTsx && !fs.existsSync(prebuiltAppJsPath)) {
     try {
       const cp = await import('child_process');
       cp.execSync('node scripts/sync-prebuilt.cjs', { cwd: process.cwd(), stdio: 'inherit' });
@@ -7510,10 +7465,10 @@ async function startServer() {
     return prebuiltAppJsPath;
   };
 
-  // Ultra-fast in-memory RAM cache for bundles (raw + pre-compressed Gzip)
+  // Ultra-fast in-memory RAM cache for bundles
   const memoryAssetCache = new Map<
     string,
-    { mtimeMs: number; etag: string; raw: Buffer; gzip: Buffer }
+    { mtimeMs: number; etag: string; raw: Buffer }
   >();
 
   const getCachedAsset = (filePath: string) => {
@@ -7525,19 +7480,8 @@ async function startServer() {
       return cached;
     }
     const raw = fs.readFileSync(filePath);
-    const gzPath = `${filePath}.gz`;
-    let gzip: Buffer;
-    try {
-      if (fs.existsSync(gzPath) && fs.statSync(gzPath).mtimeMs >= mtimeMs) {
-        gzip = fs.readFileSync(gzPath);
-      } else {
-        gzip = zlib.gzipSync(raw, { level: 1 });
-      }
-    } catch {
-      gzip = raw;
-    }
     const etag = `"v-${Math.floor(mtimeMs).toString(36)}-${raw.byteLength.toString(36)}"`;
-    const entry = { mtimeMs, etag, raw, gzip };
+    const entry = { mtimeMs, etag, raw };
     memoryAssetCache.set(filePath, entry);
     return entry;
   };
@@ -7572,16 +7516,9 @@ async function startServer() {
       }
       res.setHeader('Content-Type', contentType);
       res.setHeader('ETag', asset.etag);
-      res.setHeader('Vary', 'Accept-Encoding');
       res.setHeader('Cache-Control', 'no-cache');
       if (req.headers['if-none-match'] === asset.etag) {
         return res.status(304).end();
-      }
-      const acceptEncoding = String(req.headers['accept-encoding'] || '');
-      if (acceptEncoding.includes('gzip') && asset.gzip && asset.gzip.byteLength < asset.raw.byteLength) {
-        res.setHeader('Content-Encoding', 'gzip');
-        res.setHeader('Content-Length', String(asset.gzip.byteLength));
-        return res.status(200).end(asset.gzip);
       }
       res.setHeader('Content-Length', String(asset.raw.byteLength));
       return res.status(200).end(asset.raw);
@@ -7590,7 +7527,7 @@ async function startServer() {
     }
   };
 
-  // Serve pre-compressed RAM-cached JS & CSS bundles in <0.1ms
+  // Serve RAM-cached JS & CSS bundles in <0.1ms
   app.get('/prebuilt/app.js', (req, res) => {
     return sendMemoryCachedAsset(
       req,
@@ -7602,6 +7539,12 @@ async function startServer() {
 
   app.get('/prebuilt/app.css', (req, res) => {
     return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, 'text/css; charset=utf-8');
+  });
+
+  app.get('/prebuilt/firebase-runtime.js', (_req, res) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    return res.status(200).end('export {};\n');
   });
 
   app.use('/prebuilt', express.static(prebuiltCandidate, { etag: true, maxAge: '1y' }));

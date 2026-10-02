@@ -6,6 +6,10 @@
     "role": "agency",
     "isOwner": true,
     "plan": "Enterprise",
+    "bdtPlanLabel": "Agency Master Admin (Free Unlimited)",
+    "quotaUsed": 0,
+    "quotaLimit": 100000,
+    "aiCredits": 50000,
     "phone": "+880 1712-345678",
     "joinedAt": "2026-08-29"
   }
