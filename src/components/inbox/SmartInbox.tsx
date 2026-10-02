@@ -169,6 +169,8 @@ export const SmartInbox: React.FC = () => {
   const [showBulkLabelMenu, setShowBulkLabelMenu] = useState<boolean>(false);
   const [customLabelInput, setCustomLabelInput] = useState<string>('');
   const [mobileShowChat, setMobileShowChat] = useState<boolean>(false);
+  const [showMobileFolderDrawer, setShowMobileFolderDrawer] = useState<boolean>(false);
+  const [showMobileDriveInput, setShowMobileDriveInput] = useState<boolean>(false);
 
   // User-friendly CRM Drawer & AI Thread Summary states
   const [showLeadCrmCard, setShowLeadCrmCard] = useState<boolean>(false);
@@ -1126,22 +1128,70 @@ export const SmartInbox: React.FC = () => {
   };
 
   return (
-    <div className="p-1.5 md:px-3 md:py-2 max-w-[1460px] mx-auto h-[calc(100vh-4rem)] flex flex-col gap-2 animate-in fade-in">
-      {/* ALWAYS-VISIBLE TOP GOOGLE DRIVE ATTACHMENT & INBOX BAR WITH DIRECT INLINE INPUT */}
-      <div className="px-3 py-2 rounded-2xl bg-gradient-to-r from-emerald-950/80 via-slate-900/95 to-cyan-950/70 border border-emerald-500/50 flex flex-col lg:flex-row lg:items-center justify-between gap-2 shrink-0 shadow-lg">
-        <div className="flex items-center gap-2 min-w-0 flex-wrap flex-1">
-          <span className="px-2.5 py-1 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-black text-[11px] flex items-center gap-1.5 shrink-0">
-            <FolderOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            <span>☁️ Google Drive Link (0 KB Hosting):</span>
-          </span>
+    <div className="p-1 sm:p-2 md:px-3 md:py-2 max-w-[1460px] mx-auto h-full flex flex-col gap-1.5 sm:gap-2 animate-in fade-in overflow-hidden">
+      {/* TOP GOOGLE DRIVE ATTACHMENT & INBOX BAR (Hidden on mobile when reading a thread so conversation gets 100% screen height) */}
+      <div
+        className={`px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-2xl bg-gradient-to-r from-emerald-950/85 via-slate-900/95 to-cyan-950/75 border border-emerald-500/50 flex-col lg:flex-row lg:items-center justify-between gap-1.5 sm:gap-2 shrink-0 shadow-lg ${
+          mobileShowChat ? 'hidden md:flex' : 'flex'
+        }`}
+      >
+        {/* Mobile Compact Top Row + Desktop Full Row */}
+        <div className="flex items-center justify-between lg:justify-start gap-1.5 sm:gap-2 min-w-0 flex-wrap flex-1">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="px-2 py-1 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-black text-[10px] sm:text-[11px] flex items-center gap-1 shrink-0">
+              <FolderOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span className="truncate">☁️ Drive (0 KB):</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowMobileDriveInput(prev => !prev)}
+              className="lg:hidden px-2 py-1 rounded-xl bg-slate-900 border border-emerald-500/40 text-emerald-200 font-bold text-[10px] flex items-center gap-1 shrink-0 cursor-pointer active:scale-95"
+            >
+              <Link2 className="w-3 h-3 text-emerald-400" />
+              <span>{driveStorageSettings.folderUrl ? '✏️ Change Link' : '🔗 Paste Link'}</span>
+            </button>
+          </div>
 
-          <div className="flex items-center gap-1.5 flex-1 min-w-[220px] max-w-xl">
+          {/* Mobile Quick Action Buttons in the same row */}
+          <div className="flex lg:hidden items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                if (currentThread && mobileShowChat) {
+                  setIsComposerMinimized(false);
+                  setTimeout(() => replyFileInputRef.current?.click(), 60);
+                } else {
+                  setShowComposeModal(true);
+                  setTimeout(() => composeFileInputRef.current?.click(), 120);
+                }
+              }}
+              className="px-2.5 py-1 rounded-xl bg-emerald-500 text-slate-950 font-black text-[10px] flex items-center gap-1 shadow cursor-pointer active:scale-95"
+            >
+              <Paperclip className="w-3 h-3" />
+              <span>📎 Attach</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowDriveSettingsModal(true)}
+              className="p-1.5 rounded-xl bg-slate-900 border border-emerald-500/40 text-emerald-300 cursor-pointer active:scale-95"
+              title="Drive Storage Settings"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Inline Input: Always visible on desktop (lg:flex), toggleable on mobile */}
+          <div
+            className={`${
+              showMobileDriveInput ? 'flex' : 'hidden lg:flex'
+            } items-center gap-1.5 w-full lg:w-auto lg:flex-1 min-w-[200px] max-w-xl pt-1 lg:pt-0`}
+          >
             <input
               type="url"
               value={driveFolderUrlInput}
               onChange={(e) => setDriveFolderUrlInput(e.target.value)}
               placeholder="Paste Google Drive Folder Link (https://drive.google.com/drive/folders/...)"
-              className="flex-1 bg-slate-950/95 border border-emerald-500/40 focus:border-emerald-400 rounded-xl px-2.5 py-1 text-[11px] text-slate-100 placeholder-slate-400 font-mono focus:outline-none"
+              className="flex-1 bg-slate-950/95 border border-emerald-500/40 focus:border-emerald-400 rounded-xl px-2.5 py-1.5 lg:py-1 text-xs lg:text-[11px] text-slate-100 placeholder-slate-400 font-mono focus:outline-none min-w-0"
             />
             <button
               type="button"
@@ -1153,14 +1203,15 @@ export const SmartInbox: React.FC = () => {
                   autoIncludeDriveLinkInEmail: autoIncludeDriveLink
                 });
                 setDriveSavedFeedback(true);
+                setShowMobileDriveInput(false);
                 setTimeout(() => setDriveSavedFeedback(false), 2500);
               }}
-              className="px-2.5 py-1 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] shrink-0 cursor-pointer transition whitespace-nowrap shadow"
+              className="px-2.5 py-1.5 lg:py-1 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] shrink-0 cursor-pointer transition whitespace-nowrap shadow active:scale-95"
             >
               {driveSavedFeedback
                 ? '✓ Saved!'
                 : driveStorageSettings.folderUrl
-                ? '💾 Change / Save Link'
+                ? '💾 Save Link'
                 : '💾 Save Drive Link'}
             </button>
             {driveStorageSettings.folderUrl && (
@@ -1168,17 +1219,18 @@ export const SmartInbox: React.FC = () => {
                 href={driveStorageSettings.folderUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-2 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-cyan-500/40 text-cyan-300 font-bold text-[11px] flex items-center gap-1 shrink-0 transition whitespace-nowrap"
+                className="px-2 py-1.5 lg:py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-cyan-500/40 text-cyan-300 font-bold text-[11px] flex items-center gap-1 shrink-0 transition whitespace-nowrap"
                 title="Open Connected Google Drive Folder"
               >
-                <span>Open Drive</span>
+                <span className="hidden sm:inline">Open Drive</span>
                 <ExternalLink className="w-3 h-3 shrink-0" />
               </a>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+        {/* Desktop Right Action Buttons */}
+        <div className="hidden lg:flex items-center gap-1.5 flex-wrap shrink-0">
           <button
             type="button"
             onClick={() => {
@@ -1217,6 +1269,170 @@ export const SmartInbox: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* MOBILE SLIDE-OVER FOLDERS & LABELS DRAWER (Accessible from any mobile screen) */}
+      {showMobileFolderDrawer && (
+        <div
+          onClick={() => setShowMobileFolderDrawer(false)}
+          className="fixed inset-0 z-50 lg:hidden bg-black/80 backdrop-blur-sm flex animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-72 max-w-[85vw] bg-[#090d16] border-r border-slate-800 h-full p-3.5 flex flex-col justify-between overflow-y-auto shadow-2xl"
+          >
+            <div className="space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-xl bg-gradient-to-tr from-blue-600 to-cyan-400 flex items-center justify-center text-slate-950 font-black">
+                    <Inbox className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-black text-white">Smart Inbox Folders</div>
+                    <div className="text-[10px] text-emerald-400 font-mono">Live Sync: {lastAutoSyncTime}</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMobileFolderDrawer(false)}
+                  className="p-1.5 rounded-xl bg-slate-900 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMobileFolderDrawer(false);
+                  setShowComposeModal(true);
+                }}
+                className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 text-white font-extrabold text-xs shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Compose New Email</span>
+              </button>
+
+              <div className="space-y-1">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 px-2 py-1">
+                  Mailboxes
+                </div>
+                {[
+                  { id: 'inbox', label: 'Primary Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash && t.unreadCount > 0).length },
+                  { id: 'needs_reply', label: 'Waiting Reply', icon: Clock, count: waitingReplyCount },
+                  { id: 'unread', label: 'Unread Mail', icon: Mail, count: threads.filter(t => !t.isTrash && t.unreadCount > 0).length },
+                  { id: 'sent', label: 'Sent Mails', icon: Send, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'user')).length },
+                  { id: 'starred', label: 'Starred', icon: Star, count: threads.filter(t => t.isStarred && !t.isTrash).length },
+                  { id: 'high_intent', label: 'High Intent Leads', icon: Flame, count: threads.filter(t => t.labels.includes('Hot Lead') && !t.isTrash).length },
+                  { id: 'meetings', label: 'Meetings Booked', icon: Calendar, count: threads.filter(t => t.labels.includes('Meeting Scheduled') && !t.isTrash).length },
+                  { id: 'trash', label: 'Trash Bin', icon: Trash2, count: threads.filter(t => t.isTrash).length },
+                ].map(folder => {
+                  const Icon = folder.icon;
+                  const isSelected = selectedFolder === folder.id && !selectedLabelFilter;
+                  return (
+                    <button
+                      key={folder.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedFolder(folder.id as any);
+                        setSelectedLabelFilter(null);
+                        setSelectedThreadIds([]);
+                        setMobileShowChat(false);
+                        setShowMobileFolderDrawer(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                        isSelected
+                          ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                          : 'text-slate-300 hover:bg-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-cyan-400' : 'text-slate-400'}`} />
+                        <span className="truncate">{folder.label}</span>
+                      </div>
+                      {folder.count > 0 && (
+                        <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full shrink-0 ${
+                          isSelected ? 'bg-cyan-500 text-black font-extrabold' : 'bg-slate-800 text-slate-300'
+                        }`}>
+                          {folder.count}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="pt-2 border-t border-slate-800 space-y-1">
+                <div className="flex items-center justify-between px-2 py-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                    Filter by Label
+                  </span>
+                  {selectedLabelFilter && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedLabelFilter(null)}
+                      className="text-[10px] text-cyan-400 font-bold cursor-pointer"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+                {labelPresets.map((preset, idx) => {
+                  const count = threads.filter(t => !t.isTrash && t.labels.includes(preset.name)).length;
+                  const isActiveLabel = selectedLabelFilter === preset.name;
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        if (selectedFolder === 'trash') setSelectedFolder('inbox');
+                        setSelectedLabelFilter(prev => (prev === preset.name ? null : preset.name));
+                        setMobileShowChat(false);
+                        setShowMobileFolderDrawer(false);
+                      }}
+                      className={`w-full px-3 py-2 rounded-xl flex items-center justify-between gap-2 text-xs transition cursor-pointer ${
+                        isActiveLabel
+                          ? 'bg-slate-800 text-cyan-300 font-bold border border-cyan-500/30'
+                          : 'text-slate-300 hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className={`w-2.5 h-2.5 rounded-full border shrink-0 ${preset.color}`} />
+                        <span className="truncate">{preset.name}</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-slate-800 space-y-2 mt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMobileFolderDrawer(false);
+                  setShowDriveSettingsModal(true);
+                }}
+                className="w-full py-2 px-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <FolderOpen className="w-4 h-4 text-emerald-400" />
+                <span>{driveStorageSettings.folderUrl ? '⚙️ Change Google Drive Link' : '🔗 Set Google Drive Link'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleManualSync();
+                  setShowMobileFolderDrawer(false);
+                }}
+                className="w-full py-2 px-3 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncingManual ? 'animate-spin' : ''}`} />
+                <span>Sync IMAP Replies Now</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MAIN 3-COLUMN SPLIT CONTAINER - TAKES FULL HEIGHT */}
       <div className="flex-1 flex gap-2.5 overflow-hidden min-h-0">
@@ -1262,6 +1478,7 @@ export const SmartInbox: React.FC = () => {
               {[
                 { id: 'inbox', label: 'Primary Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash && t.unreadCount > 0).length },
                 { id: 'needs_reply', label: 'Waiting Reply', icon: Clock, count: waitingReplyCount },
+                { id: 'unread', label: 'Unread Mail', icon: Mail, count: threads.filter(t => !t.isTrash && t.unreadCount > 0).length },
                 { id: 'sent', label: 'Sent Mails', icon: Send, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'user')).length },
                 { id: 'starred', label: 'Starred', icon: Star, count: threads.filter(t => t.isStarred && !t.isTrash).length },
                 { id: 'high_intent', label: 'High Intent Leads', icon: Flame, count: threads.filter(t => t.labels.includes('Hot Lead') && !t.isTrash).length },
@@ -1404,44 +1621,56 @@ export const SmartInbox: React.FC = () => {
         </div>
 
         {/* 2. THREADS LIST (Middle Column) */}
-        <div className={`w-full md:w-80 lg:w-[320px] bg-slate-900/90 border border-slate-800 rounded-2xl flex flex-col overflow-hidden shadow-2xl shrink-0 ${
+        <div className={`w-full md:w-80 lg:w-[330px] bg-slate-900/90 border border-slate-800 rounded-2xl flex flex-col overflow-hidden shadow-2xl shrink-0 ${
           mobileShowChat ? 'hidden md:flex' : 'flex'
         }`}>
           
-          {/* Mobile/Tablet Search + Compose Bar (Only visible below lg where Left Sidebar is hidden) */}
+          {/* Mobile/Tablet Search + Folders Drawer + Sync + Compose Bar (Visible below lg) */}
           <div className="lg:hidden flex items-center gap-1.5 p-2 border-b border-slate-800 bg-slate-950/90 shrink-0">
-            <div className="relative flex-1">
+            <button
+              type="button"
+              onClick={() => setShowMobileFolderDrawer(true)}
+              className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 font-extrabold text-[11px] flex items-center gap-1 shrink-0 cursor-pointer active:scale-95"
+              title="Open All Folders & Labels"
+            >
+              <Inbox className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Folders</span>
+            </button>
+
+            <div className="relative flex-1 min-w-0">
               <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search mail..."
-                className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-8 pr-6 py-1 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-8 pr-6 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white p-0.5"
                 >
-                  <X className="w-3 h-3" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
+
             <button
               type="button"
-              onClick={() => setShowDriveSettingsModal(true)}
-              className="px-2 py-1.5 rounded-xl bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 font-extrabold text-[10px] flex items-center gap-1 shrink-0 cursor-pointer"
-              title="Set or Change Google Drive Folder Link for Attachments"
+              onClick={handleManualSync}
+              disabled={isSyncingManual}
+              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 shrink-0 cursor-pointer active:scale-95 disabled:opacity-50"
+              title="Sync IMAP Replies Now"
             >
-              <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Drive</span>
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingManual ? 'animate-spin text-emerald-400' : ''}`} />
             </button>
+
             <button
               type="button"
               onClick={() => setShowComposeModal(true)}
-              className="px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-extrabold text-[11px] flex items-center gap-1 shrink-0 cursor-pointer shadow"
+              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-extrabold text-xs flex items-center gap-1 shrink-0 cursor-pointer shadow active:scale-95"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Compose</span>
@@ -1460,7 +1689,7 @@ export const SmartInbox: React.FC = () => {
                 key={tab.id}
                 type="button"
                 onClick={() => setPrimaryTab(tab.id as any)}
-                className={`flex-1 py-1.5 px-2 text-center font-bold border-b-2 whitespace-nowrap transition cursor-pointer ${
+                className={`flex-1 py-2 sm:py-1.5 px-2 text-center font-bold border-b-2 whitespace-nowrap transition cursor-pointer ${
                   primaryTab === tab.id
                     ? 'border-cyan-400 text-cyan-300 bg-cyan-950/20'
                     : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -1471,16 +1700,17 @@ export const SmartInbox: React.FC = () => {
             ))}
           </div>
 
-          {/* Mobile/Tablet Folder Bar (visible below lg where left sidebar is hidden) */}
-          <div className="lg:hidden flex items-center gap-1 px-2 py-1 border-b border-slate-800/80 bg-slate-950/60 overflow-x-auto no-scrollbar shrink-0">
+          {/* Mobile/Tablet Scrollable Folder + Label Bar (visible below lg) */}
+          <div className="lg:hidden flex items-center gap-1.5 px-2 py-1.5 border-b border-slate-800/80 bg-slate-950/60 overflow-x-auto no-scrollbar shrink-0">
             {[
-              { id: 'inbox', label: 'Inbox' },
-              { id: 'needs_reply', label: `Waiting (${waitingReplyCount})` },
-              { id: 'sent', label: 'Sent' },
-              { id: 'starred', label: 'Starred' },
-              { id: 'high_intent', label: 'Hot Leads' },
-              { id: 'meetings', label: 'Meetings' },
-              { id: 'trash', label: 'Trash' }
+              { id: 'inbox', label: '📥 Inbox' },
+              { id: 'needs_reply', label: `⚡ Waiting (${waitingReplyCount})` },
+              { id: 'unread', label: `🟢 Unread (${threads.filter(t => !t.isTrash && t.unreadCount > 0).length})` },
+              { id: 'sent', label: '📤 Sent' },
+              { id: 'starred', label: '⭐ Starred' },
+              { id: 'high_intent', label: '🔥 Hot Leads' },
+              { id: 'meetings', label: '📅 Meetings' },
+              { id: 'trash', label: '🗑️ Trash' }
             ].map(f => (
               <button
                 key={f.id}
@@ -1489,27 +1719,37 @@ export const SmartInbox: React.FC = () => {
                   setSelectedFolder(f.id as any);
                   setSelectedLabelFilter(null);
                 }}
-                className={`px-2 py-0.5 rounded-lg text-[10px] font-bold whitespace-nowrap cursor-pointer transition ${
-                  selectedFolder === f.id
-                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                    : 'text-slate-400 hover:text-slate-200'
+                className={`px-2.5 py-1 rounded-xl text-[11px] font-bold whitespace-nowrap cursor-pointer transition active:scale-95 ${
+                  selectedFolder === f.id && !selectedLabelFilter
+                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                    : 'bg-slate-900/80 text-slate-400 hover:text-slate-200 border border-slate-800/80'
                 }`}
               >
                 {f.label}
               </button>
             ))}
+            {selectedLabelFilter && (
+              <button
+                type="button"
+                onClick={() => setSelectedLabelFilter(null)}
+                className="px-2.5 py-1 rounded-xl text-[11px] font-bold whitespace-nowrap bg-purple-500/20 text-purple-200 border border-purple-500/40 flex items-center gap-1 shrink-0 cursor-pointer"
+              >
+                <span>🏷️ {selectedLabelFilter}</span>
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
 
           {/* Sub-header: Select All + Bulk Actions (when selected) or Quick Filter Pills */}
           <div className="px-3 py-1.5 border-b border-slate-800/80 bg-slate-950/50 flex items-center justify-between gap-1.5 text-[11px] text-slate-400 shrink-0 relative">
-            <label className="flex items-center gap-1.5 cursor-pointer select-none hover:text-slate-200 shrink-0">
+            <label className="flex items-center gap-2 cursor-pointer select-none hover:text-slate-200 shrink-0 py-0.5">
               <input
                 type="checkbox"
                 checked={filteredThreads.length > 0 && selectedThreadIds.length === filteredThreads.length}
                 onChange={handleToggleSelectAll}
-                className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 cursor-pointer w-3.5 h-3.5"
+                className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 cursor-pointer w-4 h-4"
               />
-              <span className="font-bold text-[10px]">
+              <span className="font-bold text-[11px]">
                 {selectedThreadIds.length > 0 ? `${selectedThreadIds.length} Selected` : `All (${filteredThreads.length})`}
               </span>
             </label>
@@ -1523,7 +1763,7 @@ export const SmartInbox: React.FC = () => {
                       bulkRestoreThreads(selectedThreadIds);
                       setSelectedThreadIds([]);
                     }}
-                    className="px-2 py-0.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold cursor-pointer"
+                    className="px-2.5 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold cursor-pointer"
                   >
                     Restore
                   </button>
@@ -1532,7 +1772,7 @@ export const SmartInbox: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleBulkMarkRead}
-                      className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-bold cursor-pointer"
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-bold cursor-pointer"
                     >
                       Read
                     </button>
@@ -1540,9 +1780,9 @@ export const SmartInbox: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setShowBulkLabelMenu(prev => !prev)}
-                        className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[10px] font-bold flex items-center gap-0.5 cursor-pointer"
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
                       >
-                        <Tag className="w-2.5 h-2.5" />
+                        <Tag className="w-3 h-3" />
                         <span>Label</span>
                       </button>
                       {showBulkLabelMenu && (
@@ -1552,7 +1792,7 @@ export const SmartInbox: React.FC = () => {
                               key={preset.name}
                               type="button"
                               onClick={() => handleBulkAssignLabel(preset.name)}
-                              className="w-full text-left px-2 py-1 rounded-lg hover:bg-slate-900 text-[11px] text-slate-200 cursor-pointer flex items-center gap-1.5"
+                              className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-slate-900 text-xs text-slate-200 cursor-pointer flex items-center gap-2"
                             >
                               <span className={`w-2 h-2 rounded-full border ${preset.color}`} />
                               <span>{preset.name}</span>
@@ -1566,7 +1806,7 @@ export const SmartInbox: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleBulkDelete}
-                  className="px-2 py-0.5 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-800 text-[10px] font-bold cursor-pointer"
+                  className="px-2.5 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-800 text-[10px] font-bold cursor-pointer"
                 >
                   Delete
                 </button>
@@ -1575,9 +1815,9 @@ export const SmartInbox: React.FC = () => {
               <button
                 type="button"
                 onClick={handleEmptyTrash}
-                className="px-2 py-0.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/40 text-rose-200 font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                className="px-2.5 py-1 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/40 text-rose-200 font-bold text-[10px] flex items-center gap-1 cursor-pointer"
               >
-                <Trash2 className="w-2.5 h-2.5 text-rose-400" />
+                <Trash2 className="w-3 h-3 text-rose-400" />
                 <span>Empty Trash</span>
               </button>
             ) : (
@@ -1631,28 +1871,28 @@ export const SmartInbox: React.FC = () => {
                   <div
                     key={t.id}
                     onClick={() => handleSelectThread(t)}
-                    className={`p-3.5 transition-all cursor-pointer flex gap-3 relative group ${
+                    className={`p-3 sm:p-3.5 transition-all cursor-pointer flex gap-2.5 sm:gap-3 relative group ${
                       isUnread
                         ? 'bg-gradient-to-r from-emerald-500/25 via-cyan-500/15 to-slate-900 border-l-4 border-l-emerald-400 ring-1 ring-emerald-400/40 shadow-[inset_0_0_24px_rgba(16,185,129,0.18)]'
                         : isSelected
                         ? 'bg-slate-800/75 border-l-4 border-l-cyan-400'
-                        : 'hover:bg-slate-800/40 opacity-85'
+                        : 'hover:bg-slate-800/40 opacity-90'
                     }`}
                   >
-                    {/* Checkbox + Star */}
-                    <div className="flex flex-col items-center gap-2 pt-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    {/* Checkbox + Star with mobile-friendly touch targets */}
+                    <div className="flex flex-col items-center gap-2.5 pt-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
                         checked={isChecked}
                         onChange={(e) => handleToggleSingleSelect(t.id, e as any)}
-                        className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 cursor-pointer w-3.5 h-3.5"
+                        className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 cursor-pointer w-4 h-4"
                       />
                       <button
                         type="button"
                         onClick={() => toggleThreadStar(t.id)}
-                        className="text-slate-500 hover:text-amber-400 cursor-pointer transition"
+                        className="p-1 -m-1 text-slate-500 hover:text-amber-400 cursor-pointer transition"
                       >
-                        <Star className={`w-3.5 h-3.5 ${t.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
+                        <Star className={`w-4 h-4 ${t.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
                       </button>
                     </div>
 
@@ -1670,7 +1910,7 @@ export const SmartInbox: React.FC = () => {
                             className={`truncate ${
                               isUnread
                                 ? 'text-[13px] font-black text-white'
-                                : 'text-xs font-medium text-slate-300'
+                                : 'text-xs font-semibold text-slate-200'
                             }`}
                           >
                             {t.leadName}
@@ -1688,7 +1928,7 @@ export const SmartInbox: React.FC = () => {
                           )}
                           {isUnread && (
                             <span className="px-1.5 py-0.5 rounded-full bg-emerald-400 text-slate-950 font-black text-[9px] uppercase tracking-wider shadow-sm animate-pulse shrink-0">
-                              {isReplyMail ? '✨ NEW REPLY' : '✨ NEW MAIL'}
+                              {isReplyMail ? '✨ NEW REPLY' : '✨ NEW'}
                             </span>
                           )}
                         </div>
@@ -1702,10 +1942,10 @@ export const SmartInbox: React.FC = () => {
                       </div>
 
                       <div
-                        className={`text-[11px] truncate ${
+                        className={`text-xs truncate ${
                           isUnread
                             ? 'text-emerald-300 font-extrabold'
-                            : 'text-slate-400 font-normal'
+                            : 'text-slate-300 font-medium'
                         }`}
                       >
                         {t.subject}
@@ -1736,32 +1976,32 @@ export const SmartInbox: React.FC = () => {
                       <div className="flex items-center justify-between gap-1 pt-1">
                         <div className="flex items-center gap-1 flex-wrap">
                           {waitingForUser ? (
-                            <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
                               ⚡ Needs Reply
                             </span>
                           ) : (
-                            <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
                               ✓ Replied
                             </span>
                           )}
                           {t.labels && t.labels.map((lbl, idx) => (
                             <span
                               key={idx}
-                              className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-800 text-cyan-300 border border-slate-700"
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-800 text-cyan-300 border border-slate-700"
                             >
                               {lbl}
                             </span>
                           ))}
                         </div>
 
-                        {/* Quick Hover Trash / Restore Action */}
+                        {/* Quick Trash / Restore Action (Always accessible on mobile, hover on desktop) */}
                         <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                           {t.isTrash ? (
                             <>
                               <button
                                 type="button"
                                 onClick={() => restoreThread(t.id)}
-                                className="px-1.5 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-[9px] font-bold cursor-pointer"
+                                className="px-2 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold cursor-pointer"
                                 title="Restore to Inbox"
                               >
                                 Restore
@@ -1769,7 +2009,7 @@ export const SmartInbox: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => permanentDeleteThread(t.id)}
-                                className="px-1.5 py-0.5 rounded bg-rose-950/80 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40 text-[9px] font-bold cursor-pointer"
+                                className="px-2 py-1 rounded-lg bg-rose-950/80 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40 text-[10px] font-bold cursor-pointer"
                                 title="Delete Permanently"
                               >
                                 Delete
@@ -1779,10 +2019,10 @@ export const SmartInbox: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => deleteThreadToTrash(t.id)}
-                              className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-rose-950/70 text-slate-500 hover:text-rose-400 transition cursor-pointer"
+                              className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1.5 rounded-lg hover:bg-rose-950/70 text-slate-400 hover:text-rose-400 transition cursor-pointer"
                               title="Move to Trash"
                             >
-                              <Trash2 className="w-3 h-3" />
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           )}
                         </div>
@@ -1801,21 +2041,26 @@ export const SmartInbox: React.FC = () => {
         }`}>
           {currentThread ? (
             <>
-              {/* Compact Message Header */}
-              <div className="px-3.5 py-2 border-b border-slate-800 bg-slate-950/90 backdrop-blur-md flex flex-col gap-1.5 shrink-0">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
+              {/* Compact & Mobile-Friendly Message Header */}
+              <div className="px-2.5 sm:px-3.5 py-2 border-b border-slate-800 bg-slate-950/95 backdrop-blur-md flex flex-col gap-1.5 shrink-0">
+                {/* Row 1: Back Button + Subject/Sender Info + Star & Trash */}
+                <div className="flex items-start sm:items-center justify-between gap-2">
+                  <div className="flex items-start sm:items-center gap-2 min-w-0 flex-1">
                     <button
                       type="button"
                       onClick={() => setMobileShowChat(false)}
-                      className="p-1 rounded-lg bg-slate-800 text-slate-300 md:hidden cursor-pointer"
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 font-extrabold text-xs flex items-center gap-1 md:hidden cursor-pointer shrink-0 active:scale-95 shadow-sm"
+                      title="Back to Inbox List"
                     >
                       <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>Back</span>
                     </button>
 
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <h2 className="text-sm md:text-[15px] font-black text-slate-100 truncate">{currentThread.subject}</h2>
+                        <h2 className="text-xs sm:text-sm md:text-[15px] font-black text-slate-100 truncate max-w-full">
+                          {currentThread.subject}
+                        </h2>
                         {currentThread.labels && currentThread.labels.map((lbl, idx) => (
                           <span
                             key={idx}
@@ -1833,171 +2078,49 @@ export const SmartInbox: React.FC = () => {
                           </span>
                         ))}
                       </div>
-                      <div className="text-[11px] text-slate-400 flex items-center gap-1.5 flex-wrap">
-                        <span className="font-bold text-slate-200">{currentThread.leadName}</span>
+                      <div className="text-[11px] text-slate-400 flex items-center gap-1.5 flex-wrap mt-0.5">
+                        <span className="font-bold text-slate-200 truncate max-w-[140px] sm:max-w-none">{currentThread.leadName}</span>
                         <span>&bull;</span>
                         <button
                           type="button"
                           onClick={() => handleCopyText(currentThread.leadEmail, 'header-email', 'Email Copied')}
-                          className="text-cyan-400 hover:text-cyan-300 font-mono flex items-center gap-1 cursor-pointer"
-                          title="Click to copy prospect email"
+                          className="text-cyan-400 hover:text-cyan-300 font-mono flex items-center gap-1 cursor-pointer truncate max-w-[180px] sm:max-w-none"
+                          title="Tap to copy prospect email"
                         >
-                          <span>{currentThread.leadEmail}</span>
+                          <span className="truncate">{currentThread.leadEmail}</span>
                           {copiedTextId === 'header-email' ? (
-                            <Check className="w-2.5 h-2.5 text-emerald-400" />
+                            <Check className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
                           ) : (
-                            <Copy className="w-2.5 h-2.5 opacity-70" />
+                            <Copy className="w-2.5 h-2.5 opacity-70 shrink-0" />
                           )}
                         </button>
-                        <span>&bull;</span>
-                        <span className="text-slate-300 truncate">{currentThread.leadCompany}</span>
+                        {currentThread.leadCompany && (
+                          <>
+                            <span className="hidden sm:inline">&bull;</span>
+                            <span className="text-slate-300 truncate hidden sm:inline">{currentThread.leadCompany}</span>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Quick Actions */}
-                  <div className="flex items-center gap-1 shrink-0 relative">
-                    {/* Quick Attach File to This Conversation */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsComposerMinimized(false);
-                        setTimeout(() => replyFileInputRef.current?.click(), 60);
-                      }}
-                      className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 text-[11px] font-extrabold flex items-center gap-1 cursor-pointer transition"
-                      title="Attach any file (PDF, Image, ZIP, Doc) via Google Drive"
-                    >
-                      <Paperclip className="w-3 h-3 text-emerald-400" />
-                      <span>📎 Attach File</span>
-                    </button>
-
-                    {/* Quick Google Drive Folder Link Settings */}
-                    <button
-                      type="button"
-                      onClick={() => setShowDriveSettingsModal(true)}
-                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-emerald-500/30 text-cyan-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
-                      title="Set or Change Google Drive Folder Link"
-                    >
-                      <FolderOpen className="w-3 h-3 text-emerald-400" />
-                      <span className="hidden xl:inline">Drive Link</span>
-                    </button>
-
-                    {/* AI Thread Summary Button */}
-                    <button
-                      type="button"
-                      onClick={handleAnalyzeThreadIntent}
-                      disabled={isAnalyzingThread}
-                      className="px-2 py-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition disabled:opacity-50"
-                      title="AI Thread Summary & Recommended Action"
-                    >
-                      <BrainCircuit className={`w-3 h-3 text-purple-300 ${isAnalyzingThread ? 'animate-spin' : ''}`} />
-                      <span className="hidden xl:inline">{isAnalyzingThread ? 'Analyzing...' : 'AI Summary'}</span>
-                    </button>
-
-                    {/* CRM Lead Card Toggle or Save to CRM */}
-                    {matchedCrmLead ? (
-                      <button
-                        type="button"
-                        onClick={() => setShowLeadCrmCard(prev => !prev)}
-                        className={`px-2 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 cursor-pointer transition ${
-                          showLeadCrmCard
-                            ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
-                            : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
-                        }`}
-                        title="View & Edit Lead CRM Profile and Notes"
-                      >
-                        <User className="w-3 h-3 text-cyan-400" />
-                        <span className="hidden xl:inline">CRM Info</span>
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={handleSaveCurrentSenderToLeads}
-                        className="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
-                        title="Save this contact to your Leads Directory"
-                      >
-                        <UserPlus className="w-3 h-3 text-emerald-400" />
-                        <span className="hidden xl:inline">Save Lead</span>
-                      </button>
-                    )}
-
-                    {/* Label Dropdown */}
-                    {!currentThread.isTrash && (
-                      <div className="relative">
-                        <button
-                          type="button"
-                          onClick={() => setShowLabelMenu(prev => !prev)}
-                          className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-cyan-400 cursor-pointer"
-                          title="Assign Label"
-                        >
-                          <Tag className="w-3.5 h-3.5" />
-                        </button>
-                        {showLabelMenu && (
-                          <div className="absolute right-0 mt-2 w-52 bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl p-2.5 z-30 space-y-2">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">Assign Label</div>
-                            <div className="space-y-1">
-                              {labelPresets.map(preset => {
-                                const hasLabel = currentThread.labels.includes(preset.name);
-                                return (
-                                  <button
-                                    key={preset.name}
-                                    type="button"
-                                    onClick={() => {
-                                      if (hasLabel) removeThreadLabel(currentThread.id, preset.name);
-                                      else addThreadLabel(currentThread.id, preset.name);
-                                      setShowLabelMenu(false);
-                                    }}
-                                    className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl hover:bg-slate-900 text-xs text-slate-200 cursor-pointer"
-                                  >
-                                    <span>{preset.name}</span>
-                                    {hasLabel && <Check className="w-3.5 h-3.5 text-emerald-400" />}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            <div className="flex items-center gap-1 pt-1 border-t border-slate-800">
-                              <input
-                                type="text"
-                                value={customLabelInput}
-                                onChange={(e) => setCustomLabelInput(e.target.value)}
-                                placeholder="Custom label..."
-                                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:border-cyan-500 min-w-0"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (customLabelInput.trim()) {
-                                    addThreadLabel(currentThread.id, customLabelInput.trim());
-                                    setCustomLabelInput('');
-                                    setShowLabelMenu(false);
-                                  }
-                                }}
-                                className="px-2 py-1 rounded-lg bg-cyan-600 text-white text-[10px] font-bold cursor-pointer"
-                              >
-                                Add
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
+                  {/* Top-Right Essential Icons (Always visible & easy to tap) */}
+                  <div className="flex items-center gap-1 shrink-0">
                     {currentThread.isTrash && (
                       <button
                         type="button"
                         onClick={() => restoreThread(currentThread.id)}
-                        className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                        className="px-2 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
                         title="Restore to Inbox"
                       >
-                        <CornerUpLeft className="w-3 h-3" />
-                        <span>Restore</span>
+                        <CornerUpLeft className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Restore</span>
                       </button>
                     )}
-
                     <button
                       type="button"
                       onClick={() => toggleThreadStar(currentThread.id)}
-                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-amber-400 cursor-pointer"
+                      className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-amber-400 cursor-pointer active:scale-95"
                       title="Star conversation"
                     >
                       <Star className={`w-3.5 h-3.5 ${currentThread.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
@@ -2011,13 +2134,231 @@ export const SmartInbox: React.FC = () => {
                           deleteThreadToTrash(currentThread.id);
                         }
                       }}
-                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 cursor-pointer"
+                      className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 cursor-pointer active:scale-95"
                       title={currentThread.isTrash ? 'Delete Permanently' : 'Move to Trash'}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
+
+                {/* Row 2: Horizontally Scrollable Action & Filter Strip (100% Mobile-Thumb Friendly) */}
+                {(() => {
+                  const allMsgs = Array.isArray(currentThread.messages) ? currentThread.messages : [];
+                  const leadRepliesCount = allMsgs.filter(m => m.sender === 'lead').length;
+                  const sentMsgsCount = allMsgs.filter(m => m.sender === 'user').length;
+                  return (
+                    <div className="flex items-center gap-1.5 pt-1 border-t border-slate-800/80 overflow-x-auto no-scrollbar text-[11px] pb-0.5">
+                      {/* Quick Attach File */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsComposerMinimized(false);
+                          setTimeout(() => replyFileInputRef.current?.click(), 60);
+                        }}
+                        className="px-2.5 py-1 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 font-extrabold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 active:scale-95"
+                        title="Attach any file (PDF, Image, ZIP, Doc) via Google Drive"
+                      >
+                        <Paperclip className="w-3 h-3 text-emerald-400" />
+                        <span>📎 Attach</span>
+                      </button>
+
+                      {/* Quick Google Drive Folder Link Settings */}
+                      <button
+                        type="button"
+                        onClick={() => setShowDriveSettingsModal(true)}
+                        className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-emerald-500/30 text-cyan-300 font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 active:scale-95"
+                        title="Set or Change Google Drive Folder Link"
+                      >
+                        <FolderOpen className="w-3 h-3 text-emerald-400" />
+                        <span>☁️ Drive</span>
+                      </button>
+
+                      {/* AI Thread Summary Button */}
+                      <button
+                        type="button"
+                        onClick={handleAnalyzeThreadIntent}
+                        disabled={isAnalyzingThread}
+                        className="px-2.5 py-1 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-200 font-bold flex items-center gap-1 cursor-pointer transition disabled:opacity-50 whitespace-nowrap shrink-0 active:scale-95"
+                        title="AI Thread Summary & Recommended Action"
+                      >
+                        <BrainCircuit className={`w-3 h-3 text-purple-300 ${isAnalyzingThread ? 'animate-spin' : ''}`} />
+                        <span>{isAnalyzingThread ? 'Analyzing...' : '🧠 AI Summary'}</span>
+                      </button>
+
+                      {/* CRM Lead Card Toggle or Save to CRM */}
+                      {matchedCrmLead ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowLeadCrmCard(prev => !prev)}
+                          className={`px-2.5 py-1 rounded-xl border font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 active:scale-95 ${
+                            showLeadCrmCard
+                              ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
+                              : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
+                          }`}
+                          title="View & Edit Lead CRM Profile and Notes"
+                        >
+                          <User className="w-3 h-3 text-cyan-400" />
+                          <span>👤 CRM Info</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleSaveCurrentSenderToLeads}
+                          className="px-2.5 py-1 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 active:scale-95"
+                          title="Save this contact to your Leads Directory"
+                        >
+                          <UserPlus className="w-3 h-3 text-emerald-400" />
+                          <span>+ Save Lead</span>
+                        </button>
+                      )}
+
+                      {/* Label Trigger Button */}
+                      {!currentThread.isTrash && (
+                        <button
+                          type="button"
+                          onClick={() => setShowLabelMenu(prev => !prev)}
+                          className={`px-2.5 py-1 rounded-xl border font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 active:scale-95 ${
+                            showLabelMenu
+                              ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
+                              : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
+                          }`}
+                          title="Assign Label"
+                        >
+                          <Tag className="w-3 h-3 text-cyan-400" />
+                          <span>🏷️ Label</span>
+                        </button>
+                      )}
+
+                      <span className="h-4 w-px bg-slate-800 shrink-0 mx-0.5" />
+
+                      {/* Direction Filters */}
+                      <button
+                        type="button"
+                        onClick={() => setMessageDirectionFilter('all')}
+                        className={`px-2.5 py-1 rounded-xl font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+                          messageDirectionFilter === 'all'
+                            ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                            : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                        }`}
+                      >
+                        All ({allMsgs.length || 1})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMessageDirectionFilter('lead_only')}
+                        className={`px-2.5 py-1 rounded-xl font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
+                          messageDirectionFilter === 'lead_only'
+                            ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-500/50'
+                            : 'bg-slate-900 text-emerald-400/90 hover:text-emerald-300 border border-slate-800'
+                        }`}
+                      >
+                        <span>📥 Replies ({leadRepliesCount})</span>
+                      </button>
+                      {sentMsgsCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setMessageDirectionFilter('user_only')}
+                          className={`px-2.5 py-1 rounded-xl font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+                            messageDirectionFilter === 'user_only'
+                              ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                              : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                          }`}
+                        >
+                          📤 Sent ({sentMsgsCount})
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => setLargeReadingText(prev => !prev)}
+                        className={`px-2.5 py-1 rounded-xl font-bold border transition cursor-pointer whitespace-nowrap shrink-0 ${
+                          largeReadingText
+                            ? 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        {largeReadingText ? '🔍 Large Text' : '🔍 Normal Text'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsComposerMinimized(prev => !prev)}
+                        className={`px-2.5 py-1 rounded-xl font-bold border transition cursor-pointer whitespace-nowrap shrink-0 ${
+                          isComposerMinimized
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                            : 'bg-slate-900 text-slate-300 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        {isComposerMinimized ? '⬆️ Show Reply' : '⬇️ Hide Reply'}
+                      </button>
+                    </div>
+                  );
+                })()}
+
+                {/* Mobile-Safe Label Assignment Panel */}
+                {showLabelMenu && !currentThread.isTrash && (
+                  <div className="p-2.5 bg-slate-950 border border-cyan-500/40 rounded-2xl shadow-xl space-y-2 animate-in fade-in">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-black text-cyan-300 uppercase tracking-wider">
+                        🏷️ Tap to Assign or Remove Label
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowLabelMenu(false)}
+                        className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {labelPresets.map(preset => {
+                        const hasLabel = currentThread.labels.includes(preset.name);
+                        return (
+                          <button
+                            key={preset.name}
+                            type="button"
+                            onClick={() => {
+                              if (hasLabel) removeThreadLabel(currentThread.id, preset.name);
+                              else addThreadLabel(currentThread.id, preset.name);
+                            }}
+                            className={`px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition ${
+                              hasLabel
+                                ? 'bg-cyan-500/25 border border-cyan-400 text-white'
+                                : 'bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800'
+                            }`}
+                          >
+                            <span className={`w-2 h-2 rounded-full border ${preset.color}`} />
+                            <span>{preset.name}</span>
+                            {hasLabel && <Check className="w-3 h-3 text-emerald-400" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center gap-1.5 pt-1">
+                      <input
+                        type="text"
+                        value={customLabelInput}
+                        onChange={(e) => setCustomLabelInput(e.target.value)}
+                        placeholder="Create custom label..."
+                        className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 min-w-0"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (customLabelInput.trim()) {
+                            addThreadLabel(currentThread.id, customLabelInput.trim());
+                            setCustomLabelInput('');
+                            setShowLabelMenu(false);
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-cyan-600 text-white text-xs font-bold cursor-pointer shrink-0"
+                      >
+                        + Add
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Collapsible Lead CRM Context & Quick Notes Panel */}
                 {showLeadCrmCard && matchedCrmLead && (
@@ -2052,7 +2393,7 @@ export const SmartInbox: React.FC = () => {
                         <select
                           value={matchedCrmLead.status}
                           onChange={(e) => updateLead(matchedCrmLead.id, { status: e.target.value as LeadStatus })}
-                          className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-0.5 text-[11px] font-bold text-emerald-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                          className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs font-bold text-emerald-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
                         >
                           <option value="new">New Lead</option>
                           <option value="contacted">Contacted</option>
@@ -2077,12 +2418,12 @@ export const SmartInbox: React.FC = () => {
                         value={leadNoteDraft}
                         onChange={(e) => setLeadNoteDraft(e.target.value)}
                         placeholder="Add private CRM notes about this lead..."
-                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
                       />
                       <button
                         type="button"
                         onClick={handleSaveLeadNote}
-                        className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold cursor-pointer shrink-0"
+                        className="px-2.5 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold cursor-pointer shrink-0"
                       >
                         Save Note
                       </button>
@@ -2093,7 +2434,7 @@ export const SmartInbox: React.FC = () => {
                 {/* Collapsible AI Thread Summary & Deal Intelligence Banner */}
                 {threadAiSummary && threadAiSummary.threadId === currentThread.id && (
                   <div className="p-2.5 rounded-xl bg-gradient-to-r from-purple-950/60 via-slate-900 to-indigo-950/60 border border-purple-500/40 space-y-1.5 animate-in fade-in">
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
                       <div className="flex items-center gap-2">
                         <BrainCircuit className="w-3.5 h-3.5 text-purple-300" />
                         <span className="text-xs font-black text-purple-200">{threadAiSummary.intent}</span>
@@ -2102,17 +2443,18 @@ export const SmartInbox: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => {
+                            setIsComposerMinimized(false);
                             setReplyText(threadAiSummary.suggestedReply);
                             replyTextareaRef.current?.focus();
                           }}
-                          className="px-2 py-0.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-bold cursor-pointer"
+                          className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-bold cursor-pointer"
                         >
                           ✨ Use Suggested Reply
                         </button>
                         <button
                           type="button"
                           onClick={() => setThreadAiSummary(null)}
-                          className="text-slate-400 hover:text-white p-0.5 cursor-pointer"
+                          className="text-slate-400 hover:text-white p-1 cursor-pointer"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
@@ -2121,88 +2463,12 @@ export const SmartInbox: React.FC = () => {
                     <p className="text-xs text-slate-200 leading-relaxed">{threadAiSummary.summary}</p>
                   </div>
                 )}
-
-                {/* Compact Reading Controls Bar: Filter Client Replies Only, Text Size, & Maximize View */}
-                {(() => {
-                  const allMsgs = Array.isArray(currentThread.messages) ? currentThread.messages : [];
-                  const leadRepliesCount = allMsgs.filter(m => m.sender === 'lead').length;
-                  const sentMsgsCount = allMsgs.filter(m => m.sender === 'user').length;
-                  return (
-                    <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1 border-t border-slate-800/80 text-[10px]">
-                      <div className="flex items-center gap-1 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => setMessageDirectionFilter('all')}
-                          className={`px-2 py-0.5 rounded-lg font-bold transition cursor-pointer ${
-                            messageDirectionFilter === 'all'
-                              ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                              : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-                          }`}
-                        >
-                          All ({allMsgs.length || 1})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setMessageDirectionFilter('lead_only')}
-                          className={`px-2 py-0.5 rounded-lg font-bold flex items-center gap-1 transition cursor-pointer ${
-                            messageDirectionFilter === 'lead_only'
-                              ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-500/50'
-                              : 'bg-slate-900 text-emerald-400/90 hover:text-emerald-300 border border-slate-800'
-                          }`}
-                          title="Show only what the other person replied"
-                        >
-                          <span>📥 Client Replies ({leadRepliesCount})</span>
-                        </button>
-                        {sentMsgsCount > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setMessageDirectionFilter('user_only')}
-                            className={`px-2 py-0.5 rounded-lg font-bold transition cursor-pointer ${
-                              messageDirectionFilter === 'user_only'
-                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
-                                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-                            }`}
-                          >
-                            📤 My Sent ({sentMsgsCount})
-                          </button>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => setLargeReadingText(prev => !prev)}
-                          className={`px-2 py-0.5 rounded-lg font-bold border transition cursor-pointer ${
-                            largeReadingText
-                              ? 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
-                              : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                          }`}
-                          title="Toggle Larger Clear Font for Easy Reading"
-                        >
-                          {largeReadingText ? '🔍 Large Text: ON' : '🔍 Normal Text'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setIsComposerMinimized(prev => !prev)}
-                          className={`px-2 py-0.5 rounded-lg font-bold border transition cursor-pointer ${
-                            isComposerMinimized
-                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                              : 'bg-slate-900 text-slate-300 border-slate-800 hover:text-white'
-                          }`}
-                          title="Minimize or Expand bottom reply box to see more of the conversation"
-                        >
-                          {isComposerMinimized ? '⬆️ Show Reply Box' : '⬇️ Hide Reply Box'}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })()}
               </div>
 
               {/* Scrollable Messages Stream - Maximum Vertical Space for Reading */}
               <div
                 ref={messagesScrollRef}
-                className="flex-1 overflow-y-auto p-2.5 md:p-4 space-y-3 min-h-0 bg-gradient-to-b from-slate-950/40 to-slate-900/40"
+                className="flex-1 overflow-y-auto p-2 sm:p-3 md:p-4 space-y-2.5 sm:space-y-3 min-h-0 bg-gradient-to-b from-slate-950/40 to-slate-900/40"
               >
                 {/* Ultra-Compact 1-Line Latest Reply Quick-Translate Bar (when thread has multiple messages) */}
                 {(() => {
@@ -2218,7 +2484,7 @@ export const SmartInbox: React.FC = () => {
                   const spotlightKey = `spotlight-${latestLeadMsg.id || currentThread.id}`;
 
                   return (
-                    <div className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-950/60 via-slate-900/95 to-cyan-950/50 border border-emerald-500/40 space-y-1">
+                    <div className="px-3 py-2 rounded-xl bg-gradient-to-r from-emerald-950/60 via-slate-900/95 to-cyan-950/50 border border-emerald-500/40 space-y-1.5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2 min-w-0 flex-1">
                           <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-slate-950 font-black text-[9px] uppercase tracking-wider shrink-0">
@@ -2228,13 +2494,13 @@ export const SmartInbox: React.FC = () => {
                             {mainReply}
                           </span>
                         </div>
-                        <div className="flex items-center gap-1 shrink-0">
+                        <div className="flex items-center gap-1.5 shrink-0">
                           <button
                             type="button"
                             onClick={() => handleTranslateMessage(spotlightKey, mainReply)}
-                            className="px-2 py-0.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 text-[10px] font-bold flex items-center gap-1 cursor-pointer transition"
+                            className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
                           >
-                            <Sparkles className="w-2.5 h-2.5 text-emerald-300" />
+                            <Sparkles className="w-3 h-3 text-emerald-300" />
                             <span>
                               {translatingMsgId === spotlightKey
                                 ? 'অনুবাদ হচ্ছে...'
@@ -2249,16 +2515,16 @@ export const SmartInbox: React.FC = () => {
                               setIsComposerMinimized(false);
                               replyTextareaRef.current?.focus();
                             }}
-                            className="px-2 py-0.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-[10px] flex items-center gap-1 cursor-pointer transition"
+                            className="px-2.5 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-[11px] flex items-center gap-1 cursor-pointer transition"
                           >
-                            <Reply className="w-2.5 h-2.5" />
+                            <Reply className="w-3 h-3" />
                             <span>Reply</span>
                           </button>
                         </div>
                       </div>
 
                       {translatedMessagesMap[spotlightKey] && (
-                        <div className="p-2 rounded-lg bg-slate-950/90 border border-emerald-500/40 text-xs text-emerald-200 whitespace-pre-wrap leading-relaxed">
+                        <div className="p-2.5 rounded-lg bg-slate-950/90 border border-emerald-500/40 text-xs text-emerald-200 whitespace-pre-wrap leading-relaxed">
                           {translatedMessagesMap[spotlightKey]}
                         </div>
                       )}
@@ -2380,7 +2646,7 @@ export const SmartInbox: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => handleTranslateMessage(msgKey, mainReply)}
-                                className="px-2 py-0.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold cursor-pointer transition"
+                                className="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold cursor-pointer transition"
                                 title="Translate & explain this message in Bangla"
                               >
                                 {translatingMsgId === msgKey
@@ -2393,13 +2659,13 @@ export const SmartInbox: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => handleCopyText(mainReply, `msg-${msgKey}`, 'Message Copied')}
-                              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition cursor-pointer"
+                              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition cursor-pointer"
                               title="Copy message text"
                             >
                               {copiedTextId === `msg-${msgKey}` ? (
-                                <Check className="w-3 h-3 text-emerald-400" />
+                                <Check className="w-3.5 h-3.5 text-emerald-400" />
                               ) : (
-                                <Copy className="w-3 h-3" />
+                                <Copy className="w-3.5 h-3.5" />
                               )}
                             </button>
                             <button
@@ -2408,10 +2674,10 @@ export const SmartInbox: React.FC = () => {
                                 setIsComposerMinimized(false);
                                 replyTextareaRef.current?.focus();
                               }}
-                              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-cyan-400 transition cursor-pointer"
+                              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-cyan-400 transition cursor-pointer"
                               title="Reply to this message"
                             >
-                              <Reply className="w-3 h-3" />
+                              <Reply className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </div>
@@ -2424,19 +2690,19 @@ export const SmartInbox: React.FC = () => {
                                 ? 'text-[15px] md:text-base text-white font-medium'
                                 : 'text-sm md:text-[15px] text-slate-100'
                               : 'text-xs md:text-sm text-slate-200'
-                          } whitespace-pre-wrap leading-relaxed`}
+                          } whitespace-pre-wrap leading-relaxed break-words`}
                         >
                           {mainReply}
                         </div>
 
-                        {/* Lightweight On-Demand Attached Files Bar (View & Download Buttons Only — Zero Auto-Load Overhead) */}
+                        {/* Mobile-Friendly On-Demand Attached Files Bar (View & Download Buttons) */}
                         {Array.isArray((m as any).attachments) && (m as any).attachments.length > 0 && (
                           <div className="pt-2.5 border-t border-slate-800/80 space-y-2">
                             <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-bold text-emerald-300">
                               <span className="flex items-center gap-1.5">
                                 <Paperclip className="w-3.5 h-3.5 text-emerald-400" />
                                 <span>
-                                  {(m as any).attachments.length} Attached File(s) — Click View to Open or Download to Save
+                                  {(m as any).attachments.length} Attached File(s) — Tap View or Download
                                 </span>
                               </span>
                               {driveStorageSettings.folderUrl && (
@@ -2453,7 +2719,6 @@ export const SmartInbox: React.FC = () => {
                               )}
                             </div>
 
-                            {/* Lightweight Action Cards for All Attachments (No heavy inline image rendering on page) */}
                             <div className="flex flex-wrap gap-2">
                               {(m as any).attachments.map((att: EmailAttachment, attIdx: number) => {
                                 const enrichedAtt = { ...att, _msgId: String(m.id || ''), _idx: attIdx };
@@ -2465,23 +2730,23 @@ export const SmartInbox: React.FC = () => {
                                     key={att.id || attIdx}
                                     onMouseEnter={() => warmAttachmentInBackground(enrichedAtt as any)}
                                     onClick={(e) => e.stopPropagation()}
-                                    className="px-3 py-2 rounded-xl bg-slate-950/95 border border-emerald-500/30 hover:border-emerald-400/60 flex items-center justify-between gap-3 text-xs text-slate-100 transition shadow-sm"
+                                    className="w-full sm:w-auto px-3 py-2 rounded-xl bg-slate-950/95 border border-emerald-500/30 hover:border-emerald-400/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-slate-100 transition shadow-sm"
                                   >
                                     <div
                                       onClick={() => setPreviewAttachment(enrichedAtt as any)}
                                       className="flex items-center gap-2 min-w-0 cursor-pointer"
                                     >
-                                      <Paperclip className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                                      <div className="min-w-0">
-                                        <div className="font-bold text-[11px] text-white truncate max-w-[210px] hover:text-cyan-300">
+                                      <Paperclip className="w-4 h-4 text-emerald-400 shrink-0" />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="font-bold text-xs text-white truncate hover:text-cyan-300">
                                           {isImg ? '🖼️ ' : '📄 '}{att.name}
                                         </div>
-                                        <div className="text-[9px] text-slate-400 font-mono flex items-center gap-1">
+                                        <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
                                           <span>{formatFileSize(att.size)}</span>
                                           {hasRealDriveFile && (
                                             <>
                                               <span>•</span>
-                                              <span className="text-emerald-300">☁️ In Google Drive ✓</span>
+                                              <span className="text-emerald-300">☁️ In Drive ✓</span>
                                             </>
                                           )}
                                         </div>
@@ -2495,25 +2760,25 @@ export const SmartInbox: React.FC = () => {
                                           e.stopPropagation();
                                           setPreviewAttachment(enrichedAtt as any);
                                         }}
-                                        className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 text-[10px] font-extrabold cursor-pointer transition"
-                                        title="Click to View File / Image Instantly"
+                                        className="flex-1 sm:flex-initial justify-center px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 text-[11px] font-extrabold flex items-center gap-1 cursor-pointer transition active:scale-95"
+                                        title="View File / Image Instantly"
                                       >
-                                        👁️ View
+                                        <span>👁️ View</span>
                                       </button>
                                       <button
                                         type="button"
                                         onClick={(e) => handleDownloadAttachment(enrichedAtt as any, e)}
-                                        className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black cursor-pointer transition"
-                                        title="Click to Download File Instantly"
+                                        className="flex-1 sm:flex-initial justify-center px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[11px] font-black flex items-center gap-1 cursor-pointer transition active:scale-95"
+                                        title="Download File Instantly"
                                       >
-                                        {downloadingAttId === (att.id || att.name || 'att') ? '✅ Downloading...' : '⬇️ Download'}
+                                        <span>{downloadingAttId === (att.id || att.name || 'att') ? '✅ Saving...' : '⬇️ Download'}</span>
                                       </button>
                                       {hasRealDriveFile ? (
                                         <a
                                           href={att.driveFileUrl}
                                           target="_blank"
                                           rel="noopener noreferrer"
-                                          className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold transition"
+                                          className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold transition text-center"
                                           title="Open File in Google Drive"
                                         >
                                           ☁️ Drive ↗
@@ -2523,7 +2788,7 @@ export const SmartInbox: React.FC = () => {
                                           type="button"
                                           disabled={syncingDriveAttId === att.id}
                                           onClick={(e) => handleSyncAttachmentToDrive(enrichedAtt as any, e)}
-                                          className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 text-[10px] font-bold cursor-pointer transition disabled:opacity-50"
+                                          className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 text-[11px] font-bold cursor-pointer transition disabled:opacity-50"
                                           title="Add this file directly into your Google Drive folder"
                                         >
                                           {syncingDriveAttId === att.id ? 'Uploading...' : '☁️ +Drive'}
@@ -2574,19 +2839,19 @@ export const SmartInbox: React.FC = () => {
                 })()}
               </div>
 
-              {/* Bottom Reply & AI Draft Box (AI Draft options inside Toggle + Compact Composer so reading area stays huge) */}
+              {/* Bottom Reply & AI Draft Box (Mobile-Friendly Non-Wrapping Send Bar + Scrollable Tools) */}
               {isComposerMinimized ? (
-                <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2 shrink-0">
+                <div className="px-2.5 sm:px-3 py-2 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-1.5 sm:gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={() => {
                       setIsComposerMinimized(false);
                       setTimeout(() => replyTextareaRef.current?.focus(), 50);
                     }}
-                    className="flex-1 text-left px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 hover:text-white transition cursor-pointer flex items-center justify-between min-w-0"
+                    className="flex-1 text-left px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-200 hover:text-white transition cursor-pointer flex items-center justify-between min-w-0 active:scale-98"
                   >
-                    <span className="truncate">✍️ Click to write a reply to {currentThread.leadName} ({currentThread.leadEmail})...</span>
-                    <span className="text-cyan-400 font-bold shrink-0 ml-2">Expand Reply ⬆️</span>
+                    <span className="truncate">✍️ Write a reply to {currentThread.leadName}...</span>
+                    <span className="text-cyan-400 font-extrabold shrink-0 ml-2">Reply ⬆️</span>
                   </button>
                   <button
                     type="button"
@@ -2594,46 +2859,46 @@ export const SmartInbox: React.FC = () => {
                       setIsComposerMinimized(false);
                       setTimeout(() => replyFileInputRef.current?.click(), 60);
                     }}
-                    className="px-3 py-1.5 rounded-xl bg-emerald-600/25 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-200 text-xs font-extrabold flex items-center gap-1.5 shrink-0 cursor-pointer transition"
+                    className="px-2.5 sm:px-3 py-2 rounded-xl bg-emerald-600/25 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-200 text-xs font-extrabold flex items-center gap-1 shrink-0 cursor-pointer transition active:scale-95"
                     title="Attach any file via Google Drive"
                   >
                     <Paperclip className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>📎 Attach File</span>
+                    <span>📎 Attach</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowDriveSettingsModal(true)}
-                    className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer transition"
+                    className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer transition active:scale-95"
                     title="Set or Change Google Drive Folder Link"
                   >
                     <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="hidden sm:inline">Drive Link</span>
+                    <span className="hidden sm:inline">Drive</span>
                   </button>
                 </div>
               ) : (
-              <div className="px-3 py-2 bg-slate-950/95 border-t border-slate-800 space-y-1.5 shrink-0">
-                {/* Toggleable AI Draft Options Panel (Hidden by default until user clicks '✨ AI Draft' toggle) */}
+              <div className="px-2.5 sm:px-3 py-2 bg-slate-950/95 border-t border-slate-800 space-y-1.5 shrink-0">
+                {/* Toggleable AI Draft Options Panel */}
                 {isAiCopilotExpanded && (
                   <div className="p-2.5 bg-gradient-to-r from-purple-950/40 via-slate-900/95 to-indigo-950/40 rounded-xl border border-purple-700/50 space-y-2 animate-in fade-in">
-                    <div className="flex items-center justify-between gap-1.5 flex-wrap">
-                      <div className="flex items-center gap-1 flex-wrap">
-                        <Sparkles className="w-3 h-3 text-purple-400 animate-pulse shrink-0" />
-                        <span className="text-[10px] font-black uppercase tracking-wider text-purple-300 mr-1">
-                          AI Draft Presets:
+                    <div className="flex items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 flex-1 min-w-0">
+                        <Sparkles className="w-3.5 h-3.5 text-purple-400 animate-pulse shrink-0" />
+                        <span className="text-[10px] font-black uppercase tracking-wider text-purple-300 shrink-0">
+                          AI Draft:
                         </span>
                         {[
                           { id: 'demo', label: '📅 Book 15m Demo' },
-                          { id: 'pricing', label: '💰 Share Pricing & ROI' },
-                          { id: 'objection', label: '🛡️ Handle Objection' },
+                          { id: 'pricing', label: '💰 Pricing & ROI' },
+                          { id: 'objection', label: '🛡️ Objection' },
                           { id: 'agreement', label: '⚡ Agree & Schedule' },
-                          { id: 'friendly', label: '🤝 Friendly Video Intro' },
+                          { id: 'friendly', label: '🤝 Video Intro' },
                         ].map(btn => (
                           <button
                             key={btn.id}
                             type="button"
                             disabled={isGeneratingAiReply}
                             onClick={() => handleAiDraft(btn.id as any)}
-                            className="px-2 py-0.5 rounded-lg bg-purple-950/70 hover:bg-purple-900 text-purple-200 border border-purple-700/60 text-[10px] font-bold whitespace-nowrap transition cursor-pointer disabled:opacity-50"
+                            className="px-2.5 py-1 rounded-lg bg-purple-950/70 hover:bg-purple-900 text-purple-200 border border-purple-700/60 text-[11px] font-bold whitespace-nowrap transition cursor-pointer disabled:opacity-50 shrink-0 active:scale-95"
                           >
                             {btn.label}
                           </button>
@@ -2645,19 +2910,19 @@ export const SmartInbox: React.FC = () => {
                           type="button"
                           disabled={isGeneratingAiReply || !replyText.trim()}
                           onClick={handlePolishReply}
-                          className="px-2 py-0.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-40 whitespace-nowrap"
+                          className="px-2 py-1 rounded-lg bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-40 whitespace-nowrap"
                           title="Polish grammar, tone, and eliminate spam triggers"
                         >
-                          <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" />
-                          <span>✨ AI Polish & Proofread</span>
+                          <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                          <span className="hidden sm:inline">✨ Polish</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => setIsAiCopilotExpanded(false)}
-                          className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
+                          className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-400 hover:text-white cursor-pointer"
                           title="Close AI Draft Panel"
                         >
-                          <X className="w-3 h-3" />
+                          <X className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
@@ -2673,19 +2938,19 @@ export const SmartInbox: React.FC = () => {
                             handleAiDraft('custom');
                           }
                         }}
-                        placeholder="Custom AI instruction (e.g. Confirm 2pm Thursday, emphasize free trial, ask for phone)..."
-                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-[11px] text-slate-100 placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                        placeholder="Custom AI instruction (e.g. Confirm 2pm Thursday, emphasize free trial)..."
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-purple-500 min-w-0"
                       />
                       <button
                         type="button"
                         disabled={isGeneratingAiReply || !customReplyPrompt.trim()}
                         onClick={() => handleAiDraft('custom')}
-                        className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-[10px] flex items-center gap-1 transition cursor-pointer disabled:opacity-40 shrink-0"
+                        className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1 transition cursor-pointer disabled:opacity-40 shrink-0"
                       >
                         {isGeneratingAiReply ? (
-                          <RefreshCw className="w-3 h-3 animate-spin" />
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                         ) : (
-                          <Wand2 className="w-3 h-3" />
+                          <Wand2 className="w-3.5 h-3.5" />
                         )}
                         <span>{isGeneratingAiReply ? 'Drafting...' : '✨ Generate'}</span>
                       </button>
@@ -2710,49 +2975,38 @@ export const SmartInbox: React.FC = () => {
                   {/* Attached Files Chips above Reply Textarea */}
                   {replyAttachments.length > 0 && (
                     <div className="p-2 rounded-xl bg-emerald-950/30 border border-emerald-500/30 space-y-1.5">
-                      <div className="flex items-center justify-between text-[10px] font-bold text-emerald-300">
-                        <span className="flex items-center gap-1">
-                          <Paperclip className="w-3 h-3 text-emerald-400" />
-                          <span>
-                            {replyAttachments.length} File(s) Attached • Stored via Google Drive (0 KB Hosting Used)
+                      <div className="flex items-center justify-between text-[10px] font-bold text-emerald-300 gap-2">
+                        <span className="flex items-center gap-1 truncate">
+                          <Paperclip className="w-3 h-3 text-emerald-400 shrink-0" />
+                          <span className="truncate">
+                            {replyAttachments.length} File(s) Attached • Google Drive (0 KB Hosting)
                           </span>
                         </span>
                         <button
                           type="button"
                           onClick={() => setShowDriveSettingsModal(true)}
-                          className="text-cyan-300 hover:underline cursor-pointer flex items-center gap-1"
+                          className="text-cyan-300 hover:underline cursor-pointer flex items-center gap-1 shrink-0"
                         >
                           <FolderOpen className="w-3 h-3" />
-                          <span>{driveStorageSettings.folderUrl ? 'Change Drive Folder' : 'Set Drive Folder Link'}</span>
+                          <span>{driveStorageSettings.folderUrl ? 'Drive Folder' : 'Set Drive Link'}</span>
                         </button>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
                         {replyAttachments.map((att) => (
                           <div
                             key={att.id}
-                            className="px-2.5 py-1 rounded-lg bg-slate-900 border border-emerald-500/40 flex items-center gap-2 text-[11px] text-slate-100"
+                            className="px-2.5 py-1 rounded-lg bg-slate-900 border border-emerald-500/40 flex items-center gap-1.5 text-[11px] text-slate-100 max-w-full"
                           >
                             <Paperclip className="w-3 h-3 text-emerald-400 shrink-0" />
-                            <span className="font-bold truncate max-w-[160px]">{att.name}</span>
-                            <span className="text-[10px] text-slate-400 font-mono">({formatFileSize(att.size)})</span>
-                            {att.driveFolderUrl && (
-                              <a
-                                href={att.driveFileUrl || att.driveFolderUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-[10px] text-emerald-300 hover:underline flex items-center gap-0.5"
-                                title="Open in Google Drive"
-                              >
-                                <span>Drive ↗</span>
-                              </a>
-                            )}
+                            <span className="font-bold truncate max-w-[140px] sm:max-w-[200px]">{att.name}</span>
+                            <span className="text-[10px] text-slate-400 font-mono shrink-0">({formatFileSize(att.size)})</span>
                             <button
                               type="button"
                               onClick={() => setReplyAttachments(prev => prev.filter(item => item.id !== att.id))}
-                              className="text-slate-400 hover:text-rose-400 cursor-pointer ml-0.5"
+                              className="p-0.5 text-slate-400 hover:text-rose-400 cursor-pointer shrink-0"
                               title="Remove attachment"
                             >
-                              <X className="w-3 h-3" />
+                              <X className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         ))}
@@ -2780,70 +3034,56 @@ export const SmartInbox: React.FC = () => {
                       }
                     }}
                     placeholder={`Reply to ${currentThread.leadName} (${currentThread.leadEmail})...`}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs md:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner resize-y"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner resize-y"
                   />
 
-                  <div className="flex flex-wrap items-center justify-between gap-1.5">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {/* Gmail-style Attach Any File Button (Google Drive Storage) */}
+                  {/* Single Clean Mobile + Desktop Action Bar: Scrollable Tools on Left + Fixed Send Button on Right */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 flex-1 min-w-0">
+                      {/* Attach Any File Button */}
                       <button
                         type="button"
                         onClick={() => replyFileInputRef.current?.click()}
                         disabled={isUploadingAttachment}
-                        className="px-2.5 py-1 rounded-lg bg-emerald-950/70 hover:bg-emerald-900 text-emerald-200 border border-emerald-500/40 text-[10px] font-extrabold flex items-center gap-1 cursor-pointer transition shadow-sm"
-                        title="Attach any file (PDF, Image, Doc, Zip, Video) — Stored in Google Drive, 0 KB on your hosting"
+                        className="px-2.5 py-1.5 rounded-xl bg-emerald-950/70 hover:bg-emerald-900 text-emerald-200 border border-emerald-500/40 text-[11px] font-extrabold flex items-center gap-1 cursor-pointer transition shadow-sm shrink-0 active:scale-95"
+                        title="Attach any file (PDF, Image, Doc, Zip, Video) — Stored in Google Drive"
                       >
-                        <Paperclip className="w-3 h-3 text-emerald-400" />
-                        <span>{isUploadingAttachment ? 'Attaching...' : '📎 Attach File'}</span>
-                      </button>
-
-                      {/* Quick Google Drive Folder Link Button right in Reply Bar */}
-                      <button
-                        type="button"
-                        onClick={() => setShowDriveSettingsModal(true)}
-                        className={`px-2 py-1 rounded-lg border text-[10px] font-bold flex items-center gap-1 cursor-pointer transition ${
-                          driveStorageSettings.folderUrl
-                            ? 'bg-slate-900 hover:bg-slate-800 text-cyan-300 border-cyan-500/30'
-                            : 'bg-amber-950/60 hover:bg-amber-900/70 text-amber-200 border-amber-500/40'
-                        }`}
-                        title="Set or Change your Google Drive Folder Link for attached files"
-                      >
-                        <FolderOpen className="w-3 h-3 text-cyan-400" />
-                        <span>{driveStorageSettings.folderUrl ? '☁️ Drive Folder ✓' : '☁️ Set Drive Link'}</span>
+                        <Paperclip className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>{isUploadingAttachment ? 'Attaching...' : '📎 Attach'}</span>
                       </button>
 
                       {/* 1-Click Toggle Button for AI Draft Options */}
                       <button
                         type="button"
                         onClick={() => setIsAiCopilotExpanded(prev => !prev)}
-                        className={`px-2.5 py-1 rounded-lg border text-[10px] font-extrabold flex items-center gap-1 cursor-pointer transition ${
+                        className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-extrabold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95 ${
                           isAiCopilotExpanded
                             ? 'bg-purple-600 text-white border-purple-400 shadow-sm shadow-purple-500/30'
                             : 'bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 border-purple-700/60'
                         }`}
-                        title="Toggle AI Draft Presets, AI Polish & Custom AI Reply Generator"
+                        title="Toggle AI Draft Presets & Custom AI Reply Generator"
                       >
-                        <Sparkles className="w-3 h-3 text-purple-300" />
+                        <Sparkles className="w-3.5 h-3.5 text-purple-300" />
                         <span>✨ AI Draft {isAiCopilotExpanded ? '▾' : '▸'}</span>
                       </button>
 
-                      {/* Quick AI Polish button right in bar when text is typed */}
+                      {/* Quick AI Polish button when text is typed */}
                       {replyText.trim() && !isAiCopilotExpanded && (
                         <button
                           type="button"
                           disabled={isGeneratingAiReply}
                           onClick={handlePolishReply}
-                          className="px-2 py-1 rounded-lg bg-emerald-950/50 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-40"
+                          className="px-2.5 py-1.5 rounded-xl bg-emerald-950/50 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-40 shrink-0 active:scale-95"
                           title="Polish grammar, tone, and eliminate spam triggers"
                         >
-                          <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" />
+                          <ShieldCheck className="w-3 h-3 text-emerald-400" />
                           <span>✨ Polish</span>
                         </button>
                       )}
 
                       {/* Instant Template Selector */}
-                      <div className="flex items-center gap-1 bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-0.5">
-                        <FileText className="w-3 h-3 text-cyan-400" />
+                      <div className="flex items-center gap-1 bg-slate-950/80 border border-slate-800 rounded-xl px-2.5 py-1 shrink-0">
+                        <FileText className="w-3 h-3 text-cyan-400 shrink-0" />
                         <select
                           onChange={(e) => {
                             if (e.target.value) {
@@ -2852,27 +3092,52 @@ export const SmartInbox: React.FC = () => {
                             }
                           }}
                           defaultValue=""
-                          className="bg-transparent text-slate-200 text-[10px] font-bold cursor-pointer focus:outline-none max-w-[150px] truncate"
+                          className="bg-transparent text-slate-200 text-[11px] font-bold cursor-pointer focus:outline-none max-w-[115px] sm:max-w-[150px] truncate"
                         >
                           <option value="" disabled className="bg-slate-900 text-slate-400">
-                            ⚡ Template ({activeEmailTemplates.length})...
+                            ⚡ Template ({activeEmailTemplates.length})
                           </option>
                           {activeEmailTemplates.map(t => (
                             <option key={t.id} value={t.id} className="bg-slate-900 text-slate-100">
-                              {t.isCustom ? '⭐ ' : '📋 '} {t.title} {t.isCustom ? '(Custom)' : ''}
+                              {t.isCustom ? '⭐ ' : '📋 '} {t.title}
                             </option>
                           ))}
                         </select>
                       </div>
 
+                      {/* Quick Insert Slot Snippet */}
+                      <button
+                        type="button"
+                        onClick={() => handleInsertQuickSnippet('calendar')}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-[11px] font-bold cursor-pointer transition shrink-0 active:scale-95"
+                        title="Insert a proposed meeting slot"
+                      >
+                        📅 +Slot
+                      </button>
+
+                      {/* Quick Google Drive Folder Link Button */}
+                      <button
+                        type="button"
+                        onClick={() => setShowDriveSettingsModal(true)}
+                        className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95 ${
+                          driveStorageSettings.folderUrl
+                            ? 'bg-slate-900 hover:bg-slate-800 text-cyan-300 border-cyan-500/30'
+                            : 'bg-amber-950/60 hover:bg-amber-900/70 text-amber-200 border-amber-500/40'
+                        }`}
+                        title="Set or Change your Google Drive Folder Link"
+                      >
+                        <FolderOpen className="w-3 h-3 text-cyan-400" />
+                        <span>{driveStorageSettings.folderUrl ? '☁️ Drive ✓' : '☁️ Drive Link'}</span>
+                      </button>
+
                       {/* Matched SMTP Account Selector */}
                       {activeSmtpAccounts.length > 0 && (
-                        <div className="flex items-center gap-1 bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-0.5">
+                        <div className="flex items-center gap-1 bg-slate-950/80 border border-slate-800 rounded-xl px-2.5 py-1 shrink-0">
                           <span className="text-[9px] font-bold text-emerald-400 uppercase">From:</span>
                           <select
                             value={replySmtpId}
                             onChange={(e) => setReplySmtpId(e.target.value)}
-                            className="bg-transparent text-slate-200 text-[10px] font-bold cursor-pointer focus:outline-none max-w-[140px] truncate"
+                            className="bg-transparent text-slate-200 text-[11px] font-bold cursor-pointer focus:outline-none max-w-[110px] sm:max-w-[140px] truncate"
                           >
                             {activeSmtpAccounts.map(acc => (
                               <option key={acc.id} value={acc.id} className="bg-slate-900 text-slate-100">
@@ -2883,42 +3148,33 @@ export const SmartInbox: React.FC = () => {
                         </div>
                       )}
 
-                      {/* Quick Insert Snippets */}
-                      <button
-                        type="button"
-                        onClick={() => handleInsertQuickSnippet('calendar')}
-                        className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-[10px] font-bold cursor-pointer transition"
-                        title="Insert a proposed meeting slot"
-                      >
-                        📅 +Slot
-                      </button>
-
                       <button
                         type="button"
                         onClick={() => setIsComposerMinimized(true)}
-                        className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-[10px] font-bold cursor-pointer transition"
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-[11px] font-bold cursor-pointer transition shrink-0"
                         title="Minimize reply box for full screen reading"
                       >
                         ⬇️ Hide
                       </button>
                     </div>
 
-                    <div className="flex items-center gap-1.5">
+                    {/* Fixed Right Send Reply Controls (Always Visible & Easy to Tap on Mobile) */}
+                    <div className="flex items-center gap-1.5 shrink-0">
                       {replyText.trim() && (
                         <button
                           type="button"
                           onClick={() => setReplyText('')}
-                          className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-[11px] font-bold cursor-pointer transition"
+                          className="hidden sm:inline-flex px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-[11px] font-bold cursor-pointer transition"
                         >
                           Clear
                         </button>
                       )}
                       <button
                         type="submit"
-                        className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-blue-500/20 transition cursor-pointer"
-                        title="Send Reply (Ctrl+Enter)"
+                        className="px-3.5 sm:px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-blue-500/25 transition cursor-pointer active:scale-95"
+                        title="Send Reply"
                       >
-                        <Send className="w-3 h-3" />
+                        <Send className="w-3.5 h-3.5" />
                         <span>Send Reply</span>
                       </button>
                     </div>
@@ -2928,7 +3184,7 @@ export const SmartInbox: React.FC = () => {
               )}
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
+            <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-8 text-center space-y-4">
               <Mail className="w-12 h-12 text-slate-700" />
               <div className="text-sm font-bold text-slate-300">Select an email to read</div>
               <p className="text-xs text-slate-500 max-w-sm">
@@ -2941,7 +3197,7 @@ export const SmartInbox: React.FC = () => {
                     setShowComposeModal(true);
                     setTimeout(() => composeFileInputRef.current?.click(), 120);
                   }}
-                  className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer transition shadow-lg shadow-emerald-500/20"
+                  className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer transition shadow-lg shadow-emerald-500/20"
                 >
                   <Paperclip className="w-3.5 h-3.5" />
                   <span>📎 Compose + Attach File</span>
@@ -2949,7 +3205,7 @@ export const SmartInbox: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowDriveSettingsModal(true)}
-                  className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-emerald-500/40 text-emerald-300 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer transition"
+                  className="px-4 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-emerald-500/40 text-emerald-300 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer transition"
                 >
                   <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
                   <span>
@@ -2965,13 +3221,13 @@ export const SmartInbox: React.FC = () => {
 
       </div>
 
-      {/* NEW EMAIL COMPOSE MODAL */}
+      {/* NEW EMAIL COMPOSE MODAL (Mobile-Friendly Full-Screen / Bottom-Sheet Ready) */}
       {showComposeModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-[#090d16] border border-slate-800 w-full max-w-2xl rounded-3xl p-5 md:p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-[#090d16] border-t sm:border border-slate-800 w-full max-w-2xl rounded-t-3xl sm:rounded-3xl p-3.5 sm:p-6 space-y-3.5 shadow-2xl max-h-[94dvh] sm:max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-cyan-500 flex items-center justify-center text-white">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-cyan-500 flex items-center justify-center text-white shrink-0">
                   <Mail className="w-4 h-4" />
                 </div>
                 <div>
@@ -2982,13 +3238,13 @@ export const SmartInbox: React.FC = () => {
               <button 
                 type="button"
                 onClick={() => setShowComposeModal(false)}
-                className="text-slate-400 hover:text-white cursor-pointer p-1"
+                className="text-slate-400 hover:text-white cursor-pointer p-1.5 rounded-xl bg-slate-900"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-3 bg-gradient-to-br from-indigo-950/40 via-slate-900/90 to-cyan-950/40 rounded-2xl border border-indigo-500/30 space-y-2.5">
+            <div className="p-3 bg-gradient-to-br from-indigo-950/40 via-slate-900/90 to-cyan-950/40 rounded-2xl border border-indigo-500/30 space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5 text-xs font-bold text-cyan-300">
                   <Sparkles className="w-3.5 h-3.5 animate-pulse" />
@@ -3006,7 +3262,7 @@ export const SmartInbox: React.FC = () => {
                       e.target.value = '';
                     }}
                     defaultValue=""
-                    className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[10px] font-bold text-cyan-300 cursor-pointer focus:outline-none"
+                    className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-[11px] font-bold text-cyan-300 cursor-pointer focus:outline-none max-w-full"
                   >
                     <option value="" disabled>👤 Auto-Fill from CRM Leads...</option>
                     {leads.filter(l => !l.isTrash).slice(0, 50).map(l => (
@@ -3018,9 +3274,9 @@ export const SmartInbox: React.FC = () => {
                 )}
               </div>
 
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
                 {[
-                  { label: '🚀 SaaS Pitch (99.8% Placement)', type: 'pitch' as const, prompt: 'Pitch cold outreach software highlighting 99.8% inbox placement and instant lead generation.' },
+                  { label: '🚀 SaaS Pitch', type: 'pitch' as const, prompt: 'Pitch cold outreach software highlighting 99.8% inbox placement and instant lead generation.' },
                   { label: '📅 15m Demo Request', type: 'demo' as const, prompt: 'Ask for a quick 15-min screen share demo for next Tuesday or Wednesday.' },
                   { label: '🛡️ Deliverability Audit', type: 'audit' as const, prompt: 'Offer a complimentary 1-page domain deliverability & SPF/DKIM audit.' },
                 ].map((item, idx) => (
@@ -3029,7 +3285,7 @@ export const SmartInbox: React.FC = () => {
                     type="button"
                     disabled={isGeneratingComposeAi}
                     onClick={() => handleGenerateComposeAi(item.prompt, item.type)}
-                    className="px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-medium transition cursor-pointer hover:border-cyan-500"
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-bold transition cursor-pointer hover:border-cyan-500 whitespace-nowrap shrink-0"
                   >
                     {item.label}
                   </button>
@@ -3054,7 +3310,7 @@ export const SmartInbox: React.FC = () => {
                     value={composeTo}
                     onChange={(e) => setComposeTo(e.target.value)}
                     placeholder="prospect@company.com"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm sm:text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
                   />
                 </div>
                 <div>
@@ -3064,7 +3320,7 @@ export const SmartInbox: React.FC = () => {
                     value={composeName}
                     onChange={(e) => setComposeName(e.target.value)}
                     placeholder="e.g. Alex Morgan"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm sm:text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
                   />
                 </div>
               </div>
@@ -3074,7 +3330,7 @@ export const SmartInbox: React.FC = () => {
                 <select
                   value={composeSmtpId}
                   onChange={(e) => setComposeSmtpId(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm sm:text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
                 >
                   {smtpAccounts.map(s => (
                     <option key={s.id} value={s.id}>
@@ -3085,7 +3341,7 @@ export const SmartInbox: React.FC = () => {
               </div>
 
               <div>
-                <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
                   <label className="text-[11px] font-bold text-slate-400">Subject Line *</label>
                   <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg px-2 py-0.5">
                     <FileText className="w-3 h-3 text-cyan-400" />
@@ -3097,7 +3353,7 @@ export const SmartInbox: React.FC = () => {
                         }
                       }}
                       defaultValue=""
-                      className="bg-transparent text-cyan-300 text-[10px] font-bold cursor-pointer focus:outline-none max-w-[190px] truncate"
+                      className="bg-transparent text-cyan-300 text-[11px] font-bold cursor-pointer focus:outline-none max-w-[180px] truncate"
                     >
                       <option value="" disabled className="bg-slate-900 text-slate-400">⚡ Insert Saved Template...</option>
                       {activeEmailTemplates.map(t => (
@@ -3114,19 +3370,19 @@ export const SmartInbox: React.FC = () => {
                   value={composeSubject}
                   onChange={(e) => setComposeSubject(e.target.value)}
                   placeholder="Quick question regarding your outbound pipeline..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm sm:text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
                 />
               </div>
 
               <div>
                 <label className="text-[11px] font-bold text-slate-400">Body Content *</label>
                 <textarea
-                  rows={6}
+                  rows={5}
                   required
                   value={composeBody}
                   onChange={(e) => setComposeBody(e.target.value)}
                   placeholder="Hi {{name}},&#10;&#10;Noticed your recent work and wanted to share..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-sans leading-relaxed"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm sm:text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-sans leading-relaxed"
                 />
               </div>
 
@@ -3144,19 +3400,17 @@ export const SmartInbox: React.FC = () => {
                   className="hidden"
                 />
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => composeFileInputRef.current?.click()}
-                      disabled={isUploadingAttachment}
-                      className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1.5 cursor-pointer transition shadow"
-                    >
-                      <Paperclip className="w-3.5 h-3.5" />
-                      <span>{isUploadingAttachment ? 'Attaching...' : '📎 Attach Any File (Google Drive)'}</span>
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => composeFileInputRef.current?.click()}
+                    disabled={isUploadingAttachment}
+                    className="px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1.5 cursor-pointer transition shadow active:scale-95"
+                  >
+                    <Paperclip className="w-3.5 h-3.5" />
+                    <span>{isUploadingAttachment ? 'Attaching...' : '📎 Attach Any File (Google Drive)'}</span>
+                  </button>
                   <span className="text-[10px] text-emerald-400 font-mono">
-                    ☁️ 0 KB Hosting Used • Stored in Google Drive
+                    ☁️ 0 KB Hosting • Google Drive
                   </span>
                 </div>
 
@@ -3167,7 +3421,7 @@ export const SmartInbox: React.FC = () => {
                     value={driveFolderUrlInput}
                     onChange={(e) => setDriveFolderUrlInput(e.target.value)}
                     placeholder="Paste Google Drive Folder Link (https://drive.google.com/drive/folders/...)"
-                    className="flex-1 bg-slate-900 border border-slate-800 focus:border-emerald-400 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none"
+                    className="flex-1 bg-slate-900 border border-slate-800 focus:border-emerald-400 rounded-xl px-2.5 py-2 sm:py-1.5 text-xs text-slate-100 font-mono focus:outline-none"
                   />
                   <button
                     type="button"
@@ -3176,9 +3430,9 @@ export const SmartInbox: React.FC = () => {
                       setDriveSavedFeedback(true);
                       setTimeout(() => setDriveSavedFeedback(false), 2500);
                     }}
-                    className="px-3 py-1.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/40 border border-emerald-500/40 text-emerald-200 font-black text-[11px] cursor-pointer whitespace-nowrap"
+                    className="px-3 py-2 sm:py-1.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/40 border border-emerald-500/40 text-emerald-200 font-black text-xs sm:text-[11px] cursor-pointer whitespace-nowrap"
                   >
-                    {driveStorageSettings.folderUrl ? '💾 Change / Save Drive Link' : '💾 Save Drive Link'}
+                    {driveStorageSettings.folderUrl ? '💾 Save / Update Link' : '💾 Save Drive Link'}
                   </button>
                 </div>
 
@@ -3187,17 +3441,17 @@ export const SmartInbox: React.FC = () => {
                     {composeAttachments.map((att) => (
                       <div
                         key={att.id}
-                        className="px-2.5 py-1 rounded-lg bg-slate-900 border border-emerald-500/40 flex items-center gap-2 text-[11px] text-slate-100"
+                        className="px-2.5 py-1 rounded-lg bg-slate-900 border border-emerald-500/40 flex items-center gap-2 text-[11px] text-slate-100 max-w-full"
                       >
                         <Paperclip className="w-3 h-3 text-emerald-400 shrink-0" />
-                        <span className="font-bold truncate max-w-[180px]">{att.name}</span>
-                        <span className="text-[10px] text-slate-400 font-mono">({formatFileSize(att.size)})</span>
+                        <span className="font-bold truncate max-w-[150px]">{att.name}</span>
+                        <span className="text-[10px] text-slate-400 font-mono shrink-0">({formatFileSize(att.size)})</span>
                         <button
                           type="button"
                           onClick={() => setComposeAttachments(prev => prev.filter(item => item.id !== att.id))}
-                          className="text-slate-400 hover:text-rose-400 cursor-pointer"
+                          className="text-slate-400 hover:text-rose-400 cursor-pointer shrink-0"
                         >
-                          <X className="w-3 h-3" />
+                          <X className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     ))}
@@ -3206,11 +3460,11 @@ export const SmartInbox: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800 sticky bottom-0 bg-[#090d16] pb-1">
               <button
                 type="button"
                 onClick={() => setShowComposeModal(false)}
-                className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold cursor-pointer"
+                className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold cursor-pointer"
               >
                 Cancel
               </button>
@@ -3238,7 +3492,7 @@ export const SmartInbox: React.FC = () => {
                   }
                 }}
                 disabled={!composeTo || !composeSubject || (!composeBody && composeAttachments.length === 0)}
-                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-blue-500/25 cursor-pointer disabled:opacity-40"
+                className="flex-1 sm:flex-initial justify-center px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white text-xs font-black flex items-center gap-1.5 shadow-lg shadow-blue-500/25 cursor-pointer disabled:opacity-40 active:scale-95"
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>Send Outbound Now</span>
@@ -3250,15 +3504,15 @@ export const SmartInbox: React.FC = () => {
 
       {/* GOOGLE DRIVE FOLDER LINK & ATTACHMENT STORAGE MODAL */}
       {showDriveSettingsModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-4 bg-black/85 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-[#090d16] border border-emerald-500/40 w-full max-w-xl rounded-3xl p-5 md:p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-[#090d16] border-t sm:border border-emerald-500/40 w-full max-w-xl rounded-t-3xl sm:rounded-3xl p-4 sm:p-6 space-y-4 shadow-2xl max-h-[94dvh] sm:max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-cyan-500 flex items-center justify-center text-white shadow-lg shadow-emerald-500/20">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-cyan-500 flex items-center justify-center text-white shadow-lg shadow-emerald-500/20 shrink-0">
                   <FolderOpen className="w-5 h-5" />
                 </div>
-                <div>
-                  <h3 className="font-black text-slate-100 text-sm md:text-base">
+                <div className="min-w-0">
+                  <h3 className="font-black text-slate-100 text-sm md:text-base truncate">
                     ☁️ Google Drive Attachment Storage Link
                   </h3>
                   <p className="text-[11px] text-emerald-300 font-medium">
@@ -3269,22 +3523,22 @@ export const SmartInbox: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowDriveSettingsModal(false)}
-                className="text-slate-400 hover:text-white cursor-pointer p-1.5 rounded-xl hover:bg-slate-800"
+                className="text-slate-400 hover:text-white cursor-pointer p-1.5 rounded-xl bg-slate-900 shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <form onSubmit={handleSaveDriveSettings} className="space-y-4 text-xs">
-              <div className="p-3.5 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 space-y-1.5">
-                <div className="font-bold text-emerald-200 flex items-center justify-between">
+              <div className="p-3 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 space-y-1.5">
+                <div className="font-bold text-emerald-200 flex items-center justify-between flex-wrap gap-1">
                   <span>✅ কীভাবে কাজ করে (Zero Hosting Storage):</span>
                   <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-black">
                     Hosting Disk: 0 KB Used
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-300 leading-relaxed">
-                  নিচে আপনার **Google Drive Folder Link** পেস্ট করে সেভ করুন। এরপর ইনবক্স থেকে যেকোনো ফাইল (`PDF, Image, ZIP, Doc, Video` ইত্যাদি) অ্যাটাচ করলে সেটি আপনার হোস্টিং সার্ভারে জমা না হয়ে সরাসরি প্রাপকের মেইলে যাবে এবং আপনার Google Drive ফোল্ডারের সাথে যুক্ত থাকবে। আপনি যেকোনো সময় নিচের লিংকটি পরিবর্তন (Change) করতে পারবেন।
+                  নিচে আপনার **Google Drive Folder Link** পেস্ট করে সেভ করুন। এরপর ইনবক্স থেকে যেকোনো ফাইল (`PDF, Image, ZIP, Doc, Video` ইত্যাদি) অ্যাটাচ করলে সেটি আপনার হোস্টিং সার্ভারে জমা না হয়ে সরাসরি প্রাপকের মেইলে যাবে এবং আপনার Google Drive ফোল্ডারের সাথে যুক্ত থাকবে।
                 </p>
               </div>
 
@@ -3299,12 +3553,12 @@ export const SmartInbox: React.FC = () => {
                     value={driveFolderUrlInput}
                     onChange={(e) => setDriveFolderUrlInput(e.target.value)}
                     placeholder="https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz?usp=sharing"
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-400 rounded-xl pl-9 pr-3 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-400 rounded-xl pl-9 pr-3 py-2.5 text-sm sm:text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
                   />
                 </div>
                 {driveStorageSettings.folderId && (
-                  <div className="mt-1.5 flex items-center justify-between text-[10px] text-emerald-300 font-mono">
-                    <span>✓ Connected Folder ID: {driveStorageSettings.folderId}</span>
+                  <div className="mt-1.5 flex items-center justify-between flex-wrap gap-1 text-[10px] text-emerald-300 font-mono">
+                    <span className="truncate">✓ Folder ID: {driveStorageSettings.folderId}</span>
                     {driveStorageSettings.folderUrl && (
                       <a
                         href={driveStorageSettings.folderUrl}
@@ -3329,15 +3583,15 @@ export const SmartInbox: React.FC = () => {
                   value={driveFolderNameInput}
                   onChange={(e) => setDriveFolderNameInput(e.target.value)}
                   placeholder="My Google Drive Email Attachments"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-400 rounded-xl px-3 py-2 text-sm sm:text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
                 />
               </div>
 
               {/* Google Apps Script Auto-Upload Bridge Setup */}
-              <div className="p-3.5 rounded-2xl bg-slate-950 border border-cyan-500/30 space-y-2.5">
-                <div className="flex items-center justify-between gap-2">
+              <div className="p-3 rounded-2xl bg-slate-950 border border-cyan-500/30 space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <span className="font-extrabold text-cyan-300 text-xs">
-                    🚀 আপনার Google Drive ফোল্ডারের ভেতরে অটোমেটিক ফাইল যোগ করার সেটআপ (Apps Script Bridge)
+                    🚀 Google Drive অটোমেটিক ফাইল আপলোড ব্রিজ (Apps Script)
                   </span>
                   <button
                     type="button"
@@ -3352,7 +3606,7 @@ export const SmartInbox: React.FC = () => {
                   </button>
                 </div>
                 <p className="text-[11px] text-slate-300 leading-relaxed">
-                  শুধুমাত্র ফোল্ডার লিংক দিলে Google সিকিউরিটির কারণে বাইরের সার্ভারকে আপনার ফোল্ডারের ভেতরে ফাইল রাইট করতে দেয় না। আপনার ফোল্ডারে সরাসরি ফাইল জমা হতে: ১) <a href="https://script.google.com" target="_blank" rel="noreferrer" className="text-cyan-400 underline font-bold">script.google.com</a> খুলে <strong>New Project</strong>-এ উপরের কোডটি পেস্ট করুন, ২) <strong>Deploy → New deployment → Web app (Who has access: Anyone)</strong> দিয়ে Deploy করে প্রাপ্ত <strong>Web App URL</strong> নিচে পেস্ট করে সেভ করুন:
+                  আপনার ফোল্ডারে সরাসরি ফাইল জমা হতে: ১) <a href="https://script.google.com" target="_blank" rel="noreferrer" className="text-cyan-400 underline font-bold">script.google.com</a> খুলে <strong>New Project</strong>-এ উপরের কোডটি পেস্ট করুন, ২) <strong>Deploy → New deployment → Web app (Anyone)</strong> দিয়ে প্রাপ্ত <strong>Web App URL</strong> নিচে পেস্ট করে সেভ করুন:
                 </p>
                 <input
                   type="url"
@@ -3368,7 +3622,7 @@ export const SmartInbox: React.FC = () => {
                   type="checkbox"
                   checked={autoIncludeDriveLink}
                   onChange={(e) => setAutoIncludeDriveLink(e.target.checked)}
-                  className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                  className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 w-4 h-4 cursor-pointer shrink-0"
                 />
                 <div>
                   <div className="font-bold text-slate-200 text-xs">
@@ -3387,7 +3641,7 @@ export const SmartInbox: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex items-center justify-between gap-3 pt-2 border-t border-slate-800">
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800 sticky bottom-0 bg-[#090d16] pb-1">
                 {driveFolderUrlInput && (
                   <button
                     type="button"
@@ -3397,23 +3651,23 @@ export const SmartInbox: React.FC = () => {
                     }}
                     className="px-3 py-2 rounded-xl bg-rose-950/60 hover:bg-rose-900/80 border border-rose-700/50 text-rose-300 text-xs font-bold cursor-pointer"
                   >
-                    Remove Link
+                    Remove
                   </button>
                 )}
                 <div className="flex items-center gap-2 ml-auto">
                   <button
                     type="button"
                     onClick={() => setShowDriveSettingsModal(false)}
-                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
+                    className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
                   >
                     Close
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-500 hover:from-emerald-500 hover:to-cyan-400 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 cursor-pointer"
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-500 hover:from-emerald-500 hover:to-cyan-400 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 cursor-pointer active:scale-95"
                   >
                     <Check className="w-3.5 h-3.5" />
-                    <span>Save / Update Google Drive Link</span>
+                    <span>Save Drive Link</span>
                   </button>
                 </div>
               </div>
@@ -3426,41 +3680,50 @@ export const SmartInbox: React.FC = () => {
       {previewAttachment && (
         <div
           onClick={() => setPreviewAttachment(null)}
-          className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-black/90 backdrop-blur-md animate-in fade-in"
+          className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 md:p-6 bg-black/90 backdrop-blur-md animate-in fade-in"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-[#090d16] border border-cyan-500/40 w-full max-w-4xl rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+            className="bg-[#090d16] border border-cyan-500/40 w-full max-w-4xl rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[92dvh]"
           >
-            <div className="px-4 py-3 bg-slate-900/95 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <Paperclip className="w-4 h-4 text-emerald-400 shrink-0" />
-                <div className="min-w-0">
-                  <div className="font-black text-white text-xs sm:text-sm truncate">
-                    {previewAttachment.name}
-                  </div>
-                  <div className="text-[10px] text-slate-400 font-mono">
-                    {formatFileSize(previewAttachment.size)} &bull; {previewAttachment.mimeType || 'File'}
+            <div className="px-3 sm:px-4 py-2.5 sm:py-3 bg-slate-900/95 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Paperclip className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="font-black text-white text-xs sm:text-sm truncate">
+                      {previewAttachment.name}
+                    </div>
+                    <div className="text-[10px] text-slate-400 font-mono">
+                      {formatFileSize(previewAttachment.size)} &bull; {previewAttachment.mimeType || 'File'}
+                    </div>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setPreviewAttachment(null)}
+                  className="sm:hidden p-1.5 rounded-xl bg-slate-800 text-slate-300 hover:text-white cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
                 <button
                   type="button"
                   onClick={(e) => handleDownloadAttachment(previewAttachment as any, e)}
-                  className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer transition shadow"
+                  className="flex-1 sm:flex-initial justify-center px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer transition shadow whitespace-nowrap active:scale-95"
                 >
-                  <span>⬇️ Download File</span>
+                  <span>⬇️ Download</span>
                 </button>
                 {getAttachmentViewSrc(previewAttachment as any) && (
                   <a
                     href={getAttachmentViewSrc(previewAttachment as any)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 font-bold text-xs flex items-center gap-1 transition"
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 font-bold text-xs flex items-center gap-1 transition whitespace-nowrap"
                   >
-                    <span>Open in New Tab</span>
+                    <span>New Tab</span>
                     <ExternalLink className="w-3.5 h-3.5" />
                   </a>
                 )}
@@ -3469,9 +3732,9 @@ export const SmartInbox: React.FC = () => {
                     href={previewAttachment.driveFileUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="px-3 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 font-bold text-xs flex items-center gap-1 transition"
+                    className="px-3 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 font-bold text-xs flex items-center gap-1 transition whitespace-nowrap"
                   >
-                    <span>☁️ Open in Drive</span>
+                    <span>☁️ Drive</span>
                     <ExternalLink className="w-3.5 h-3.5" />
                   </a>
                 ) : (
@@ -3479,15 +3742,15 @@ export const SmartInbox: React.FC = () => {
                     type="button"
                     disabled={syncingDriveAttId === previewAttachment.id}
                     onClick={(e) => handleSyncAttachmentToDrive(previewAttachment, e)}
-                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-300 font-bold text-xs cursor-pointer transition"
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-300 font-bold text-xs cursor-pointer transition whitespace-nowrap"
                   >
-                    {syncingDriveAttId === previewAttachment.id ? 'Uploading...' : '☁️ Save to Drive'}
+                    {syncingDriveAttId === previewAttachment.id ? 'Uploading...' : '☁️ +Drive'}
                   </button>
                 )}
                 <button
                   type="button"
                   onClick={() => setPreviewAttachment(null)}
-                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white cursor-pointer"
+                  className="hidden sm:inline-flex p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
