@@ -1,22 +1,50 @@
-import type { User } from 'firebase/auth';
+import { initializeApp } from 'firebase/app';
+import type { Auth, User } from 'firebase/auth';
+import { initializeFirestore, getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import firebaseConfig from '../../firebase-applet-config.json';
 
-type FirebaseRuntimeModule = typeof import('./firebaseRuntime');
+const app = initializeApp(firebaseConfig);
 
-let runtimePromise: Promise<FirebaseRuntimeModule> | null = null;
+let cachedAuth: Auth | null = null;
 
-export function getFirebaseRuntime(): Promise<FirebaseRuntimeModule> {
-  if (!runtimePromise) {
-    if (import.meta.env.PROD) {
-      const runtimeUrl = '/prebuilt/firebase-runtime.js';
-      runtimePromise = import(/* @vite-ignore */ runtimeUrl) as Promise<FirebaseRuntimeModule>;
-    } else {
-      runtimePromise = import('./firebaseRuntime');
-    }
+export async function signInWithGooglePopup(_portalType?: 'client' | 'agency'): Promise<User> {
+  const { getAuth, GoogleAuthProvider, signInWithPopup } = await import('firebase/auth');
+  if (!cachedAuth) {
+    cachedAuth = getAuth(app);
   }
-  return runtimePromise;
+  const googleProvider = new GoogleAuthProvider();
+  googleProvider.setCustomParameters({ prompt: 'select_account' });
+  const result = await signInWithPopup(cachedAuth, googleProvider);
+  return result.user;
 }
 
-export async function signInWithGooglePopup(portalType?: 'client' | 'agency'): Promise<User> {
-  const rt = await getFirebaseRuntime();
-  return rt.signInWithGooglePopup(portalType);
+export const db = (() => {
+  try {
+    return initializeFirestore(
+      app,
+      { ignoreUndefinedProperties: true },
+      firebaseConfig.firestoreDatabaseId
+    );
+  } catch {
+    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  }
+})();
+
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'system', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+
+if (typeof window !== 'undefined') {
+  const scheduleTest = () => setTimeout(() => { void testConnection(); }, 5000);
+  if (document.readyState === 'complete') {
+    scheduleTest();
+  } else {
+    window.addEventListener('load', scheduleTest, { once: true });
+  }
 }

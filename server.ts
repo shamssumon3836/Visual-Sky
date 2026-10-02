@@ -3841,7 +3841,7 @@ try {
 // Auto-sync prebuilt client bundle ONLY when pre-compressed bundle is missing in local dev mode
 let lastBundleSyncCheck = 0;
 function ensureFreshPrebuiltBundle() {
-  if (fs.existsSync(path.join(process.cwd(), 'prebuilt', 'app.js.br'))) {
+  if (fs.existsSync(path.join(process.cwd(), 'prebuilt', 'app.js.gz'))) {
     return;
   }
   const isDevTsx =
@@ -7475,7 +7475,6 @@ async function startServer() {
   const prebuiltCandidate = path.join(process.cwd(), 'prebuilt');
   const publicCandidate = path.join(process.cwd(), 'public');
   const prebuiltAppJsPath = path.join(prebuiltCandidate, 'app.js');
-  const prebuiltFirebaseJsPath = path.join(prebuiltCandidate, 'firebase-runtime.js');
   const prebuiltAppCssPath = path.join(prebuiltCandidate, 'app.css');
   const runtimeAppJsCandidate = path.join(DATA_DIR, 'runtime-app.js');
 
@@ -7485,7 +7484,7 @@ async function startServer() {
   const isProdServer = !isDevTsx;
 
   // Refresh prebuilt assets on dev startup only if pre-compressed bundles are missing
-  if (isDevTsx && (!fs.existsSync(prebuiltAppJsPath) || !fs.existsSync(`${prebuiltAppJsPath}.br`))) {
+  if (isDevTsx && (!fs.existsSync(prebuiltAppJsPath) || !fs.existsSync(`${prebuiltAppJsPath}.gz`))) {
     try {
       const cp = await import('child_process');
       cp.execSync('node scripts/sync-prebuilt.cjs', { cwd: process.cwd(), stdio: 'inherit' });
@@ -7511,10 +7510,10 @@ async function startServer() {
     return prebuiltAppJsPath;
   };
 
-  // Ultra-fast in-memory RAM cache for bundles (raw + pre-compressed Gzip & Brotli)
+  // Ultra-fast in-memory RAM cache for bundles (raw + pre-compressed Gzip)
   const memoryAssetCache = new Map<
     string,
-    { mtimeMs: number; etag: string; raw: Buffer; gzip: Buffer; br: Buffer }
+    { mtimeMs: number; etag: string; raw: Buffer; gzip: Buffer }
   >();
 
   const getCachedAsset = (filePath: string) => {
@@ -7527,9 +7526,7 @@ async function startServer() {
     }
     const raw = fs.readFileSync(filePath);
     const gzPath = `${filePath}.gz`;
-    const brPath = `${filePath}.br`;
     let gzip: Buffer;
-    let br: Buffer;
     try {
       if (fs.existsSync(gzPath) && fs.statSync(gzPath).mtimeMs >= mtimeMs) {
         gzip = fs.readFileSync(gzPath);
@@ -7539,19 +7536,8 @@ async function startServer() {
     } catch {
       gzip = raw;
     }
-    try {
-      if (fs.existsSync(brPath) && fs.statSync(brPath).mtimeMs >= mtimeMs) {
-        br = fs.readFileSync(brPath);
-      } else {
-        br = zlib.brotliCompressSync(raw, {
-          params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 1 }
-        });
-      }
-    } catch {
-      br = gzip;
-    }
     const etag = `"v-${Math.floor(mtimeMs).toString(36)}-${raw.byteLength.toString(36)}"`;
-    const entry = { mtimeMs, etag, raw, gzip, br };
+    const entry = { mtimeMs, etag, raw, gzip };
     memoryAssetCache.set(filePath, entry);
     return entry;
   };
@@ -7559,7 +7545,6 @@ async function startServer() {
   // Pre-warm RAM cache on startup
   try {
     getCachedAsset(getActiveAppJsPath());
-    getCachedAsset(prebuiltFirebaseJsPath);
     getCachedAsset(prebuiltAppCssPath);
   } catch {}
 
@@ -7588,21 +7573,11 @@ async function startServer() {
       res.setHeader('Content-Type', contentType);
       res.setHeader('ETag', asset.etag);
       res.setHeader('Vary', 'Accept-Encoding');
-      res.setHeader(
-        'Cache-Control',
-        req.query && req.query.v
-          ? 'public, max-age=31536000, immutable'
-          : 'public, max-age=0, must-revalidate'
-      );
+      res.setHeader('Cache-Control', 'no-cache');
       if (req.headers['if-none-match'] === asset.etag) {
         return res.status(304).end();
       }
       const acceptEncoding = String(req.headers['accept-encoding'] || '');
-      if (acceptEncoding.includes('br') && asset.br && asset.br.byteLength < asset.raw.byteLength) {
-        res.setHeader('Content-Encoding', 'br');
-        res.setHeader('Content-Length', String(asset.br.byteLength));
-        return res.status(200).end(asset.br);
-      }
       if (acceptEncoding.includes('gzip') && asset.gzip && asset.gzip.byteLength < asset.raw.byteLength) {
         res.setHeader('Content-Encoding', 'gzip');
         res.setHeader('Content-Length', String(asset.gzip.byteLength));
@@ -7621,15 +7596,6 @@ async function startServer() {
       req,
       res,
       getActiveAppJsPath(),
-      'application/javascript; charset=utf-8'
-    );
-  });
-
-  app.get('/prebuilt/firebase-runtime.js', (req, res) => {
-    return sendMemoryCachedAsset(
-      req,
-      res,
-      prebuiltFirebaseJsPath,
       'application/javascript; charset=utf-8'
     );
   });

@@ -10,7 +10,7 @@ const rootAssetsDir = path.join(__dirname, '..', 'assets');
 
 fs.mkdirSync(prebuiltDir, { recursive: true });
 
-// Clean up stale hashed .js, .css, .gz, and .br files in prebuilt/, prebuilt/assets/, and assets/
+// Clean up stale hashed .js, .css, .gz, .br, and .htaccess files in prebuilt/, prebuilt/assets/, and assets/
 for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
@@ -21,22 +21,23 @@ for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
             dir === prebuiltDir &&
             (f === 'app.js' ||
               f === 'app.js.gz' ||
-              f === 'app.js.br' ||
-              f === 'firebase-runtime.js' ||
-              f === 'firebase-runtime.js.gz' ||
-              f === 'firebase-runtime.js.br' ||
               f === 'app.css' ||
               f === 'app.css.gz' ||
-              f === 'app.css.br' ||
               f === 'tailwind-bundle.css' ||
               f === 'server.cjs' ||
               f === 'index.html' ||
               f === 'favicon.svg' ||
               f === 'logo.svg' ||
               f === 'manifest.json' ||
-              f === 'sw.js' ||
-              f === '.htaccess');
-          if (!isPrebuiltCore && (f.endsWith('.js') || f.endsWith('.css') || f.endsWith('.gz') || f.endsWith('.br'))) {
+              f === 'sw.js');
+          if (
+            !isPrebuiltCore &&
+            (f.endsWith('.js') ||
+              f.endsWith('.css') ||
+              f.endsWith('.gz') ||
+              f.endsWith('.br') ||
+              f === '.htaccess')
+          ) {
             fs.unlinkSync(fullPath);
           }
         }
@@ -78,38 +79,12 @@ try {
 }
 
 // 3. Always compile fast, tree-shaken single-file bundle from src/main.tsx -> prebuilt/app.js
-//    and separate background Firebase SDK chunk -> prebuilt/firebase-runtime.js
 try {
   const esbuild = require('esbuild');
   const mainEntry = path.join(__dirname, '..', 'src', 'main.tsx');
-  const firebaseRuntimeEntry = path.join(__dirname, '..', 'src', 'lib', 'firebaseRuntime.ts');
   const prebuiltAppJs = path.join(prebuiltDir, 'app.js');
-  const prebuiltFirebaseJs = path.join(prebuiltDir, 'firebase-runtime.js');
-
-  if (fs.existsSync(firebaseRuntimeEntry)) {
-    esbuild.buildSync({
-      entryPoints: [firebaseRuntimeEntry],
-      bundle: true,
-      minify: true,
-      treeShaking: true,
-      legalComments: 'none',
-      format: 'esm',
-      platform: 'browser',
-      target: ['es2020'],
-      outfile: prebuiltFirebaseJs,
-      define: {
-        'process.env.NODE_ENV': '"production"'
-      }
-    });
-    console.log('[sync-prebuilt] Built background prebuilt/firebase-runtime.js');
-  }
 
   if (fs.existsSync(mainEntry)) {
-    const supaUrl = process.env.VITE_SUPABASE_URL || '';
-    const supaKey = process.env.VITE_SUPABASE_ANON_KEY || '';
-    const fbVer = fs.existsSync(prebuiltFirebaseJs)
-      ? Math.floor(fs.statSync(prebuiltFirebaseJs).mtimeMs).toString(36)
-      : 'v1';
     esbuild.buildSync({
       entryPoints: [mainEntry],
       bundle: true,
@@ -120,7 +95,6 @@ try {
       platform: 'browser',
       target: ['es2020'],
       outfile: prebuiltAppJs,
-      external: ['/prebuilt/firebase-runtime.js'],
       loader: {
         '.css': 'empty',
         '.svg': 'dataurl',
@@ -137,15 +111,15 @@ try {
         'import.meta.env.PROD': 'true',
         'import.meta.env.DEV': 'false',
         'import.meta.env.SSR': 'false',
-        'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supaUrl),
-        'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(supaKey),
+        'import.meta.env.VITE_SUPABASE_URL': '""',
+        'import.meta.env.VITE_SUPABASE_ANON_KEY': '""',
         'import.meta.env': JSON.stringify({
           MODE: 'production',
           PROD: true,
           DEV: false,
           SSR: false,
-          VITE_SUPABASE_URL: supaUrl,
-          VITE_SUPABASE_ANON_KEY: supaKey
+          VITE_SUPABASE_URL: '',
+          VITE_SUPABASE_ANON_KEY: ''
         })
       }
     });
@@ -155,60 +129,19 @@ try {
   console.warn('[sync-prebuilt] app esbuild warning:', err && err.message);
 }
 
-// 3b. Pre-compress app.js, firebase-runtime.js, and app.css with Gzip (level 9) and Brotli (quality 9) for instant 0ms RAM/disk serving
-for (const fileName of ['app.js', 'firebase-runtime.js', 'app.css']) {
+// 3b. Pre-compress app.js and app.css with Gzip (level 9) for instant 0ms RAM serving
+for (const fileName of ['app.js', 'app.css']) {
   const targetPath = path.join(prebuiltDir, fileName);
   if (fs.existsSync(targetPath)) {
     try {
       const rawBuf = fs.readFileSync(targetPath);
       const gzBuf = zlib.gzipSync(rawBuf, { level: 9 });
-      const brBuf = zlib.brotliCompressSync(rawBuf, {
-        params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 }
-      });
       fs.writeFileSync(`${targetPath}.gz`, gzBuf);
-      fs.writeFileSync(`${targetPath}.br`, brBuf);
     } catch (e) {
       console.warn('[sync-prebuilt] pre-compress warning for', fileName, e && e.message);
     }
   }
 }
-
-// 3c. Write prebuilt/.htaccess so Apache / LiteSpeed on cPanel automatically serves Brotli/Gzip and caches static bundles
-try {
-  const htaccessContent = `<IfModule mod_headers.c>
-  Header append Vary Accept-Encoding
-</IfModule>
-<IfModule mod_deflate.c>
-  AddOutputFilterByType DEFLATE application/javascript text/javascript text/css text/html application/json image/svg+xml
-</IfModule>
-<IfModule mod_rewrite.c>
-  RewriteEngine On
-  RewriteCond %{HTTP:Accept-Encoding} br
-  RewriteCond %{REQUEST_FILENAME}.br -f
-  RewriteRule ^(.+\\.(js|css))$ $1.br [QSA,L]
-  RewriteCond %{HTTP:Accept-Encoding} gzip
-  RewriteCond %{REQUEST_FILENAME}.gz -f
-  RewriteRule ^(.+\\.(js|css))$ $1.gz [QSA,L]
-</IfModule>
-<FilesMatch "\\.js\\.br$">
-  ForceType application/javascript
-  Header set Content-Encoding br
-</FilesMatch>
-<FilesMatch "\\.js\\.gz$">
-  ForceType application/javascript
-  Header set Content-Encoding gzip
-</FilesMatch>
-<FilesMatch "\\.css\\.br$">
-  ForceType text/css
-  Header set Content-Encoding br
-</FilesMatch>
-<FilesMatch "\\.css\\.gz$">
-  ForceType text/css
-  Header set Content-Encoding gzip
-</FilesMatch>
-`;
-  fs.writeFileSync(path.join(prebuiltDir, '.htaccess'), htaccessContent, 'utf8');
-} catch {}
 
 // 4. Write clean index.html and prebuilt/index.html with parallel modulepreload + style preload
 const rootIndexHtml = path.join(__dirname, '..', 'index.html');
@@ -262,4 +195,4 @@ const cleanHtml = `<!doctype html>
 
 fs.writeFileSync(rootIndexHtml, cleanHtml, 'utf8');
 fs.writeFileSync(prebuiltIndexHtml, cleanHtml, 'utf8');
-console.log('[sync-prebuilt] Wrote clean index.html & prebuilt/index.html with preload hints & pre-compressed assets');
+console.log('[sync-prebuilt] Wrote clean index.html & prebuilt/index.html with preload hints & pre-compressed Gzip assets');
