@@ -117,7 +117,7 @@ export const TrashManager: React.FC = () => {
           </div>
         )}
 
-        <div className="flex items-center gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-2.5">
           {[
             { id: 'all', label: 'All Trash', count: totalTrashCount, icon: Trash2 },
             { id: 'leads', label: 'Leads', count: leads.filter(l => l.isTrash).length, icon: Users },

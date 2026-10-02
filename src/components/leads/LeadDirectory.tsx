@@ -822,7 +822,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               onClick={() => launchQuickFollowUp('7d')}
               className="px-3 py-1.5 rounded-lg bg-amber-950/40 hover:bg-amber-900/60 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
@@ -845,7 +845,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
         </div>
 
         {/* Tag Filter Chips Bar */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="text-[11px] font-bold text-slate-400 flex items-center gap-1 shrink-0">
             <TagIcon className="w-3 h-3 text-cyan-400" /> Filter by Tag:
           </span>
@@ -882,25 +882,36 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
         </div>
 
         {/* Search & Cohort Filter Bar with Columns Button */}
-        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-slate-900/60 p-3 rounded-2xl border border-slate-800">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by name, company, email, phone, title, location, or tags..."
-              className="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-            />
+        <div className="bg-slate-900/60 p-3 rounded-2xl border border-slate-800 space-y-2.5">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by name, company, email, phone, title, location, or tags..."
+                className="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+
+            {/* Column Selector Toggle - Elevated and Never Clipped */}
+            <button
+              onClick={() => setShowColumnModal(true)}
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-cyan-500/50 text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm shrink-0"
+            >
+              <Columns className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Customize Columns</span>
+            </button>
           </div>
 
-          <div className="flex items-center gap-2 overflow-x-auto">
+          <div className="flex flex-wrap items-center gap-1.5">
             {[
-              { id: 'all', label: 'All Statuses' },
-              { id: 'invalid_email', label: `🚫 নষ্ট মেইল (${emailHealthSummary.invalidLeads.length})` },
-              { id: 'opened', label: '👁️ Opened' },
+              { id: 'all', label: 'All Leads' },
               { id: 'replied', label: '💬 Replied' },
+              { id: 'opened', label: '👁️ Opened' },
               { id: 'new', label: '✨ New' },
+              { id: 'invalid_email', label: `🚫 নষ্ট মেইল (${emailHealthSummary.invalidLeads.length})` },
               { id: 'inactive_7d', label: '⏳ Inactive 7d+' },
               { id: 'inactive_14d', label: '⏳ Inactive 14d+' },
               { id: 'inactive_30d', label: '⏳ Inactive 30d+' },
@@ -911,21 +922,12 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap cursor-pointer ${
                   activeFilter === tab.id
                     ? 'bg-slate-800 text-cyan-300 border border-cyan-500/40 shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
+                    : 'bg-slate-950/60 text-slate-400 hover:text-slate-200 border border-slate-800/80'
                 }`}
               >
                 {tab.label}
               </button>
             ))}
-
-            {/* Column Selector Toggle - Elevated and Fixed */}
-            <button
-              onClick={() => setShowColumnModal(true)}
-              className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-cyan-500/50 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-sm whitespace-nowrap"
-            >
-              <Columns className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Customize Columns</span>
-            </button>
           </div>
         </div>
 

@@ -287,8 +287,8 @@ export const TemplateManager: React.FC = () => {
       </div>
 
       {/* Filter Tabs & Search Bar */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 flex-1">
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-1.5 flex-1">
           {categoryTabs.map(cat => (
             <div key={cat.id} className="relative group shrink-0">
               <button

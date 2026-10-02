@@ -2634,7 +2634,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
             </div>
 
             {/* Step Progress Pills */}
-            <div className="flex overflow-x-auto sm:grid sm:grid-cols-6 border-b border-slate-800 bg-slate-950/60 text-[10px] sm:text-xs font-bold text-center no-scrollbar">
+            <div className="grid grid-cols-3 sm:grid-cols-6 border-b border-slate-800 bg-slate-950/60 text-[10px] sm:text-xs font-bold text-center">
               {['1. Identity', '2. SMTP Relay', '3. Recipients', '4. Templates', '5. Delay & Schedule', '6. Launch'].map((label, idx) => {
                 const sNum = idx + 1;
                 const isCurrent = wizardStep === sNum;
@@ -2670,12 +2670,12 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
             {/* Live Running Campaigns Strip inside Campaign Launch Wizard Modal */}
             {activeCampaigns.filter(c => c.status === 'running').length > 0 && (
-              <div className="px-4 py-2.5 bg-emerald-950/30 border-b border-emerald-500/30 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shrink-0">
+              <div className="px-4 py-2.5 bg-emerald-950/30 border-b border-emerald-500/30 flex flex-wrap items-center justify-between gap-2 shrink-0">
                 <div className="flex items-center gap-2 text-xs text-emerald-300 font-bold shrink-0">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
                   <span>Running Campaigns ({activeCampaigns.filter(c => c.status === 'running').length}):</span>
                 </div>
-                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                <div className="flex flex-wrap items-center gap-2">
                   {activeCampaigns
                     .filter(c => c.status === 'running')
                     .map(rc => {
@@ -2922,7 +2922,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                   ) : (
                     <div className="space-y-3">
                       {/* Provider Filter Tabs */}
-                      <div className="flex items-center gap-1 overflow-x-auto pb-1 text-xs">
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs">
                         {[
                           { id: 'all', label: `All Relays (${activeSmtps.length})` },
                           { id: 'google', label: 'Google Workspace' },
@@ -3240,7 +3240,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                     </div>
 
                     {/* Status / Cohort Tabs */}
-                    <div className="flex items-center gap-1 overflow-x-auto pb-1 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
                       {[
                         { id: 'all', label: 'All' },
                         { id: 'new', label: 'New' },
@@ -3695,7 +3695,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                     </div>
 
                     {/* Category Filter Chips */}
-                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
                       <button
                         type="button"
                         onClick={() => setSelectedTemplateCat('all')}
@@ -3732,7 +3732,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
                     {/* Template Tag Filter Chips (Explicit User Request) */}
                     {allTemplateTags.length > 0 && (
-                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs pt-1 border-t border-slate-900">
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs pt-1.5 border-t border-slate-900">
                         <span className="text-[10px] text-slate-500 font-bold uppercase shrink-0">Tags:</span>
                         <button
                           type="button"

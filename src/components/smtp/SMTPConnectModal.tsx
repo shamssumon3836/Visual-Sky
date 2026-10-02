@@ -557,7 +557,7 @@ export const SMTPConnectModal: React.FC<SMTPConnectModalProps> = ({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-slate-800 bg-slate-950/60 px-4 gap-2 overflow-x-auto text-xs">
+        <div className="flex flex-wrap border-b border-slate-800 bg-slate-950/60 px-4 gap-2 text-xs">
           {[
             { id: 'preset', label: '1. Select Provider', icon: Layers },
             { id: 'credentials', label: '2. Server & Webmail', icon: Mail },

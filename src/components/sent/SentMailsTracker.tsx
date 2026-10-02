@@ -381,11 +381,11 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
             </div>
 
             {/* Status filter tabs */}
-            <div className="flex items-center gap-1 overflow-x-auto">
+            <div className="flex flex-wrap items-center gap-1">
               {[
                 { id: 'all', label: 'All' },
-                { id: 'opened', label: '👁️ Opened' },
                 { id: 'replied', label: '💬 Replied' },
+                { id: 'opened', label: '👁️ Opened' },
                 { id: 'sent', label: '✓ Sent' },
                 { id: 'failed', label: '❌ Failed' },
               ].map(tab => (
