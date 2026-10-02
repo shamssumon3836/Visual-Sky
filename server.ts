@@ -34,7 +34,7 @@ const PORT = Number(process.env.PORT) || 3000;
 // Fast built-in HTTP Gzip compression middleware for Vite modules, JS/CSS bundles, and JSON APIs
 app.use((req, res, next) => {
   const acceptEncoding = String(req.headers['accept-encoding'] || '');
-  if (!acceptEncoding.includes('gzip') || req.method === 'HEAD') {
+  if (!acceptEncoding.includes('gzip') || req.method === 'HEAD' || req.url.startsWith('/api/attachments/')) {
     return next();
   }
 
@@ -5927,24 +5927,266 @@ function storeAttachmentBinary(
   return record;
 }
 
-function getAttachmentBinaryById(rawId: string): { buffer: Buffer; mimeType: string; name: string } | null {
+function getAttachmentBinaryById(
+  rawId: string,
+  queryName?: string
+): { buffer: Buffer; mimeType: string; name: string } | null {
   const safeId = String(rawId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
-  if (!safeId) return null;
+  const cleanQueryName = String(queryName || '').trim().toLowerCase();
 
-  const mem = attachmentMemoryBuffers.get(safeId);
-  if (mem) return mem;
+  const tryLoadRecord = (key: string): { buffer: Buffer; mimeType: string; name: string } | null => {
+    const mem = attachmentMemoryBuffers.get(key);
+    if (mem && mem.buffer?.length > 0) return mem;
 
-  const record = attachmentIndexMap.get(safeId);
-  const candidatePath = record?.filePath || path.join(ATTACHMENTS_DIR, safeId);
+    const record = attachmentIndexMap.get(key);
+    const candidatePath = record?.filePath || path.join(ATTACHMENTS_DIR, key);
+    try {
+      if (fs.existsSync(candidatePath)) {
+        const buffer = fs.readFileSync(candidatePath);
+        if (buffer.length > 0) {
+          const mimeType = record?.mimeType || guessMimeFromFilename(record?.name || key);
+          const name = record?.name || queryName || key;
+          attachmentMemoryBuffers.set(key, { buffer, mimeType, name });
+          return { buffer, mimeType, name };
+        }
+      }
+    } catch {}
+    return null;
+  };
+
+  if (safeId) {
+    const direct = tryLoadRecord(safeId);
+    if (direct) return direct;
+
+    // Match legacy/alias IMAP IDs by trailing -{uid}-{attIdx} (e.g. imap-att-57-0 <-> imap-att-founder_visualsky_pro-57-0)
+    const uidSuffixMatch = safeId.match(/[-_](\d+)[-_](\d+)$/);
+    if (uidSuffixMatch) {
+      const suffixDash = `-${uidSuffixMatch[1]}-${uidSuffixMatch[2]}`;
+      const suffixUnder = `_${uidSuffixMatch[1]}_${uidSuffixMatch[2]}`;
+
+      for (const key of attachmentMemoryBuffers.keys()) {
+        if (key.endsWith(suffixDash) || key.endsWith(suffixUnder)) {
+          const found = tryLoadRecord(key);
+          if (found) return found;
+        }
+      }
+      for (const key of attachmentIndexMap.keys()) {
+        if (key.endsWith(suffixDash) || key.endsWith(suffixUnder)) {
+          const found = tryLoadRecord(key);
+          if (found) return found;
+        }
+      }
+      try {
+        if (fs.existsSync(ATTACHMENTS_DIR)) {
+          const files = fs.readdirSync(ATTACHMENTS_DIR);
+          for (const f of files) {
+            if (f.endsWith(suffixDash) || f.endsWith(suffixUnder)) {
+              const found = tryLoadRecord(f);
+              if (found) return found;
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // Fallback: Match by exact attachment file name if provided (?name=Cover%20.png)
+  if (cleanQueryName) {
+    for (const [key, rec] of attachmentIndexMap.entries()) {
+      if (rec?.name && rec.name.trim().toLowerCase() === cleanQueryName) {
+        const found = tryLoadRecord(key);
+        if (found) return found;
+      }
+    }
+    for (const [key, mem] of attachmentMemoryBuffers.entries()) {
+      if (mem?.name && mem.name.trim().toLowerCase() === cleanQueryName) {
+        return mem;
+      }
+    }
+  }
+
+  return null;
+}
+
+function guessMimeFromFilename(name: string): string {
+  const lower = String(name || '').trim().toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  if (lower.endsWith('.zip')) return 'application/zip';
+  if (lower.endsWith('.csv')) return 'text/csv';
+  if (lower.endsWith('.txt')) return 'text/plain; charset=utf-8';
+  if (lower.endsWith('.mp4')) return 'video/mp4';
+  if (lower.endsWith('.mp3')) return 'audio/mpeg';
+  return 'application/octet-stream';
+}
+
+// On-Demand Self-Healing Attachment Resolver:
+// If an attachment is not yet in memory/disk (e.g. server restarted or legacy attachment ID),
+// checks workspace JSON snapshots and fetches the message directly from IMAP on the spot!
+async function resolveAttachmentBinaryOnDemand(
+  rawId: string,
+  queryName?: string
+): Promise<{ buffer: Buffer; mimeType: string; name: string } | null> {
+  const existing = getAttachmentBinaryById(rawId, queryName);
+  if (existing) return existing;
+
+  const safeId = String(rawId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const cleanQueryName = String(queryName || '').trim().toLowerCase();
+
+  // 1. Check saved workspace_*.json files on disk in case base64 was stored in a workspace snapshot
   try {
-    if (fs.existsSync(candidatePath)) {
-      const buffer = fs.readFileSync(candidatePath);
-      const mimeType = record?.mimeType || 'application/octet-stream';
-      const name = record?.name || safeId;
-      attachmentMemoryBuffers.set(safeId, { buffer, mimeType, name });
-      return { buffer, mimeType, name };
+    if (fs.existsSync(DATA_DIR)) {
+      const dataFiles = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('workspace_') && f.endsWith('.json'));
+      for (const wf of dataFiles) {
+        try {
+          const parsedWf = JSON.parse(fs.readFileSync(path.join(DATA_DIR, wf), 'utf-8'));
+          const threadsArr = Array.isArray(parsedWf?.threads) ? parsedWf.threads : [];
+          for (const t of threadsArr) {
+            for (const m of t?.messages || []) {
+              for (const a of m?.attachments || []) {
+                if (!a || !a.contentBase64) continue;
+                const aId = String(a.id || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+                const aName = String(a.name || '').trim().toLowerCase();
+                if (aId === safeId || (cleanQueryName && aName === cleanQueryName)) {
+                  const cleanB64 = String(a.contentBase64).includes(',')
+                    ? String(a.contentBase64).split(',')[1]
+                    : String(a.contentBase64);
+                  const buf = Buffer.from(cleanB64, 'base64');
+                  if (buf.length > 0) {
+                    const mime = a.mimeType || guessMimeFromFilename(a.name || queryName || '');
+                    const name = a.name || queryName || 'attachment';
+                    storeAttachmentBinary(safeId || aId, name, mime, buf, { source: 'outgoing' });
+                    return { buffer: buf, mimeType: mime, name };
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+      }
     }
   } catch {}
+
+  // 2. Live On-Demand IMAP Fetch by UID (or recent messages scan)
+  const uidMatch = safeId.match(/[-_](\d+)[-_](\d+)$/);
+  const targetUid = uidMatch ? Number(uidMatch[1]) : 0;
+
+  // Gather candidate IMAP credentials from saved workspaces + system default
+  const imapCandidates: Array<{ host: string; port: number; user: string; pass: string }> = [];
+  const seenUsers = new Set<string>();
+  const addImapCandidate = (host?: string, user?: string, pass?: string, port?: number) => {
+    const h = String(host || '').trim().toLowerCase();
+    const u = String(user || '').trim();
+    const p = String(pass || '');
+    if (!h || !u || !p) return;
+    const key = `${h}::${u.toLowerCase()}`;
+    if (seenUsers.has(key)) return;
+    seenUsers.add(key);
+    const cleanHost = h.startsWith('smtp.') ? `mail.${h.slice(5)}` : h;
+    imapCandidates.push({
+      host: cleanHost,
+      port: Number(port) === 143 ? 143 : 993,
+      user: u,
+      pass: p
+    });
+  };
+
+  addImapCandidate(
+    process.env.SMTP_HOST || 'mail.visualsky.pro',
+    process.env.SMTP_USER || 'founder@visualsky.pro',
+    process.env.SMTP_PASS || 'Vsky3836@',
+    993
+  );
+
+  try {
+    if (fs.existsSync(DATA_DIR)) {
+      const dataFiles = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('workspace_') && f.endsWith('.json'));
+      for (const wf of dataFiles) {
+        try {
+          const parsedWf = JSON.parse(fs.readFileSync(path.join(DATA_DIR, wf), 'utf-8'));
+          for (const s of parsedWf?.smtpAccounts || []) {
+            if (s && s.host && s.username && s.password) {
+              addImapCandidate(s.imapHost || s.host, s.username, s.password, s.imapPort || 993);
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+
+  for (const cand of imapCandidates) {
+    const client = new ImapFlow({
+      host: cand.host,
+      port: cand.port,
+      secure: cand.port === 993,
+      auth: { user: cand.user, pass: cand.pass },
+      logger: false,
+      tls: { rejectUnauthorized: false }
+    });
+    client.on('error', () => {});
+
+    try {
+      await Promise.race([
+        client.connect(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('IMAP timeout')), 6500))
+      ]);
+      const lock = await client.getMailboxLock('INBOX');
+      try {
+        const safeUserSlug = cand.user.toLowerCase().replace(/[^a-z0-9]/gi, '_');
+        const fetchRange = targetUid > 0 ? [targetUid] : `${Math.max(1, (Number((client.mailbox as any)?.exists) || 20) - 19)}:*`;
+        const fetchOpts = targetUid > 0 ? { uid: true } : undefined;
+
+        for await (const msg of client.fetch(fetchRange as any, { uid: true, source: true }, fetchOpts)) {
+          if (!msg?.source) continue;
+          const parsed = await simpleParser(msg.source);
+          if (Array.isArray(parsed.attachments)) {
+            for (let idx = 0; idx < parsed.attachments.length; idx++) {
+              const att: any = parsed.attachments[idx];
+              if (!att) continue;
+              const buf: Buffer = Buffer.isBuffer(att.content)
+                ? att.content
+                : att.content
+                ? Buffer.from(att.content)
+                : Buffer.alloc(0);
+              if (buf.length === 0) continue;
+              const mime = String(att.contentType || 'application/octet-stream').trim();
+              const fname =
+                String(att.filename || '').trim() ||
+                `attachment-${msg.uid}-${idx + 1}`;
+              const canonicalId = `imap-att-${safeUserSlug}-${msg.uid}-${idx}`;
+              const legacyAliasId = `imap-att-${msg.uid}-${idx}`;
+
+              storeAttachmentBinary(canonicalId, fname, mime, buf, { source: 'incoming' });
+              attachmentMemoryBuffers.set(legacyAliasId, { buffer: buf, mimeType: mime, name: fname });
+            }
+          }
+        }
+      } finally {
+        try {
+          lock.release();
+        } catch {}
+      }
+      try {
+        await client.logout();
+      } catch {
+        try {
+          client.close();
+        } catch {}
+      }
+
+      const resolvedAfterFetch = getAttachmentBinaryById(rawId, queryName);
+      if (resolvedAfterFetch) return resolvedAfterFetch;
+    } catch {
+      try {
+        client.close();
+      } catch {}
+    }
+  }
+
   return null;
 }
 
@@ -6031,29 +6273,39 @@ async function uploadBufferToGoogleDrive(params: {
 }
 
 // Endpoint: View Attachment Inline (Images, PDFs, Text, Videos, etc.)
-app.get('/api/attachments/view/:id', (req, res) => {
-  const item = getAttachmentBinaryById(req.params.id);
-  if (!item) {
+app.get('/api/attachments/view/:id', async (req, res) => {
+  const queryName = typeof req.query.name === 'string' ? req.query.name : '';
+  const item = await resolveAttachmentBinaryOnDemand(req.params.id, queryName);
+  if (!item || !item.buffer || item.buffer.length === 0) {
     res.setHeader('Content-Type', 'application/json');
     return res.status(404).json({ success: false, error: 'Attachment not found' });
   }
-  const safeFileName = item.name.replace(/["\r\n]/g, '_');
-  res.setHeader('Content-Type', item.mimeType || 'application/octet-stream');
+  const safeFileName = (item.name || queryName || 'attachment').replace(/["\r\n]/g, '_');
+  const resolvedMime =
+    item.mimeType && item.mimeType !== 'application/octet-stream'
+      ? item.mimeType
+      : guessMimeFromFilename(safeFileName);
+  res.setHeader('Content-Type', resolvedMime);
   res.setHeader('Content-Length', String(item.buffer.length));
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(safeFileName)}"`);
+  res.setHeader('Content-Disposition', `inline; filename="${safeFileName}"; filename*=UTF-8''${encodeURIComponent(safeFileName)}`);
   res.setHeader('Cache-Control', 'public, max-age=86400');
   return res.status(200).end(item.buffer);
 });
 
 // Endpoint: Force Download Attachment Binary to User's Device
-app.get('/api/attachments/download/:id', (req, res) => {
-  const item = getAttachmentBinaryById(req.params.id);
-  if (!item) {
+app.get('/api/attachments/download/:id', async (req, res) => {
+  const queryName = typeof req.query.name === 'string' ? req.query.name : '';
+  const item = await resolveAttachmentBinaryOnDemand(req.params.id, queryName);
+  if (!item || !item.buffer || item.buffer.length === 0) {
     res.setHeader('Content-Type', 'application/json');
     return res.status(404).json({ success: false, error: 'Attachment not found' });
   }
-  const safeFileName = item.name.replace(/["\r\n]/g, '_');
-  res.setHeader('Content-Type', item.mimeType || 'application/octet-stream');
+  const safeFileName = (item.name || queryName || 'attachment').replace(/["\r\n]/g, '_');
+  const resolvedMime =
+    item.mimeType && item.mimeType !== 'application/octet-stream'
+      ? item.mimeType
+      : guessMimeFromFilename(safeFileName);
+  res.setHeader('Content-Type', resolvedMime);
   res.setHeader('Content-Length', String(item.buffer.length));
   res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"; filename*=UTF-8''${encodeURIComponent(safeFileName)}`);
   return res.status(200).end(item.buffer);
@@ -6362,10 +6614,18 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
                           driveFileUrl,
                           uploadedToDrive
                         });
+                        // Also register legacy alias ID (imap-att-{uid}-{idx}) in memory so older client threads resolve immediately
+                        attachmentMemoryBuffers.set(`imap-att-${message.uid}-${attIdx}`, {
+                          buffer: rawBuf,
+                          mimeType,
+                          name: fileName
+                        });
                       }
 
+                      // Only include inline base64 in JSON if <= 120 KB so localStorage (5MB) and Firestore (1MB) never overflow;
+                      // larger files (like 2.5MB PNGs/PDFs) stream directly via /api/attachments/view/:id and /api/attachments/download/:id
                       const b64Str =
-                        rawBuf.length > 0 && rawBuf.length <= 4 * 1024 * 1024
+                        rawBuf.length > 0 && rawBuf.length <= 120 * 1024
                           ? `data:${mimeType};base64,${rawBuf.toString('base64')}`
                           : undefined;
 
@@ -6378,8 +6638,8 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
                         name: fileName,
                         size: rawBuf.length || att.size || 0,
                         mimeType,
-                        viewUrl: `/api/attachments/view/${encodeURIComponent(attId)}`,
-                        downloadUrl: `/api/attachments/download/${encodeURIComponent(attId)}`,
+                        viewUrl: `/api/attachments/view/${encodeURIComponent(attId)}?name=${encodeURIComponent(fileName)}`,
+                        downloadUrl: `/api/attachments/download/${encodeURIComponent(attId)}?name=${encodeURIComponent(fileName)}`,
                         driveFolderUrl,
                         driveFileUrl,
                         uploadedToDrive,
@@ -6697,9 +6957,9 @@ app.post('/api/drive-storage/sync-file/:id', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   try {
     const safeId = String(req.params.id || '').replace(/[^a-zA-Z0-9._-]/g, '_');
-    const binary = getAttachmentBinaryById(safeId);
+    const binary = await resolveAttachmentBinaryOnDemand(safeId, req.body?.fileName);
     const record = attachmentIndexMap.get(safeId);
-    if (!binary) {
+    if (!binary || !binary.buffer || binary.buffer.length === 0) {
       return res.status(404).json({ success: false, error: 'Attachment binary not found on server' });
     }
     const saved = getSavedDriveStorageSettings();
@@ -6734,6 +6994,7 @@ app.post('/api/drive-storage/sync-file/:id', async (req, res) => {
       return res.json({
         success: true,
         uploadedViaBridge: true,
+        uploadedToDrive: true,
         driveFolderUrl: result.driveFolderUrl,
         driveFileUrl: result.driveFileUrl
       });
@@ -6758,11 +7019,22 @@ app.post('/api/drive-storage/upload', async (req, res) => {
     const { id, fileName, mimeType, size, contentBase64, folderUrl, folderId, appsScriptWebAppUrl, source } = req.body || {};
     const saved = getSavedDriveStorageSettings();
     const cleanBase64 = String(contentBase64 || '').replace(/^data:[^;]+;base64,/, '');
-    const buffer = cleanBase64 ? Buffer.from(cleanBase64, 'base64') : Buffer.alloc(0);
+    let buffer = cleanBase64 ? Buffer.from(cleanBase64, 'base64') : Buffer.alloc(0);
+    let resolvedName = fileName || 'attachment';
+    let resolvedMime = mimeType || 'application/octet-stream';
+
+    if (buffer.length === 0 && id) {
+      const existingBin = await resolveAttachmentBinaryOnDemand(String(id), resolvedName);
+      if (existingBin && existingBin.buffer?.length > 0) {
+        buffer = existingBin.buffer;
+        resolvedName = existingBin.name || resolvedName;
+        resolvedMime = existingBin.mimeType || resolvedMime;
+      }
+    }
 
     const bridgeResult = await uploadBufferToGoogleDrive({
-      fileName: fileName || 'attachment',
-      mimeType: mimeType || 'application/octet-stream',
+      fileName: resolvedName,
+      mimeType: resolvedMime,
       buffer,
       folderUrl: folderUrl || saved.folderUrl,
       folderId: folderId || saved.folderId,
@@ -6770,11 +7042,11 @@ app.post('/api/drive-storage/upload', async (req, res) => {
     });
 
     const attId = String(id || `drv-att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`).replace(/[^a-zA-Z0-9._-]/g, '_');
-    const viewUrl = `/api/attachments/view/${encodeURIComponent(attId)}`;
-    const downloadUrl = `/api/attachments/download/${encodeURIComponent(attId)}`;
+    const viewUrl = `/api/attachments/view/${encodeURIComponent(attId)}?name=${encodeURIComponent(resolvedName)}`;
+    const downloadUrl = `/api/attachments/download/${encodeURIComponent(attId)}?name=${encodeURIComponent(resolvedName)}`;
 
     if (buffer.length > 0) {
-      storeAttachmentBinary(attId, fileName || 'attachment', mimeType || 'application/octet-stream', buffer, {
+      storeAttachmentBinary(attId, resolvedName, resolvedMime, buffer, {
         source: source || 'outgoing',
         driveFolderUrl: bridgeResult.driveFolderUrl || saved.folderUrl || undefined,
         driveFileUrl: bridgeResult.uploadedViaBridge ? bridgeResult.driveFileUrl : undefined,
@@ -6785,15 +7057,17 @@ app.post('/api/drive-storage/upload', async (req, res) => {
     return res.json({
       success: true,
       id: attId,
-      fileName: fileName || 'attachment',
+      fileName: resolvedName,
       size: buffer.length || Number(size) || 0,
-      mimeType: mimeType || 'application/octet-stream',
+      mimeType: resolvedMime,
       viewUrl,
       downloadUrl,
       driveFolderUrl: bridgeResult.driveFolderUrl || saved.folderUrl || undefined,
       driveFileUrl: bridgeResult.uploadedViaBridge ? bridgeResult.driveFileUrl : undefined,
       uploadedViaBridge: bridgeResult.uploadedViaBridge,
+      uploadedToDrive: bridgeResult.uploadedViaBridge,
       bridgeError: bridgeResult.bridgeError,
+      driveUploadError: bridgeResult.bridgeError,
       zeroHostingStorage: true
     });
   } catch (err: any) {

@@ -358,14 +358,48 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
     setSyncingAttachmentId(null);
   };
 
-  const handleDownload = (att: EmailAttachment) => {
-    const url = att.downloadUrl || `/api/attachments/download/${encodeURIComponent(att.id)}`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = att.name || 'attachment';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const handleDownload = async (att: EmailAttachment) => {
+    const fileName = att.name || 'attachment';
+    const nameParam = att.name ? `?name=${encodeURIComponent(att.name)}` : '';
+    try {
+      if (att.contentBase64 && att.contentBase64.startsWith('data:')) {
+        const res = await fetch(att.contentBase64);
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        return;
+      }
+      const url = `/api/attachments/download/${encodeURIComponent(att.id)}${nameParam}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        return;
+      }
+    } catch {}
+
+    if (att.driveFileUrl && !att.driveFileUrl.includes('/folders/')) {
+      window.open(att.driveFileUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    addNotification({
+      title: '⚠️ Syncing Attachment...',
+      message: `Fetching "${fileName}" from mail server. Please try again in a moment.`,
+      type: 'system'
+    });
   };
 
   const handleCopyAppsScript = () => {
@@ -781,10 +815,11 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
               const isImg =
                 String(att.mimeType || '').toLowerCase().startsWith('image/') ||
                 /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(att.name || '');
+              const nameParam = att.name ? `?name=${encodeURIComponent(att.name)}` : '';
               const viewSrc =
                 att.contentBase64 && att.contentBase64.startsWith('data:')
                   ? att.contentBase64
-                  : att.viewUrl || `/api/attachments/view/${encodeURIComponent(att.id)}`;
+                  : `/api/attachments/view/${encodeURIComponent(att.id)}${nameParam}`;
 
               return (
                 <div
@@ -897,14 +932,14 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
                   src={
                     previewAtt.contentBase64 && previewAtt.contentBase64.startsWith('data:')
                       ? previewAtt.contentBase64
-                      : previewAtt.viewUrl || `/api/attachments/view/${encodeURIComponent(previewAtt.id)}`
+                      : `/api/attachments/view/${encodeURIComponent(previewAtt.id)}${previewAtt.name ? `?name=${encodeURIComponent(previewAtt.name)}` : ''}`
                   }
                   alt={previewAtt.name}
                   className="max-h-[70vh] max-w-full object-contain rounded-lg"
                 />
               ) : (
                 <iframe
-                  src={previewAtt.viewUrl || `/api/attachments/view/${encodeURIComponent(previewAtt.id)}`}
+                  src={`/api/attachments/view/${encodeURIComponent(previewAtt.id)}${previewAtt.name ? `?name=${encodeURIComponent(previewAtt.name)}` : ''}`}
                   title={previewAtt.name}
                   className="w-full h-[65vh] rounded-lg bg-white border-0"
                 />

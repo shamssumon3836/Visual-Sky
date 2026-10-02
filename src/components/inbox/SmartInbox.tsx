@@ -232,16 +232,22 @@ export const SmartInbox: React.FC = () => {
   const getAttachmentViewSrc = (att: EmailAttachment): string => {
     if (!att) return '';
     if (att.contentBase64 && att.contentBase64.startsWith('data:')) return att.contentBase64;
-    if (att.viewUrl) return att.viewUrl;
-    if (att.id) return `/api/attachments/view/${encodeURIComponent(att.id)}`;
+    const nameParam = att.name ? `?name=${encodeURIComponent(att.name)}` : '';
+    if (att.id) return `/api/attachments/view/${encodeURIComponent(att.id)}${nameParam}`;
+    if (att.viewUrl) {
+      return att.viewUrl.includes('?name=') ? att.viewUrl : `${att.viewUrl}${nameParam}`;
+    }
     if (att.driveFileUrl && !att.driveFileUrl.includes('/folders/')) return att.driveFileUrl;
     return '';
   };
 
   const getAttachmentDownloadSrc = (att: EmailAttachment): string => {
     if (!att) return '';
-    if (att.downloadUrl) return att.downloadUrl;
-    if (att.id) return `/api/attachments/download/${encodeURIComponent(att.id)}`;
+    const nameParam = att.name ? `?name=${encodeURIComponent(att.name)}` : '';
+    if (att.id) return `/api/attachments/download/${encodeURIComponent(att.id)}${nameParam}`;
+    if (att.downloadUrl) {
+      return att.downloadUrl.includes('?name=') ? att.downloadUrl : `${att.downloadUrl}${nameParam}`;
+    }
     return getAttachmentViewSrc(att);
   };
 
@@ -261,7 +267,7 @@ export const SmartInbox: React.FC = () => {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
         return;
       }
 
@@ -277,23 +283,29 @@ export const SmartInbox: React.FC = () => {
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
           return;
         }
       }
     } catch {}
 
-    const fallbackUrl = getAttachmentDownloadSrc(att) || att.driveFileUrl || att.driveFolderUrl;
-    if (fallbackUrl) {
+    // Only open a direct Google Drive file link if one exists (never click a 404 URL with link.download)
+    if (att.driveFileUrl && !att.driveFileUrl.includes('/folders/')) {
       const link = document.createElement('a');
-      link.href = fallbackUrl;
-      link.download = fileName;
+      link.href = att.driveFileUrl;
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      return;
     }
+
+    addNotification({
+      title: '⚠️ Syncing Attachment from Mail Server...',
+      message: `Fetching "${fileName}" from your mailbox. Please click Sync or try again in a moment.`,
+      type: 'system'
+    });
   };
 
   const handleSyncAttachmentToDrive = async (att: EmailAttachment, e?: React.MouseEvent) => {
@@ -315,6 +327,7 @@ export const SmartInbox: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          fileName: att.name,
           folderUrl: driveStorageSettings.folderUrl,
           folderId: driveStorageSettings.folderId,
           appsScriptWebAppUrl: driveStorageSettings.appsScriptWebAppUrl

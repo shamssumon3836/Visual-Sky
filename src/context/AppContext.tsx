@@ -632,11 +632,28 @@ const sanitizeThreadsArray = (list: EmailThread[]): EmailThread[] => {
       if (!m) continue;
       if (m.id && deletedSet.has(m.id)) continue;
       const normalizedAttachments = Array.isArray(m.attachments)
-        ? m.attachments.map(att => ({
-            ...att,
-            viewUrl: att.viewUrl || (att.id ? `/api/attachments/view/${encodeURIComponent(att.id)}` : undefined),
-            downloadUrl: att.downloadUrl || (att.id ? `/api/attachments/download/${encodeURIComponent(att.id)}` : undefined)
-          }))
+        ? m.attachments.map(att => {
+            const nameParam = att.name ? `?name=${encodeURIComponent(att.name)}` : '';
+            return {
+              ...att,
+              viewUrl:
+                att.viewUrl && att.viewUrl.includes('?name=')
+                  ? att.viewUrl
+                  : att.id
+                  ? `/api/attachments/view/${encodeURIComponent(att.id)}${nameParam}`
+                  : att.viewUrl,
+              downloadUrl:
+                att.downloadUrl && att.downloadUrl.includes('?name=')
+                  ? att.downloadUrl
+                  : att.id
+                  ? `/api/attachments/download/${encodeURIComponent(att.id)}${nameParam}`
+                  : att.downloadUrl,
+              contentBase64:
+                att.contentBase64 && String(att.contentBase64).length <= 160000
+                  ? att.contentBase64
+                  : undefined
+            };
+          })
         : undefined;
       let cleanedBody = cleanEmailBodyText(
         m.body,
@@ -2483,18 +2500,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Keep viewUrl, downloadUrl, Drive file links, and inline preview base64 for smaller attachments
     const metadataOnlyAttachments: EmailAttachment[] | undefined =
       Array.isArray(attachments) && attachments.length > 0
-        ? attachments.map(a => ({
-            id: a.id,
-            name: a.name,
-            size: a.size,
-            mimeType: a.mimeType,
-            viewUrl: a.viewUrl || (a.id ? `/api/attachments/view/${encodeURIComponent(a.id)}` : undefined),
-            downloadUrl: a.downloadUrl || (a.id ? `/api/attachments/download/${encodeURIComponent(a.id)}` : undefined),
-            uploadedToDrive: a.uploadedToDrive,
-            driveFolderUrl: a.driveFolderUrl || driveStorageSettings.folderUrl || undefined,
-            driveFileUrl: a.driveFileUrl && !String(a.driveFileUrl).includes('/folders/') ? a.driveFileUrl : undefined,
-            contentBase64: a.size && a.size <= 1500000 ? a.contentBase64 : undefined
-          }))
+        ? attachments.map(a => {
+            const nameParam = a.name ? `?name=${encodeURIComponent(a.name)}` : '';
+            return {
+              id: a.id,
+              name: a.name,
+              size: a.size,
+              mimeType: a.mimeType,
+              viewUrl: a.id ? `/api/attachments/view/${encodeURIComponent(a.id)}${nameParam}` : a.viewUrl,
+              downloadUrl: a.id ? `/api/attachments/download/${encodeURIComponent(a.id)}${nameParam}` : a.downloadUrl,
+              uploadedToDrive: a.uploadedToDrive,
+              driveFolderUrl: a.driveFolderUrl || driveStorageSettings.folderUrl || undefined,
+              driveFileUrl: a.driveFileUrl && !String(a.driveFileUrl).includes('/folders/') ? a.driveFileUrl : undefined,
+              contentBase64: a.size && a.size <= 120000 ? a.contentBase64 : undefined
+            };
+          })
         : undefined;
 
     const newMsg: EmailMessage = {
@@ -3989,25 +4009,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             t.messages.some(m => m.id === msgUniqueId)
           );
           if (existingThreadWithMsg) {
-            // If existing message had raw HTML (<div / gmail_quote) or unhydrated attachments, upgrade it in-place!
+            // If existing message had raw HTML (<div / gmail_quote) or older attachment IDs/URLs, upgrade it in-place!
             const incomingAtts: EmailAttachment[] | undefined =
               Array.isArray(msg.attachments) && msg.attachments.length > 0
-                ? msg.attachments.map((att: any) => ({
-                    ...att,
-                    viewUrl: att.viewUrl || (att.id ? `/api/attachments/view/${encodeURIComponent(att.id)}` : undefined),
-                    downloadUrl: att.downloadUrl || (att.id ? `/api/attachments/download/${encodeURIComponent(att.id)}` : undefined)
-                  }))
+                ? msg.attachments.map((att: any) => {
+                    const nameParam = att.name ? `?name=${encodeURIComponent(att.name)}` : '';
+                    return {
+                      ...att,
+                      viewUrl: att.id ? `/api/attachments/view/${encodeURIComponent(att.id)}${nameParam}` : att.viewUrl,
+                      downloadUrl: att.id ? `/api/attachments/download/${encodeURIComponent(att.id)}${nameParam}` : att.downloadUrl,
+                      contentBase64:
+                        att.contentBase64 && String(att.contentBase64).length <= 160000
+                          ? att.contentBase64
+                          : undefined
+                    };
+                  })
                 : undefined;
 
             const existingMsg = existingThreadWithMsg.messages.find(m => m.id === msgUniqueId);
             const existingNeedsUpgrade =
               existingMsg &&
               (/<[a-zA-Z!/]/.test(existingMsg.body || '') ||
+                (existingMsg.body === '📩 Message received' && incomingAtts && incomingAtts.length > 0) ||
                 (incomingAtts &&
                   incomingAtts.length > 0 &&
                   (!existingMsg.attachments ||
                     existingMsg.attachments.length < incomingAtts.length ||
-                    existingMsg.attachments.some(ea => !ea.viewUrl && !ea.contentBase64))));
+                    existingMsg.attachments.some(
+                      (ea, idx) =>
+                        !ea.viewUrl ||
+                        !ea.viewUrl.includes('?name=') ||
+                        (incomingAtts[idx] && ea.id !== incomingAtts[idx].id)
+                    ))));
 
             if (existingNeedsUpgrade) {
               const upgradedBody =
