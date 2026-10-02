@@ -1400,22 +1400,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(() => {
     try {
       const saved = localStorage.getItem('visualsky_notification_settings');
-      return saved ? JSON.parse(saved) : {
-        soundEnabled: true,
-        soundPreset: 'chime',
-        customAudioBase64: null,
-        volume: 85,
-        desktopPushEnabled: true
-      };
-    } catch {
-      return {
-        soundEnabled: true,
-        soundPreset: 'chime',
-        customAudioBase64: null,
-        volume: 85,
-        desktopPushEnabled: true
-      };
-    }
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          soundEnabled: parsed.soundEnabled !== undefined ? Boolean(parsed.soundEnabled) : true,
+          soundPreset: parsed.soundPreset || 'chime',
+          customAudioBase64: parsed.customAudioBase64 || null,
+          volume: typeof parsed.volume === 'number' ? parsed.volume : 85,
+          desktopPushEnabled: parsed.desktopPushEnabled !== undefined ? Boolean(parsed.desktopPushEnabled) : true
+        };
+      }
+    } catch {}
+    return {
+      soundEnabled: true,
+      soundPreset: 'chime',
+      customAudioBase64: null,
+      volume: 85,
+      desktopPushEnabled: true
+    };
   });
 
   const [driveStorageSettings, setDriveStorageSettings] = useState<GoogleDriveStorageSettings>(() => {
@@ -2347,14 +2349,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [isAuthenticated, currentUser?.email, currentUser?.id, currentUser?.supabaseId]);
 
-  // Play notification audio using Web Audio API or custom audio
+  // Play notification audio using Web Audio API or custom audio (reads fresh ref so background tabs never use stale state)
   const playNotificationSound = (overridePreset?: string) => {
-    if (!notificationSettings.soundEnabled) return;
-    const preset = (overridePreset || notificationSettings.soundPreset) as any;
-    if (preset === 'custom' && notificationSettings.customAudioBase64) {
-      audioEngine.playCustomAudio(notificationSettings.customAudioBase64, notificationSettings.volume);
+    const activeSettings: NotificationSettings =
+      (latestWorkspaceRef.current as any)?.notificationSettings || notificationSettings;
+    if (!activeSettings.soundEnabled) return;
+    const preset = (overridePreset || activeSettings.soundPreset || 'chime') as any;
+    const vol = typeof activeSettings.volume === 'number' ? activeSettings.volume : 85;
+    if (preset === 'custom' && activeSettings.customAudioBase64) {
+      audioEngine.playCustomAudio(activeSettings.customAudioBase64, vol);
     } else {
-      audioEngine.playPreset(preset === 'custom' ? 'chime' : preset, notificationSettings.volume);
+      audioEngine.playPreset(preset === 'custom' ? 'chime' : preset, vol);
     }
   };
 
@@ -2372,19 +2377,95 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Convert URL-safe Base64 VAPID Public Key to Uint8Array for PushManager.subscribe
+  const urlBase64ToUint8Array = (base64String: string): Uint8Array => {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  };
+
+  // Subscribe Browser Service Worker to Server RFC 8030 Web Push (so notifications arrive even when all browser tabs are closed!)
+  const subscribeBrowserToWebPush = async (): Promise<boolean> => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      return false;
+    }
+    try {
+      const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      await navigator.serviceWorker.ready;
+
+      const keyRes = await fetch('/api/push/vapid-public-key');
+      const keyParsed = await safeParseResponse(keyRes, 'Failed to fetch VAPID key');
+      const publicKey = keyParsed.data?.publicKey;
+      if (!publicKey) return false;
+
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(publicKey) as any
+        });
+      }
+
+      const { email, userId } = resolveActiveUserIdentity();
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscription: sub,
+          userEmail: email || currentUser?.email || '',
+          userId: userId || currentUser?.id || ''
+        })
+      });
+      return true;
+    } catch (err) {
+      console.warn('Web Push subscription note:', err);
+      return false;
+    }
+  };
+
   // Register Service Worker for Native Mobile Browser (Android/iOS) & Desktop Gmail-style Push Notifications
   useEffect(() => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
 
     const cancelSwInit = runAfterWindowLoad(() => {
       navigator.serviceWorker
-        .register('/sw.js')
+        .register('/sw.js', { scope: '/' })
+        .then(() => {
+          if ('Notification' in window && Notification.permission === 'granted') {
+            subscribeBrowserToWebPush().catch(() => {});
+          }
+        })
         .catch(() => {});
-    }, 500);
+    }, 300);
+
+    // If Notification permission is still 'default', prompt automatically on first user click so background push works immediately
+    const handleFirstInteractionForPush = () => {
+      if ('Notification' in window && Notification.permission === 'default') {
+        requestDesktopNotificationPermission().catch(() => {});
+      } else if ('Notification' in window && Notification.permission === 'granted') {
+        subscribeBrowserToWebPush().catch(() => {});
+      }
+    };
+    window.addEventListener('click', handleFirstInteractionForPush, { once: true, passive: true });
+
+    // Restore tab title when user returns to the tab
+    const handleTabFocusRestoreTitle = () => {
+      if (document.visibilityState === 'visible') {
+        document.title = 'VisualSky - Cold Outreach & Lead Engine';
+      }
+    };
+    window.addEventListener('focus', handleTabFocusRestoreTitle);
+    document.addEventListener('visibilitychange', handleTabFocusRestoreTitle);
 
     const handleSwMessage = (event: MessageEvent) => {
       const msg = event.data;
-      if (msg && msg.type === 'VS_NOTIFICATION_CLICK') {
+      if (!msg) return;
+      if (msg.type === 'VS_NOTIFICATION_CLICK') {
         const d = msg.data || {};
         if (d.threadId) {
           setActiveThreadId(d.threadId);
@@ -2399,15 +2480,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else {
           setActiveTabState('inbox');
         }
+      } else if (msg.type === 'VS_PUSH_RECEIVED') {
+        const p = msg.payload || {};
+        if (p.title) {
+          addNotification({
+            tag: p.tag,
+            title: p.title,
+            message: p.body || p.message || '',
+            type: (p.type as any) || 'reply',
+            linkTab: p.linkTab || 'inbox',
+            leadEmail: p.leadEmail
+          });
+        }
       }
     };
 
     navigator.serviceWorker.addEventListener('message', handleSwMessage);
     return () => {
       cancelSwInit();
+      window.removeEventListener('click', handleFirstInteractionForPush);
+      window.removeEventListener('focus', handleTabFocusRestoreTitle);
+      document.removeEventListener('visibilitychange', handleTabFocusRestoreTitle);
       navigator.serviceWorker.removeEventListener('message', handleSwMessage);
     };
-  }, []);
+  }, [currentUser?.email]);
 
   const requestDesktopNotificationPermission = async (): Promise<boolean> => {
     let nativeGranted = false;
@@ -2432,29 +2528,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         console.warn('Native notification permission not available:', err);
       }
     }
-    
+
     updateNotificationSettings({ desktopPushEnabled: true, soundEnabled: true });
+    if (nativeGranted) {
+      await subscribeBrowserToWebPush();
+    }
     return nativeGranted;
   };
 
-  // Trigger Native Phone Screen (ServiceWorker) & Desktop OS App Notification (Gmail / Messenger style)
+  // Trigger Native Phone Screen (ServiceWorker) & Desktop OS App Notification (Gmail / Messenger style — works on other tabs & minimized windows)
   const sendDesktopNotification = (notif: AppNotification) => {
-    if (!notificationSettings.desktopPushEnabled || typeof window === 'undefined' || !('Notification' in window)) {
+    if (typeof window === 'undefined') return;
+    const activeSettings: NotificationSettings =
+      (latestWorkspaceRef.current as any)?.notificationSettings || notificationSettings;
+
+    // Flash browser tab title whenever user is on another tab or window is blurred
+    if (typeof document !== 'undefined' && (document.visibilityState === 'hidden' || !document.hasFocus())) {
+      try {
+        document.title = `🔔 (1) ${notif.title} | VisualSky`;
+      } catch {}
+    }
+
+    if (activeSettings.desktopPushEnabled === false || !('Notification' in window)) {
       return;
     }
     if (Notification.permission !== 'granted') return;
 
+    const notifTag = notif.tag || notif.id;
     const notifOptions: any = {
       body: notif.message,
       icon: '/favicon.svg',
       badge: '/favicon.svg',
-      tag: notif.id,
+      tag: notifTag,
       renotify: true,
-      vibrate: [200, 100, 200],
+      requireInteraction: true,
+      vibrate: [250, 100, 250, 100, 300],
       data: {
         linkTab: notif.linkTab || (notif.type === 'reply' ? 'inbox' : 'sent'),
         leadEmail: notif.leadEmail,
-        threadId: notif.threadId
+        threadId: notif.threadId,
+        url: notif.linkTab === 'sent' ? '/?tab=sent' : '/?tab=inbox'
       }
     };
 
@@ -2462,6 +2575,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       navigator.serviceWorker
         .getRegistration()
         .then((reg) => {
+          if (reg && reg.active) {
+            reg.active.postMessage({
+              type: 'SHOW_NOTIFICATION',
+              title: notif.title,
+              options: notifOptions
+            });
+            return;
+          }
           if (reg && typeof reg.showNotification === 'function') {
             return reg.showNotification(notif.title, notifOptions);
           }
@@ -2475,7 +2596,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         })
         .catch(() => {
           try {
-            new Notification(notif.title, notifOptions);
+            const n = new Notification(notif.title, notifOptions);
+            n.onclick = () => {
+              window.focus();
+              if (notif.threadId) setActiveThreadId(notif.threadId);
+              setActiveTabState(notif.linkTab || (notif.type === 'reply' ? 'inbox' : 'sent'));
+              n.close();
+            };
           } catch {}
         });
     } else {
@@ -2490,6 +2617,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch {}
     }
   };
+
+  const recentInAppNotifTagsRef = useRef<Map<string, number>>(new Map());
 
   // Notification helper — STRICTLY fires ONLY for:
   // 1. Incoming Mail / Reply ('reply')
@@ -2523,6 +2652,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // Silently ignore all other routine UI/system actions so user only gets real email notifications
         return;
       }
+    }
+
+    // Deduplicate by tag within 45s so background tab polling + Web Push never create duplicate bell items
+    if (notif.tag) {
+      const nowMs = Date.now();
+      for (const [k, ts] of recentInAppNotifTagsRef.current.entries()) {
+        if (nowMs - ts > 45000) recentInAppNotifTagsRef.current.delete(k);
+      }
+      if (recentInAppNotifTagsRef.current.has(notif.tag)) {
+        return;
+      }
+      recentInAppNotifTagsRef.current.set(notif.tag, nowMs);
     }
 
     const newNotif: AppNotification = {
@@ -4119,16 +4260,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             } else if (exactOpenCount > prevNotified) {
               notifiedOpenCountsRef.current.set(mail.id, exactOpenCount);
               const latestEv = verifiedOpens[verifiedOpens.length - 1];
-              addNotification({
-                title: `👁️ Mail Opened by ${mail.recipientName}`,
-                message: `${mail.recipientCompany || mail.recipientEmail} opened "${(mail.subject || '').slice(0, 50)}" (Open #${exactOpenCount})`,
-                type: 'open',
-                linkTab: 'sent',
-                leadEmail: mail.recipientEmail,
-                senderName: mail.recipientName,
-                senderCompany: mail.recipientCompany,
-                subject: mail.subject
-              });
+              const openTag = `open-${cleanPid}-${Math.floor(Date.now() / 60000)}`;
+              setTimeout(() => {
+                addNotification({
+                  tag: openTag,
+                  title: `👁️ Mail Opened by ${mail.recipientName}`,
+                  message: `${mail.recipientCompany || mail.recipientEmail} opened "${(mail.subject || '').slice(0, 50)}" (Open #${exactOpenCount})`,
+                  type: 'open',
+                  linkTab: 'sent',
+                  leadEmail: mail.recipientEmail,
+                  senderName: mail.recipientName,
+                  senderCompany: mail.recipientCompany,
+                  subject: mail.subject
+                });
+              }, 0);
 
               setLeads(lPrev =>
                 lPrev.map(l => {
@@ -4198,9 +4343,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const initialTimer = setTimeout(pollTrackingEvents, 1500);
     const interval = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       pollTrackingEvents();
-    }, 10000);
+    }, 8000);
     return () => {
       clearTimeout(initialTimer);
       clearInterval(interval);
@@ -4363,6 +4507,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               }
 
               addNotification({
+                tag: msgUniqueId,
                 title: `🚫 Mail Blocked / Bounced${matchedSent ? `: ${matchedSent.recipientName}` : ''}`,
                 message: `${bouncedAddr || senderEmail} • "${msgSubject}": ${rawBounceBody.slice(0, 90) || 'Delivery rejected or blocked by recipient mail server.'}`,
                 type: 'bounce',
@@ -4719,6 +4864,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           const isReplyToSent = Boolean(matchingSentLog || isReplySubjectOrHeader);
           notificationsToFire.push({
+            tag: msgUniqueId,
             title: isReplyToSent
               ? `📩 ${leadName} replied to your email`
               : `📩 New Mail from ${leadName}`,
@@ -4789,22 +4935,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Continuous Real-Time Background IMAP Auto-Sync (Deferred after initial load so page startup is instant!)
+  const syncInboxRepliesRef = useRef(syncInboxReplies);
+  syncInboxRepliesRef.current = syncInboxReplies;
+
+  // Continuous Real-Time Background IMAP Auto-Sync (Runs even when user is on another tab or window is minimized!)
   useEffect(() => {
     if (!isAuthenticated) return;
 
     const initialSyncTimer = setTimeout(() => {
-      syncInboxReplies(undefined, true).catch(() => {});
+      syncInboxRepliesRef.current(undefined, true).catch(() => {});
     }, 2000);
 
+    // 1. Standard interval (runs when tab is active or in background)
     const imapInterval = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      syncInboxReplies(undefined, true).catch(() => {});
+      syncInboxRepliesRef.current(undefined, true).catch(() => {});
     }, 5000);
+
+    // 2. Unthrottled Web Worker Background Timer — Prevents Chrome/Edge/Brave from throttling background tabs!
+    let bgWorker: Worker | null = null;
+    let workerBlobUrl: string | null = null;
+    try {
+      const workerCode = `setInterval(function() { postMessage('tick'); }, 6000);`;
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      workerBlobUrl = URL.createObjectURL(blob);
+      bgWorker = new Worker(workerBlobUrl);
+      bgWorker.onmessage = () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+          syncInboxRepliesRef.current(undefined, true).catch(() => {});
+        }
+      };
+    } catch {}
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
-        syncInboxReplies(undefined, true).catch(() => {});
+        syncInboxRepliesRef.current(undefined, true).catch(() => {});
       }
     };
 
@@ -4814,6 +4978,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       clearTimeout(initialSyncTimer);
       clearInterval(imapInterval);
+      if (bgWorker) {
+        try {
+          bgWorker.terminate();
+        } catch {}
+      }
+      if (workerBlobUrl) {
+        try {
+          URL.revokeObjectURL(workerBlobUrl);
+        } catch {}
+      }
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };

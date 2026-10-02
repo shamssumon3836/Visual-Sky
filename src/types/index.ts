@@ -212,6 +212,7 @@ export interface NotificationSettings {
 
 export interface AppNotification {
   id: string;
+  tag?: string;
   title: string;
   message: string;
   type: 'reply' | 'open' | 'bounce' | 'lead' | 'campaign' | 'smtp' | 'system';

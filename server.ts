@@ -9,6 +9,7 @@ import { simpleParser } from 'mailparser';
 import crypto from 'crypto';
 import dns from 'dns';
 import zlib from 'zlib';
+import webpush from 'web-push';
 
 dotenv.config();
 
@@ -83,7 +84,207 @@ const PAYMENT_SETTINGS_FILE = path.join(DATA_DIR, 'payment_settings.json');
 const SUBSCRIPTIONS_FILE = path.join(DATA_DIR, 'subscriptions_registry.json');
 const TRACKING_EVENTS_FILE = path.join(DATA_DIR, 'tracking_events.json');
 const DRIVE_STORAGE_SETTINGS_FILE = path.join(DATA_DIR, 'drive_storage_settings.json');
+const VAPID_KEYS_FILE = path.join(DATA_DIR, 'vapid_keys.json');
+const PUSH_SUBSCRIPTIONS_FILE = path.join(DATA_DIR, 'push_subscriptions.json');
+const NOTIFIED_IMAP_UIDS_FILE = path.join(DATA_DIR, 'notified_imap_uids.json');
 const TRANSPARENT_GIF_BUFFER = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+
+// Initialize Persistent VAPID Keys for RFC 8030 Background & Offline Web Push Notifications
+const initVapidKeys = (): { publicKey: string; privateKey: string } => {
+  try {
+    if (fs.existsSync(VAPID_KEYS_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(VAPID_KEYS_FILE, 'utf-8'));
+      if (saved && saved.publicKey && saved.privateKey) {
+        return saved;
+      }
+    }
+  } catch {}
+  const generated = webpush.generateVAPIDKeys();
+  try {
+    fs.writeFileSync(VAPID_KEYS_FILE, JSON.stringify(generated, null, 2), 'utf-8');
+  } catch {}
+  return generated;
+};
+
+const vapidKeys = initVapidKeys();
+try {
+  webpush.setVapidDetails(
+    'mailto:founder@visualsky.pro',
+    vapidKeys.publicKey,
+    vapidKeys.privateKey
+  );
+} catch (err) {
+  console.warn('[WebPush] VAPID init warning:', err);
+}
+
+interface StoredPushSubscriptionRecord {
+  endpoint: string;
+  subscription: webpush.PushSubscription;
+  userEmail: string;
+  userId?: string;
+  userAgent?: string;
+  updatedAt: string;
+}
+
+const loadPushSubscriptions = (): StoredPushSubscriptionRecord[] => {
+  try {
+    if (fs.existsSync(PUSH_SUBSCRIPTIONS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(PUSH_SUBSCRIPTIONS_FILE, 'utf-8'));
+      if (Array.isArray(parsed)) {
+        return parsed.filter(item => item && item.endpoint && item.subscription);
+      }
+    }
+  } catch {}
+  return [];
+};
+
+const savePushSubscriptions = (records: StoredPushSubscriptionRecord[]) => {
+  try {
+    fs.writeFileSync(PUSH_SUBSCRIPTIONS_FILE, JSON.stringify(records, null, 2), 'utf-8');
+  } catch {}
+};
+
+// Dispatch Encrypted High-Urgency Web Push Notification to User Devices (works even when all browser tabs are closed!)
+const dispatchWebPushNotification = async (
+  payload: {
+    title: string;
+    body: string;
+    tag?: string;
+    linkTab?: string;
+    leadEmail?: string;
+    threadId?: string;
+    url?: string;
+    type?: string;
+  },
+  targetUserEmail?: string
+) => {
+  const allSubs = loadPushSubscriptions();
+  if (allSubs.length === 0) return;
+
+  const cleanTarget = String(targetUserEmail || '').trim().toLowerCase();
+  let matchingSubs = cleanTarget
+    ? allSubs.filter(s => !s.userEmail || s.userEmail.toLowerCase() === cleanTarget)
+    : allSubs;
+  if (matchingSubs.length === 0) {
+    matchingSubs = allSubs;
+  }
+
+  const deadEndpoints = new Set<string>();
+  const jsonPayload = JSON.stringify({
+    ...payload,
+    timestamp: Date.now()
+  });
+
+  await Promise.all(
+    matchingSubs.map(async rec => {
+      try {
+        await webpush.sendNotification(rec.subscription, jsonPayload, {
+          TTL: 86400,
+          urgency: 'high'
+        });
+      } catch (err: any) {
+        if (err?.statusCode === 404 || err?.statusCode === 410) {
+          deadEndpoints.add(rec.endpoint);
+        }
+      }
+    })
+  );
+
+  if (deadEndpoints.size > 0) {
+    const remaining = allSubs.filter(s => !deadEndpoints.has(s.endpoint));
+    savePushSubscriptions(remaining);
+  }
+};
+
+// Persistent Tracker of Notified IMAP UIDs so Server Background Watcher only pushes brand-new incoming emails
+interface NotifiedImapUidEntry {
+  initialized: boolean;
+  uids: number[];
+  updatedAt: string;
+}
+
+const loadNotifiedImapUids = (): Record<string, NotifiedImapUidEntry> => {
+  try {
+    if (fs.existsSync(NOTIFIED_IMAP_UIDS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(NOTIFIED_IMAP_UIDS_FILE, 'utf-8'));
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch {}
+  return {};
+};
+
+const saveNotifiedImapUids = (mapObj: Record<string, NotifiedImapUidEntry>) => {
+  try {
+    fs.writeFileSync(NOTIFIED_IMAP_UIDS_FILE, JSON.stringify(mapObj, null, 2), 'utf-8');
+  } catch {}
+};
+
+const notifiedImapUidsMemory: Record<string, NotifiedImapUidEntry> = loadNotifiedImapUids();
+const lastImapSyncTimestampByUser = new Map<string, number>();
+
+// Web Push API Endpoints for 24/7 Background & Closed-Browser Notifications
+app.get('/api/push/vapid-public-key', (_req, res) => {
+  return res.json({
+    success: true,
+    publicKey: vapidKeys.publicKey
+  });
+});
+
+app.post('/api/push/subscribe', (req, res) => {
+  try {
+    const { subscription, userEmail, userId } = req.body || {};
+    if (!subscription || !subscription.endpoint) {
+      return res.status(400).json({ success: false, error: 'Invalid push subscription object' });
+    }
+    const cleanEmail = String(userEmail || '').trim().toLowerCase();
+    const existing = loadPushSubscriptions().filter(s => s.endpoint !== subscription.endpoint);
+    existing.push({
+      endpoint: subscription.endpoint,
+      subscription,
+      userEmail: cleanEmail,
+      userId: String(userId || '').trim(),
+      userAgent: String(req.headers['user-agent'] || ''),
+      updatedAt: new Date().toISOString()
+    });
+    savePushSubscriptions(existing.slice(-50));
+    return res.json({ success: true, count: existing.length });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to save subscription' });
+  }
+});
+
+app.post('/api/push/unsubscribe', (req, res) => {
+  try {
+    const { endpoint } = req.body || {};
+    if (endpoint) {
+      const remaining = loadPushSubscriptions().filter(s => s.endpoint !== endpoint);
+      savePushSubscriptions(remaining);
+    }
+    return res.json({ success: true });
+  } catch {
+    return res.json({ success: false });
+  }
+});
+
+app.post('/api/push/test', async (req, res) => {
+  try {
+    const { userEmail } = req.body || {};
+    await dispatchWebPushNotification(
+      {
+        title: '🔔 24/7 Background Notification Active!',
+        body: 'আপনি অন্য ট্যাবে থাকলে বা ব্রাউজার বন্ধ রাখলেও এখন নতুন মেইল ও রিপ্লাইয়ের নোটিফিকেশন সাথে সাথে পাবেন!',
+        tag: `vs-test-push-${Date.now()}`,
+        linkTab: 'inbox',
+        url: '/?tab=inbox',
+        type: 'reply'
+      },
+      userEmail
+    );
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Push test failed' });
+  }
+});
 
 const DEFAULT_PAYMENT_SETTINGS = {
   bkashPersonalNumber: '01577-225248',
@@ -5110,6 +5311,49 @@ app.get('/api/track/open/:pixelId', (req, res) => {
         const cleaned = getCleanAuthoritativeTrackingEvents(events);
         const trimmed = cleaned.length > 2000 ? cleaned.slice(-2000) : cleaned;
         fs.writeFileSync(TRACKING_EVENTS_FILE, JSON.stringify(trimmed, null, 2), 'utf-8');
+
+        // Immediately dispatch Background / Offline Web Push Notification for this Email Open
+        setImmediate(() => {
+          try {
+            let recipientName = 'A recipient';
+            let recipientEmail = '';
+            let mailSubject = 'your email';
+            let ownerEmail = '';
+
+            if (fs.existsSync(DATA_DIR)) {
+              const wfFiles = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('workspace_') && f.endsWith('.json'));
+              for (const wf of wfFiles) {
+                try {
+                  const parsedWf = JSON.parse(fs.readFileSync(path.join(DATA_DIR, wf), 'utf-8'));
+                  const sentList = Array.isArray(parsedWf?.sentEmails) ? parsedWf.sentEmails : [];
+                  const matchedSent = sentList.find(
+                    (s: any) => s && String(s.trackingPixelId || '').replace(/\.gif$/i, '').trim() === pixelId
+                  );
+                  if (matchedSent) {
+                    recipientName = matchedSent.recipientName || matchedSent.recipientEmail || recipientName;
+                    recipientEmail = matchedSent.recipientEmail || '';
+                    mailSubject = matchedSent.subject || mailSubject;
+                    ownerEmail = parsedWf.email || matchedSent.senderEmail || '';
+                    break;
+                  }
+                } catch {}
+              }
+            }
+
+            dispatchWebPushNotification(
+              {
+                title: `👁️ Mail Opened by ${recipientName}`,
+                body: `${recipientName} opened "${String(mailSubject).slice(0, 65)}"`,
+                tag: `open-${pixelId}-${Math.floor(nowMs / 60000)}`,
+                linkTab: 'sent',
+                leadEmail: recipientEmail,
+                url: '/?tab=sent',
+                type: 'open'
+              },
+              ownerEmail
+            ).catch(() => {});
+          } catch {}
+        });
       }
     }
   } catch (err) {
@@ -6685,6 +6929,7 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
     const cleanHost = String(rawHost).trim().toLowerCase();
     const cleanUser = String(rawUsername).trim();
     const userLower = cleanUser.toLowerCase();
+    lastImapSyncTimestampByUser.set(userLower, Date.now());
     const userDomain = userLower.includes('@') ? userLower.split('@')[1] : '';
     const poolKey = `${cleanHost}::${userLower}`;
 
@@ -7128,6 +7373,70 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
               });
             }
           }
+
+          // Check for brand-new UIDs to dispatch real-time Web Push Notifications (for background tabs & closed browsers)
+          try {
+            const existingUidRecord = notifiedImapUidsMemory[userLower];
+            if (!existingUidRecord || !existingUidRecord.initialized) {
+              notifiedImapUidsMemory[userLower] = {
+                initialized: true,
+                uids: sortedUids.slice(-500),
+                updatedAt: new Date().toISOString()
+              };
+              saveNotifiedImapUids(notifiedImapUidsMemory);
+            } else {
+              const seenSet = new Set<number>(existingUidRecord.uids || []);
+              const brandNewUids = sortedUids.filter(u => !seenSet.has(u));
+              if (brandNewUids.length > 0) {
+                existingUidRecord.uids = Array.from(new Set([...existingUidRecord.uids, ...brandNewUids])).slice(-500);
+                existingUidRecord.updatedAt = new Date().toISOString();
+                saveNotifiedImapUids(notifiedImapUidsMemory);
+
+                for (const newUid of brandNewUids.slice(-3)) {
+                  const newMsg = incomingMessages.find(m => m.uid === newUid);
+                  if (!newMsg) continue;
+                  const senderAddr = String(newMsg.from || '').trim().toLowerCase();
+                  if (!senderAddr || !senderAddr.includes('@') || senderAddr === userLower) continue;
+                  if (senderAddr.startsWith('no-reply@') || senderAddr.startsWith('noreply@')) continue;
+
+                  const subStr = String(newMsg.subject || 'No Subject').trim();
+                  const subLower = subStr.toLowerCase();
+                  if (
+                    subLower.includes('verification code') ||
+                    subLower.includes('password reset') ||
+                    subLower.includes('verify your email')
+                  ) {
+                    continue;
+                  }
+
+                  const cleanUidPart = String(newMsg.uid || newMsg.messageId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+                  const msgTag = `imap-msg-${userLower}-${cleanUidPart}`;
+                  const isBounce =
+                    senderAddr.startsWith('mailer-daemon@') ||
+                    senderAddr.startsWith('postmaster@') ||
+                    /undeliverable|delivery status notification|mail delivery failed|delivery failure|blocked|rejected/i.test(subStr);
+
+                  const senderDisplay = newMsg.fromName || senderAddr.split('@')[0];
+                  const bodyPreview = String(newMsg.text || newMsg.fullText || '📩 New message received').slice(0, 105);
+
+                  dispatchWebPushNotification(
+                    {
+                      title: isBounce
+                        ? `🚫 Mail Blocked / Bounced`
+                        : `📩 New Mail from ${senderDisplay}`,
+                      body: `${subStr} — ${bodyPreview}`,
+                      tag: msgTag,
+                      linkTab: isBounce ? 'sent' : 'inbox',
+                      leadEmail: senderAddr,
+                      url: isBounce ? '/?tab=sent' : '/?tab=inbox',
+                      type: isBounce ? 'bounce' : 'reply'
+                    },
+                    req.body?.ownerEmail || ''
+                  ).catch(() => {});
+                }
+              }
+            }
+          } catch {}
         }
       } finally {
         try {
@@ -7604,6 +7913,19 @@ async function startServer() {
     return res.status(200).end('export {};\n');
   });
 
+  app.get('/sw.js', (_req, res) => {
+    const swPath = fs.existsSync(path.join(prebuiltCandidate, 'sw.js'))
+      ? path.join(prebuiltCandidate, 'sw.js')
+      : path.join(publicCandidate, 'sw.js');
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Service-Worker-Allowed', '/');
+    if (fs.existsSync(swPath)) {
+      return res.status(200).send(fs.readFileSync(swPath, 'utf8'));
+    }
+    return res.status(404).end();
+  });
+
   app.use('/prebuilt', express.static(prebuiltCandidate, { etag: true, maxAge: 0 }));
   if (fs.existsSync(publicCandidate)) {
     app.use(express.static(publicCandidate, { index: false, etag: true, maxAge: '1d' }));
@@ -7676,6 +7998,81 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`VisualSky AI Cold Outreach Platform running at http://0.0.0.0:${PORT}`);
+
+    // 24/7 Server-Side Background IMAP Push Watcher Daemon
+    // Checks connected IMAP mailboxes even when all user browser tabs are completely closed,
+    // firing RFC 8030 Web Push notifications the moment a new email or reply arrives!
+    let isBgImapRunning = false;
+    const runBackgroundImapPushWatcher = async () => {
+      if (isBgImapRunning) return;
+      isBgImapRunning = true;
+      try {
+        const accountsMap = new Map<string, { host: string; port: number; username: string; password: string; ownerEmail: string }>();
+
+        if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+          const uLower = String(process.env.SMTP_USER).trim().toLowerCase();
+          accountsMap.set(uLower, {
+            host: String(process.env.SMTP_HOST).trim(),
+            port: 993,
+            username: String(process.env.SMTP_USER).trim(),
+            password: String(process.env.SMTP_PASS),
+            ownerEmail: uLower
+          });
+        }
+
+        if (fs.existsSync(DATA_DIR)) {
+          const wfFiles = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('workspace_') && f.endsWith('.json'));
+          for (const wf of wfFiles) {
+            try {
+              const parsedWf = JSON.parse(fs.readFileSync(path.join(DATA_DIR, wf), 'utf-8'));
+              const wfOwner = String(parsedWf?.email || '').trim().toLowerCase();
+              for (const s of parsedWf?.smtpAccounts || []) {
+                if (s && !s.isTrash && s.host && s.username && s.password) {
+                  const uLower = String(s.username).trim().toLowerCase();
+                  if (!accountsMap.has(uLower)) {
+                    accountsMap.set(uLower, {
+                      host: String(s.imapHost || s.host).trim(),
+                      port: Number(s.imapPort) || 993,
+                      username: String(s.username).trim(),
+                      password: String(s.password),
+                      ownerEmail: wfOwner
+                    });
+                  }
+                }
+              }
+            } catch {}
+          }
+        }
+
+        for (const [uLower, acc] of accountsMap.entries()) {
+          const lastSyncMs = lastImapSyncTimestampByUser.get(uLower) || 0;
+          // Only poll from background daemon if no active client tab has synced this mailbox in the last 10 seconds
+          if (Date.now() - lastSyncMs < 10000) continue;
+          try {
+            await fetch(`http://127.0.0.1:${PORT}/api/smtp/imap-sync`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                host: acc.host,
+                port: acc.port,
+                username: acc.username,
+                password: acc.password,
+                ownerEmail: acc.ownerEmail,
+                sinceHours: 72
+              })
+            });
+          } catch {}
+        }
+      } catch {} finally {
+        isBgImapRunning = false;
+      }
+    };
+
+    const bgWatcherInterval = setInterval(runBackgroundImapPushWatcher, 12000);
+    if (typeof (bgWatcherInterval as any).unref === 'function') {
+      (bgWatcherInterval as any).unref();
+    }
+    setTimeout(runBackgroundImapPushWatcher, 5000);
   });
 }
 

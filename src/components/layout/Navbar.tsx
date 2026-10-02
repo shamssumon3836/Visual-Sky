@@ -607,17 +607,25 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
                     type="button"
                     onClick={async () => {
                       const ok = await requestDesktopNotificationPermission();
-                      setBrowserPushGranted(ok || (typeof Notification !== 'undefined' && Notification.permission === 'granted'));
+                      const granted = ok || (typeof Notification !== 'undefined' && Notification.permission === 'granted');
+                      setBrowserPushGranted(granted);
+                      try {
+                        await fetch('/api/push/test', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ userEmail: currentUser?.email || '' })
+                        });
+                      } catch {}
                     }}
                     className={`px-2.5 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 transition cursor-pointer border ${
                       browserPushGranted
                         ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                         : 'bg-[#0866FF]/20 hover:bg-[#0866FF]/35 text-blue-300 border-blue-500/40'
                     }`}
-                    title="Enable Gmail-style Phone & Desktop Screen Push Notifications"
+                    title="Enable 24/7 Background & Closed-Browser Push Notifications (Wi-Fi / Mobile Data)"
                   >
                     <Bell className="w-3 h-3" />
-                    <span>{browserPushGranted ? 'Push Live' : 'Enable Push'}</span>
+                    <span>{browserPushGranted ? '24/7 Push Live' : 'Enable 24/7 Push'}</span>
                   </button>
                   <button
                     onClick={() => setSoundEnabled(!soundEnabled)}

@@ -43,6 +43,7 @@ var import_mailparser = require("mailparser");
 var import_crypto = __toESM(require("crypto"), 1);
 var import_dns = __toESM(require("dns"), 1);
 var import_zlib = __toESM(require("zlib"), 1);
+var import_web_push = __toESM(require("web-push"), 1);
 import_dotenv.default.config();
 process.env.GOMAXPROCS = "1";
 process.env.UV_THREADPOOL_SIZE = "1";
@@ -102,7 +103,164 @@ var PAYMENT_SETTINGS_FILE = import_path.default.join(DATA_DIR, "payment_settings
 var SUBSCRIPTIONS_FILE = import_path.default.join(DATA_DIR, "subscriptions_registry.json");
 var TRACKING_EVENTS_FILE = import_path.default.join(DATA_DIR, "tracking_events.json");
 var DRIVE_STORAGE_SETTINGS_FILE = import_path.default.join(DATA_DIR, "drive_storage_settings.json");
+var VAPID_KEYS_FILE = import_path.default.join(DATA_DIR, "vapid_keys.json");
+var PUSH_SUBSCRIPTIONS_FILE = import_path.default.join(DATA_DIR, "push_subscriptions.json");
+var NOTIFIED_IMAP_UIDS_FILE = import_path.default.join(DATA_DIR, "notified_imap_uids.json");
 var TRANSPARENT_GIF_BUFFER = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+var initVapidKeys = () => {
+  try {
+    if (import_fs.default.existsSync(VAPID_KEYS_FILE)) {
+      const saved = JSON.parse(import_fs.default.readFileSync(VAPID_KEYS_FILE, "utf-8"));
+      if (saved && saved.publicKey && saved.privateKey) {
+        return saved;
+      }
+    }
+  } catch {
+  }
+  const generated = import_web_push.default.generateVAPIDKeys();
+  try {
+    import_fs.default.writeFileSync(VAPID_KEYS_FILE, JSON.stringify(generated, null, 2), "utf-8");
+  } catch {
+  }
+  return generated;
+};
+var vapidKeys = initVapidKeys();
+try {
+  import_web_push.default.setVapidDetails(
+    "mailto:founder@visualsky.pro",
+    vapidKeys.publicKey,
+    vapidKeys.privateKey
+  );
+} catch (err) {
+  console.warn("[WebPush] VAPID init warning:", err);
+}
+var loadPushSubscriptions = () => {
+  try {
+    if (import_fs.default.existsSync(PUSH_SUBSCRIPTIONS_FILE)) {
+      const parsed = JSON.parse(import_fs.default.readFileSync(PUSH_SUBSCRIPTIONS_FILE, "utf-8"));
+      if (Array.isArray(parsed)) {
+        return parsed.filter((item) => item && item.endpoint && item.subscription);
+      }
+    }
+  } catch {
+  }
+  return [];
+};
+var savePushSubscriptions = (records) => {
+  try {
+    import_fs.default.writeFileSync(PUSH_SUBSCRIPTIONS_FILE, JSON.stringify(records, null, 2), "utf-8");
+  } catch {
+  }
+};
+var dispatchWebPushNotification = async (payload, targetUserEmail) => {
+  const allSubs = loadPushSubscriptions();
+  if (allSubs.length === 0) return;
+  const cleanTarget = String(targetUserEmail || "").trim().toLowerCase();
+  let matchingSubs = cleanTarget ? allSubs.filter((s) => !s.userEmail || s.userEmail.toLowerCase() === cleanTarget) : allSubs;
+  if (matchingSubs.length === 0) {
+    matchingSubs = allSubs;
+  }
+  const deadEndpoints = /* @__PURE__ */ new Set();
+  const jsonPayload = JSON.stringify({
+    ...payload,
+    timestamp: Date.now()
+  });
+  await Promise.all(
+    matchingSubs.map(async (rec) => {
+      try {
+        await import_web_push.default.sendNotification(rec.subscription, jsonPayload, {
+          TTL: 86400,
+          urgency: "high"
+        });
+      } catch (err) {
+        if (err?.statusCode === 404 || err?.statusCode === 410) {
+          deadEndpoints.add(rec.endpoint);
+        }
+      }
+    })
+  );
+  if (deadEndpoints.size > 0) {
+    const remaining = allSubs.filter((s) => !deadEndpoints.has(s.endpoint));
+    savePushSubscriptions(remaining);
+  }
+};
+var loadNotifiedImapUids = () => {
+  try {
+    if (import_fs.default.existsSync(NOTIFIED_IMAP_UIDS_FILE)) {
+      const parsed = JSON.parse(import_fs.default.readFileSync(NOTIFIED_IMAP_UIDS_FILE, "utf-8"));
+      if (parsed && typeof parsed === "object") return parsed;
+    }
+  } catch {
+  }
+  return {};
+};
+var saveNotifiedImapUids = (mapObj) => {
+  try {
+    import_fs.default.writeFileSync(NOTIFIED_IMAP_UIDS_FILE, JSON.stringify(mapObj, null, 2), "utf-8");
+  } catch {
+  }
+};
+var notifiedImapUidsMemory = loadNotifiedImapUids();
+var lastImapSyncTimestampByUser = /* @__PURE__ */ new Map();
+app.get("/api/push/vapid-public-key", (_req, res) => {
+  return res.json({
+    success: true,
+    publicKey: vapidKeys.publicKey
+  });
+});
+app.post("/api/push/subscribe", (req, res) => {
+  try {
+    const { subscription, userEmail, userId } = req.body || {};
+    if (!subscription || !subscription.endpoint) {
+      return res.status(400).json({ success: false, error: "Invalid push subscription object" });
+    }
+    const cleanEmail = String(userEmail || "").trim().toLowerCase();
+    const existing = loadPushSubscriptions().filter((s) => s.endpoint !== subscription.endpoint);
+    existing.push({
+      endpoint: subscription.endpoint,
+      subscription,
+      userEmail: cleanEmail,
+      userId: String(userId || "").trim(),
+      userAgent: String(req.headers["user-agent"] || ""),
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    savePushSubscriptions(existing.slice(-50));
+    return res.json({ success: true, count: existing.length });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Failed to save subscription" });
+  }
+});
+app.post("/api/push/unsubscribe", (req, res) => {
+  try {
+    const { endpoint } = req.body || {};
+    if (endpoint) {
+      const remaining = loadPushSubscriptions().filter((s) => s.endpoint !== endpoint);
+      savePushSubscriptions(remaining);
+    }
+    return res.json({ success: true });
+  } catch {
+    return res.json({ success: false });
+  }
+});
+app.post("/api/push/test", async (req, res) => {
+  try {
+    const { userEmail } = req.body || {};
+    await dispatchWebPushNotification(
+      {
+        title: "\u{1F514} 24/7 Background Notification Active!",
+        body: "\u0986\u09AA\u09A8\u09BF \u0985\u09A8\u09CD\u09AF \u099F\u09CD\u09AF\u09BE\u09AC\u09C7 \u09A5\u09BE\u0995\u09B2\u09C7 \u09AC\u09BE \u09AC\u09CD\u09B0\u09BE\u0989\u099C\u09BE\u09B0 \u09AC\u09A8\u09CD\u09A7 \u09B0\u09BE\u0996\u09B2\u09C7\u0993 \u098F\u0996\u09A8 \u09A8\u09A4\u09C1\u09A8 \u09AE\u09C7\u0987\u09B2 \u0993 \u09B0\u09BF\u09AA\u09CD\u09B2\u09BE\u0987\u09DF\u09C7\u09B0 \u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u09B8\u09BE\u09A5\u09C7 \u09B8\u09BE\u09A5\u09C7 \u09AA\u09BE\u09AC\u09C7\u09A8!",
+        tag: `vs-test-push-${Date.now()}`,
+        linkTab: "inbox",
+        url: "/?tab=inbox",
+        type: "reply"
+      },
+      userEmail
+    );
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Push test failed" });
+  }
+});
 var DEFAULT_PAYMENT_SETTINGS = {
   bkashPersonalNumber: "01577-225248",
   bkashCleanNumber: "01577225248",
@@ -4106,6 +4264,48 @@ app.get("/api/track/open/:pixelId", (req, res) => {
         const cleaned = getCleanAuthoritativeTrackingEvents(events);
         const trimmed = cleaned.length > 2e3 ? cleaned.slice(-2e3) : cleaned;
         import_fs.default.writeFileSync(TRACKING_EVENTS_FILE, JSON.stringify(trimmed, null, 2), "utf-8");
+        setImmediate(() => {
+          try {
+            let recipientName = "A recipient";
+            let recipientEmail = "";
+            let mailSubject = "your email";
+            let ownerEmail = "";
+            if (import_fs.default.existsSync(DATA_DIR)) {
+              const wfFiles = import_fs.default.readdirSync(DATA_DIR).filter((f) => f.startsWith("workspace_") && f.endsWith(".json"));
+              for (const wf of wfFiles) {
+                try {
+                  const parsedWf = JSON.parse(import_fs.default.readFileSync(import_path.default.join(DATA_DIR, wf), "utf-8"));
+                  const sentList = Array.isArray(parsedWf?.sentEmails) ? parsedWf.sentEmails : [];
+                  const matchedSent = sentList.find(
+                    (s) => s && String(s.trackingPixelId || "").replace(/\.gif$/i, "").trim() === pixelId
+                  );
+                  if (matchedSent) {
+                    recipientName = matchedSent.recipientName || matchedSent.recipientEmail || recipientName;
+                    recipientEmail = matchedSent.recipientEmail || "";
+                    mailSubject = matchedSent.subject || mailSubject;
+                    ownerEmail = parsedWf.email || matchedSent.senderEmail || "";
+                    break;
+                  }
+                } catch {
+                }
+              }
+            }
+            dispatchWebPushNotification(
+              {
+                title: `\u{1F441}\uFE0F Mail Opened by ${recipientName}`,
+                body: `${recipientName} opened "${String(mailSubject).slice(0, 65)}"`,
+                tag: `open-${pixelId}-${Math.floor(nowMs / 6e4)}`,
+                linkTab: "sent",
+                leadEmail: recipientEmail,
+                url: "/?tab=sent",
+                type: "open"
+              },
+              ownerEmail
+            ).catch(() => {
+            });
+          } catch {
+          }
+        });
       }
     }
   } catch (err) {
@@ -5361,6 +5561,7 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
     const cleanHost = String(rawHost).trim().toLowerCase();
     const cleanUser = String(rawUsername).trim();
     const userLower = cleanUser.toLowerCase();
+    lastImapSyncTimestampByUser.set(userLower, Date.now());
     const userDomain = userLower.includes("@") ? userLower.split("@")[1] : "";
     const poolKey = `${cleanHost}::${userLower}`;
     const candidateHosts = [];
@@ -5717,6 +5918,56 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
                 html: ""
               });
             }
+          }
+          try {
+            const existingUidRecord = notifiedImapUidsMemory[userLower];
+            if (!existingUidRecord || !existingUidRecord.initialized) {
+              notifiedImapUidsMemory[userLower] = {
+                initialized: true,
+                uids: sortedUids.slice(-500),
+                updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+              };
+              saveNotifiedImapUids(notifiedImapUidsMemory);
+            } else {
+              const seenSet = new Set(existingUidRecord.uids || []);
+              const brandNewUids = sortedUids.filter((u) => !seenSet.has(u));
+              if (brandNewUids.length > 0) {
+                existingUidRecord.uids = Array.from(/* @__PURE__ */ new Set([...existingUidRecord.uids, ...brandNewUids])).slice(-500);
+                existingUidRecord.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+                saveNotifiedImapUids(notifiedImapUidsMemory);
+                for (const newUid of brandNewUids.slice(-3)) {
+                  const newMsg = incomingMessages.find((m) => m.uid === newUid);
+                  if (!newMsg) continue;
+                  const senderAddr = String(newMsg.from || "").trim().toLowerCase();
+                  if (!senderAddr || !senderAddr.includes("@") || senderAddr === userLower) continue;
+                  if (senderAddr.startsWith("no-reply@") || senderAddr.startsWith("noreply@")) continue;
+                  const subStr = String(newMsg.subject || "No Subject").trim();
+                  const subLower = subStr.toLowerCase();
+                  if (subLower.includes("verification code") || subLower.includes("password reset") || subLower.includes("verify your email")) {
+                    continue;
+                  }
+                  const cleanUidPart = String(newMsg.uid || newMsg.messageId || "").replace(/[^a-zA-Z0-9._-]/g, "_");
+                  const msgTag = `imap-msg-${userLower}-${cleanUidPart}`;
+                  const isBounce = senderAddr.startsWith("mailer-daemon@") || senderAddr.startsWith("postmaster@") || /undeliverable|delivery status notification|mail delivery failed|delivery failure|blocked|rejected/i.test(subStr);
+                  const senderDisplay = newMsg.fromName || senderAddr.split("@")[0];
+                  const bodyPreview = String(newMsg.text || newMsg.fullText || "\u{1F4E9} New message received").slice(0, 105);
+                  dispatchWebPushNotification(
+                    {
+                      title: isBounce ? `\u{1F6AB} Mail Blocked / Bounced` : `\u{1F4E9} New Mail from ${senderDisplay}`,
+                      body: `${subStr} \u2014 ${bodyPreview}`,
+                      tag: msgTag,
+                      linkTab: isBounce ? "sent" : "inbox",
+                      leadEmail: senderAddr,
+                      url: isBounce ? "/?tab=sent" : "/?tab=inbox",
+                      type: isBounce ? "bounce" : "reply"
+                    },
+                    req.body?.ownerEmail || ""
+                  ).catch(() => {
+                  });
+                }
+              }
+            }
+          } catch {
           }
         }
       } finally {
@@ -6133,6 +6384,16 @@ async function startServer() {
     res.setHeader("Cache-Control", "no-cache");
     return res.status(200).end("export {};\n");
   });
+  app.get("/sw.js", (_req, res) => {
+    const swPath = import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "sw.js")) ? import_path.default.join(prebuiltCandidate, "sw.js") : import_path.default.join(publicCandidate, "sw.js");
+    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Service-Worker-Allowed", "/");
+    if (import_fs.default.existsSync(swPath)) {
+      return res.status(200).send(import_fs.default.readFileSync(swPath, "utf8"));
+    }
+    return res.status(404).end();
+  });
   app.use("/prebuilt", import_express.default.static(prebuiltCandidate, { etag: true, maxAge: 0 }));
   if (import_fs.default.existsSync(publicCandidate)) {
     app.use(import_express.default.static(publicCandidate, { index: false, etag: true, maxAge: "1d" }));
@@ -6193,6 +6454,75 @@ async function startServer() {
   });
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`VisualSky AI Cold Outreach Platform running at http://0.0.0.0:${PORT}`);
+    let isBgImapRunning = false;
+    const runBackgroundImapPushWatcher = async () => {
+      if (isBgImapRunning) return;
+      isBgImapRunning = true;
+      try {
+        const accountsMap = /* @__PURE__ */ new Map();
+        if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+          const uLower = String(process.env.SMTP_USER).trim().toLowerCase();
+          accountsMap.set(uLower, {
+            host: String(process.env.SMTP_HOST).trim(),
+            port: 993,
+            username: String(process.env.SMTP_USER).trim(),
+            password: String(process.env.SMTP_PASS),
+            ownerEmail: uLower
+          });
+        }
+        if (import_fs.default.existsSync(DATA_DIR)) {
+          const wfFiles = import_fs.default.readdirSync(DATA_DIR).filter((f) => f.startsWith("workspace_") && f.endsWith(".json"));
+          for (const wf of wfFiles) {
+            try {
+              const parsedWf = JSON.parse(import_fs.default.readFileSync(import_path.default.join(DATA_DIR, wf), "utf-8"));
+              const wfOwner = String(parsedWf?.email || "").trim().toLowerCase();
+              for (const s of parsedWf?.smtpAccounts || []) {
+                if (s && !s.isTrash && s.host && s.username && s.password) {
+                  const uLower = String(s.username).trim().toLowerCase();
+                  if (!accountsMap.has(uLower)) {
+                    accountsMap.set(uLower, {
+                      host: String(s.imapHost || s.host).trim(),
+                      port: Number(s.imapPort) || 993,
+                      username: String(s.username).trim(),
+                      password: String(s.password),
+                      ownerEmail: wfOwner
+                    });
+                  }
+                }
+              }
+            } catch {
+            }
+          }
+        }
+        for (const [uLower, acc] of accountsMap.entries()) {
+          const lastSyncMs = lastImapSyncTimestampByUser.get(uLower) || 0;
+          if (Date.now() - lastSyncMs < 1e4) continue;
+          try {
+            await fetch(`http://127.0.0.1:${PORT}/api/smtp/imap-sync`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                host: acc.host,
+                port: acc.port,
+                username: acc.username,
+                password: acc.password,
+                ownerEmail: acc.ownerEmail,
+                sinceHours: 72
+              })
+            });
+          } catch {
+          }
+        }
+      } catch {
+      } finally {
+        isBgImapRunning = false;
+      }
+    };
+    const bgWatcherInterval = setInterval(runBackgroundImapPushWatcher, 12e3);
+    if (typeof bgWatcherInterval.unref === "function") {
+      bgWatcherInterval.unref();
+    }
+    setTimeout(runBackgroundImapPushWatcher, 5e3);
   });
 }
 if (!process.env.VERCEL) {
