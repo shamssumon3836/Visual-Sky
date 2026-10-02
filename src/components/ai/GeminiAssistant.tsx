@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { safeParseResponse } from '../../lib/safeFetch';
+import {
+  isUntouchedDefaultAiSession,
+  persistAiCopilotSessionsNow,
+  syncAiCopilotSessions
+} from '../../lib/workspaceSync';
 import { 
   Bot, 
   Send, 
@@ -198,15 +203,80 @@ export const GeminiAssistant: React.FC = () => {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-
-  // Guarantee activeSession always resolves to a valid session and sync activeSessionId if stale
-  const activeSession = sessions.find(s => s.id === activeSessionId) || sessions[0];
+  const lastLocalSendMsRef = useRef<number>(0);
+  const sessionsRef = useRef<ChatSession[]>(sessions);
+  const activeIdRef = useRef<string>(activeSessionId);
 
   useEffect(() => {
-    if (sessions.length > 0 && !sessions.some(s => s.id === activeSessionId)) {
-      setActiveSessionId(sessions[0].id);
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useEffect(() => {
+    activeIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  // Prefer the active session, or the first real session with user messages if activeSessionId points to an untouched default placeholder
+  const activeSession =
+    sessions.find(s => s.id === activeSessionId) ||
+    sessions.find(s => !isUntouchedDefaultAiSession(s)) ||
+    sessions[0];
+
+  useEffect(() => {
+    if (sessions.length > 0) {
+      const currentMatch = sessions.find(s => s.id === activeSessionId);
+      const firstReal = sessions.find(s => !isUntouchedDefaultAiSession(s));
+      if (!currentMatch) {
+        setActiveSessionId((firstReal || sessions[0]).id);
+      } else if (currentMatch.id === 'session-default' && isUntouchedDefaultAiSession(currentMatch) && firstReal) {
+        setActiveSessionId(firstReal.id);
+      }
     }
   }, [sessions, activeSessionId]);
+
+  // Cross-browser & cross-device sync on mount, user change, focus, and interval while AI Outreach Copilot is open
+  useEffect(() => {
+    const cleanEmail = (currentUser?.email || '').trim().toLowerCase();
+    const cleanUserId = (currentUser?.id || currentUser?.supabaseId || '').trim();
+    if (!cleanEmail && !cleanUserId) return;
+
+    let cancelled = false;
+    const runCopilotSync = async () => {
+      if (cancelled || isLoading) return;
+      if (Date.now() - lastLocalSendMsRef.current < 2200) return;
+      try {
+        const res = await syncAiCopilotSessions({
+          email: cleanEmail,
+          userId: cleanUserId,
+          localSessions: sessionsRef.current,
+          activeSessionId: activeIdRef.current
+        });
+        if (cancelled || isLoading || Date.now() - lastLocalSendMsRef.current < 2200) return;
+        if (Array.isArray(res.sessions) && res.sessions.length > 0) {
+          const currentJson = JSON.stringify(sessionsRef.current);
+          const nextJson = JSON.stringify(res.sessions);
+          if (currentJson !== nextJson) {
+            setSessions(res.sessions);
+          }
+          if (res.activeSessionId && res.activeSessionId !== activeIdRef.current) {
+            const curActiveObj = res.sessions.find((s: any) => s.id === activeIdRef.current);
+            if (!curActiveObj || (curActiveObj.id === 'session-default' && isUntouchedDefaultAiSession(curActiveObj))) {
+              setActiveSessionId(res.activeSessionId);
+            }
+          }
+        }
+      } catch {}
+    };
+
+    runCopilotSync();
+    const timer = setInterval(runCopilotSync, 2200);
+    const onFocus = () => runCopilotSync();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [currentUser?.email, currentUser?.id, isLoading]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -287,6 +357,7 @@ export const GeminiAssistant: React.FC = () => {
   };
 
   const handleNewChat = () => {
+    lastLocalSendMsRef.current = Date.now();
     const newSession: ChatSession = {
       id: `session-${Date.now()}`,
       title: 'New Outreach Session',
@@ -301,7 +372,17 @@ export const GeminiAssistant: React.FC = () => {
         }
       ]
     };
-    setSessions(prev => [newSession, ...prev]);
+    setSessions(prev => {
+      const cleanedPrev = prev.filter(s => !(s.id === 'session-default' && isUntouchedDefaultAiSession(s)));
+      const next = [newSession, ...cleanedPrev];
+      persistAiCopilotSessionsNow({
+        email: currentUser?.email,
+        userId: currentUser?.id || currentUser?.supabaseId,
+        sessions: next,
+        activeSessionId: newSession.id
+      }).catch(() => {});
+      return next;
+    });
     setActiveSessionId(newSession.id);
     setInputPrompt('');
     if (textareaRef.current) {
@@ -357,8 +438,13 @@ export const GeminiAssistant: React.FC = () => {
     const query = rawQuery.trim();
     if (!query || isLoading) return;
 
+    lastLocalSendMsRef.current = Date.now();
     const targetSession = sessions.find(s => s.id === activeSessionId) || sessions[0];
-    const targetSessionId = targetSession?.id || `session-${Date.now()}`;
+    const isUntouchedDefault =
+      !targetSession ||
+      (targetSession.id === 'session-default' && isUntouchedDefaultAiSession(targetSession));
+    const targetSessionId = isUntouchedDefault ? `session-${Date.now()}` : targetSession.id;
+
     if (activeSessionId !== targetSessionId) {
       setActiveSessionId(targetSessionId);
     }
@@ -372,32 +458,57 @@ export const GeminiAssistant: React.FC = () => {
 
     const previousMessages = (targetSession?.messages || []).filter(m => m.id !== 'msg-init');
 
-    // Immediately append user message so UI updates right away
+    // Immediately append user message so UI updates right away and persist to cloud & server
     setSessions(prev => {
-      const exists = prev.some(s => s.id === targetSessionId);
-      if (!exists) {
-        return [
-          {
-            id: targetSessionId,
-            title: isFirstMsgTitle(query, 'New Outreach Session', true),
-            createdAt: 'Just now',
-            messages: [userMsg]
-          },
-          ...prev
-        ];
-      }
-      return prev.map(s => {
-        if (s.id === targetSessionId) {
-          const isFirstUserMsg = s.messages.filter(m => m.role === 'user').length === 0;
-          const newTitle = isFirstMsgTitle(query, s.title, isFirstUserMsg);
-          return {
-            ...s,
-            title: newTitle,
-            messages: [...s.messages, userMsg]
-          };
+      let nextList: ChatSession[];
+      if (isUntouchedDefault) {
+        const initMessages = targetSession?.messages?.length ? targetSession.messages : [defaultWelcomeMessage(currentUser?.name)];
+        const promotedSession: ChatSession = {
+          id: targetSessionId,
+          title: isFirstMsgTitle(query, 'New Outreach Session', true),
+          createdAt: 'Just now',
+          messages: [...initMessages, userMsg]
+        };
+        const rest = prev.filter(s => s.id !== 'session-default' && s.id !== targetSessionId);
+        nextList = [promotedSession, ...rest];
+      } else {
+        const exists = prev.some(s => s.id === targetSessionId);
+        if (!exists) {
+          nextList = [
+            {
+              id: targetSessionId,
+              title: isFirstMsgTitle(query, 'New Outreach Session', true),
+              createdAt: 'Just now',
+              messages: [userMsg]
+            },
+            ...prev.filter(s => !(s.id === 'session-default' && isUntouchedDefaultAiSession(s)))
+          ];
+        } else {
+          nextList = prev
+            .map(s => {
+              if (s.id === targetSessionId) {
+                const isFirstUserMsg = s.messages.filter(m => m.role === 'user').length === 0;
+                const newTitle = isFirstMsgTitle(query, s.title, isFirstUserMsg);
+                return {
+                  ...s,
+                  title: newTitle,
+                  messages: [...s.messages, userMsg]
+                };
+              }
+              return s;
+            })
+            .filter(s => !(s.id === 'session-default' && isUntouchedDefaultAiSession(s)));
         }
-        return s;
-      });
+      }
+
+      persistAiCopilotSessionsNow({
+        email: currentUser?.email,
+        userId: currentUser?.id || currentUser?.supabaseId,
+        sessions: nextList,
+        activeSessionId: targetSessionId
+      }).catch(() => {});
+
+      return nextList;
     });
 
     if (typeof textToSend !== 'string') {
@@ -472,8 +583,9 @@ Always give a direct, well-structured, accurate, and complete answer to the user
         tokensUsed: usedTokens
       };
 
-      setSessions(prev =>
-        prev.map(s => {
+      lastLocalSendMsRef.current = Date.now();
+      setSessions(prev => {
+        const nextList = prev.map(s => {
           if (s.id === targetSessionId) {
             return {
               ...s,
@@ -481,8 +593,15 @@ Always give a direct, well-structured, accurate, and complete answer to the user
             };
           }
           return s;
-        })
-      );
+        });
+        persistAiCopilotSessionsNow({
+          email: currentUser?.email,
+          userId: currentUser?.id || currentUser?.supabaseId,
+          sessions: nextList,
+          activeSessionId: targetSessionId
+        }).catch(() => {});
+        return nextList;
+      });
     } catch (err: any) {
       if (err?.name === 'AbortError') {
         return;
@@ -500,8 +619,9 @@ Always give a direct, well-structured, accurate, and complete answer to the user
         tokensUsed: fallbackTokens
       };
 
-      setSessions(prev =>
-        prev.map(s => {
+      lastLocalSendMsRef.current = Date.now();
+      setSessions(prev => {
+        const nextList = prev.map(s => {
           if (s.id === targetSessionId) {
             return {
               ...s,
@@ -509,8 +629,15 @@ Always give a direct, well-structured, accurate, and complete answer to the user
             };
           }
           return s;
-        })
-      );
+        });
+        persistAiCopilotSessionsNow({
+          email: currentUser?.email,
+          userId: currentUser?.id || currentUser?.supabaseId,
+          sessions: nextList,
+          activeSessionId: targetSessionId
+        }).catch(() => {});
+        return nextList;
+      });
     } finally {
       abortControllerRef.current = null;
       setIsLoading(false);

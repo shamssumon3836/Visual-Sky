@@ -119,7 +119,19 @@ var getUserDataFilePath = (email) => {
   const safeEmail = cleanEmail.replace(/[^a-z0-9_.-]/g, "_");
   return import_path.default.join(DATA_DIR, `user_${safeEmail}.json`);
 };
+var getAiCopilotFilePath = (identifier) => {
+  const clean = (identifier || "").trim().toLowerCase();
+  const safe = clean.replace(/[^a-z0-9_.-]/g, "_");
+  return import_path.default.join(DATA_DIR, `ai_copilot_${safe}.json`);
+};
 var USERS_LIST_FILE = import_path.default.join(DATA_DIR, "users_registry.json");
+try {
+  const seedUsersFile = import_path.default.join(process.cwd(), "data", "users_registry.json");
+  if (!import_fs.default.existsSync(USERS_LIST_FILE) && import_fs.default.existsSync(seedUsersFile)) {
+    import_fs.default.copyFileSync(seedUsersFile, USERS_LIST_FILE);
+  }
+} catch {
+}
 var PAYMENT_SETTINGS_FILE = import_path.default.join(DATA_DIR, "payment_settings.json");
 var SUBSCRIPTIONS_FILE = import_path.default.join(DATA_DIR, "subscriptions_registry.json");
 var TRACKING_EVENTS_FILE = import_path.default.join(DATA_DIR, "tracking_events.json");
@@ -2297,33 +2309,119 @@ function smartMergeWorkspaces(existing, incoming) {
     }
     return true;
   };
-  const rawThreads = Array.isArray(inc.threads) ? inc.threads : Array.isArray(e.threads) ? e.threads : [];
-  const cleanThreads = rawThreads.filter(
+  const isUntouchedDefaultSession = (s) => {
+    if (!s || typeof s !== "object") return true;
+    const msgs = Array.isArray(s.messages) ? s.messages : [];
+    if (msgs.length === 0) return true;
+    const hasUserMsg = msgs.some((m) => m && m.role === "user" && String(m.content || "").trim().length > 0);
+    if (hasUserMsg) return false;
+    if (String(s.id) === "session-default") return true;
+    if (msgs.length === 1 && String(msgs[0]?.id) === "msg-init") return true;
+    return false;
+  };
+  const mergeById = (incArr, existingArr) => {
+    const incList = Array.isArray(incArr) ? incArr : [];
+    const exList = Array.isArray(existingArr) ? existingArr : [];
+    if (incList.length === 0 && exList.length === 0) return [];
+    const map = /* @__PURE__ */ new Map();
+    for (const item of exList) {
+      if (!isNotDeleted(item)) continue;
+      map.set(String(item.id), item);
+    }
+    for (const item of incList) {
+      if (!isNotDeleted(item)) continue;
+      const key = String(item.id);
+      const ex = map.get(key);
+      if (ex && Array.isArray(ex.messages) && Array.isArray(item.messages)) {
+        const exIsUntouched = key === "session-default" && isUntouchedDefaultSession(ex);
+        const incIsUntouched = key === "session-default" && isUntouchedDefaultSession(item);
+        if (exIsUntouched && !incIsUntouched) {
+          map.set(key, item);
+          continue;
+        }
+        if (incIsUntouched && !exIsUntouched) {
+          map.set(key, ex);
+          continue;
+        }
+        const msgMap = /* @__PURE__ */ new Map();
+        for (const m of ex.messages) {
+          if (!m) continue;
+          if (m.id && (permanentlyDeletedIds.has(String(m.id)) || deletedThreadIds.has(String(m.id)))) continue;
+          const mKey = String(m.id || `${m.role || m.sender || ""}-${m.timestamp || ""}-${String(m.content || m.body || "").slice(0, 60)}`);
+          msgMap.set(mKey, m);
+        }
+        for (const m of item.messages) {
+          if (!m) continue;
+          if (m.id && (permanentlyDeletedIds.has(String(m.id)) || deletedThreadIds.has(String(m.id)))) continue;
+          const mKey = String(m.id || `${m.role || m.sender || ""}-${m.timestamp || ""}-${String(m.content || m.body || "").slice(0, 60)}`);
+          msgMap.set(mKey, m);
+        }
+        const defaultTitles = /* @__PURE__ */ new Set(["New Outreach Session", "High-Converting Cold Outreach"]);
+        const resolvedTitle = item.title && !defaultTitles.has(item.title) ? item.title : ex.title && !defaultTitles.has(ex.title) ? ex.title : item.title || ex.title;
+        map.set(key, {
+          ...ex,
+          ...item,
+          ...resolvedTitle !== void 0 ? { title: resolvedTitle } : {},
+          messages: Array.from(msgMap.values())
+        });
+      } else {
+        map.set(key, ex ? { ...ex, ...item } : item);
+      }
+    }
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const item of incList) {
+      if (!item || !item.id) continue;
+      const k = String(item.id);
+      if (map.has(k) && !seen.has(k)) {
+        seen.add(k);
+        out.push(map.get(k));
+      }
+    }
+    for (const item of exList) {
+      if (!item || !item.id) continue;
+      const k = String(item.id);
+      if (map.has(k) && !seen.has(k)) {
+        seen.add(k);
+        out.push(map.get(k));
+      }
+    }
+    const hasRealChat = out.some(
+      (s) => s && Array.isArray(s.messages) && s.messages.some((m) => m?.role === "user" || m?.role === "assistant") && !isUntouchedDefaultSession(s)
+    );
+    if (hasRealChat) {
+      return out.filter((s) => !(String(s?.id) === "session-default" && isUntouchedDefaultSession(s)));
+    }
+    return out;
+  };
+  const mergedThreads = mergeById(inc.threads, e.threads).filter(
     (t) => isNotDeleted(t) && !deletedThreadIds.has(`thread:${String(t.id).replace(/-split-\d+$/, "")}`)
   );
-  const pickCollection = (incArr, existingArr) => {
-    const chosen = Array.isArray(incArr) ? incArr : Array.isArray(existingArr) ? existingArr : [];
-    return chosen.filter(isNotDeleted);
-  };
   return {
     ...e,
     ...inc,
-    leads: pickCollection(inc.leads, e.leads),
-    leadTags: (Array.isArray(inc.leadTags) ? inc.leadTags : Array.isArray(e.leadTags) ? e.leadTags : []).filter(isNotDeleted),
-    campaigns: pickCollection(inc.campaigns, e.campaigns),
-    smtpAccounts: pickCollection(inc.smtpAccounts, e.smtpAccounts),
-    emailTemplates: pickCollection(inc.emailTemplates, e.emailTemplates),
-    templateCategories: (Array.isArray(inc.templateCategories) ? inc.templateCategories : Array.isArray(e.templateCategories) ? e.templateCategories : []).filter(isNotDeleted),
-    threads: cleanThreads,
+    leads: mergeById(inc.leads, e.leads),
+    leadTags: mergeById(inc.leadTags, e.leadTags),
+    campaigns: mergeById(inc.campaigns, e.campaigns),
+    smtpAccounts: mergeById(inc.smtpAccounts, e.smtpAccounts),
+    emailTemplates: mergeById(inc.emailTemplates, e.emailTemplates),
+    templateCategories: mergeById(inc.templateCategories, e.templateCategories),
+    threads: mergedThreads,
     deletedThreadIds: Array.from(deletedThreadIds).slice(-4e3),
     permanentlyDeletedIds: Array.from(permanentlyDeletedIds).slice(-5e3),
     userDeletedCampaigns: Boolean(inc.userDeletedCampaigns ?? e.userDeletedCampaigns),
-    sentEmails: pickCollection(inc.sentEmails, e.sentEmails),
-    minedLeads: (Array.isArray(inc.minedLeads) ? inc.minedLeads : Array.isArray(e.minedLeads) ? e.minedLeads : []).filter(isNotDeleted),
+    sentEmails: mergeById(inc.sentEmails, e.sentEmails),
+    minedLeads: mergeById(inc.minedLeads, e.minedLeads),
+    aiChatSessions: mergeById(inc.aiChatSessions, e.aiChatSessions),
+    aiActiveSessionId: inc.aiActiveSessionId || e.aiActiveSessionId,
     columnSettings: Array.isArray(inc.columnSettings) && inc.columnSettings.length > 0 ? inc.columnSettings : Array.isArray(e.columnSettings) && e.columnSettings.length > 0 ? e.columnSettings : [],
     notificationSettings: {
       ...e.notificationSettings || {},
       ...inc.notificationSettings || {}
+    },
+    driveStorageSettings: {
+      ...e.driveStorageSettings || {},
+      ...inc.driveStorageSettings || {}
     },
     userProfile: {
       ...e.userProfile || {},
@@ -2384,7 +2482,8 @@ function readUserWorkspace(primaryId, secondaryId) {
     for (const cand of uniqueCandidates) {
       const pathsToCheck = [
         getWorkspaceFilePath(cand),
-        getUserDataFilePath(cand)
+        getUserDataFilePath(cand),
+        getAiCopilotFilePath(cand)
       ];
       for (const p of pathsToCheck) {
         if (import_fs.default.existsSync(p)) {
@@ -2471,6 +2570,12 @@ function readUserWorkspace(primaryId, secondaryId) {
       }
       if (Array.isArray(mergedWorkspace.sentEmails)) {
         mergedWorkspace.sentEmails = mergedWorkspace.sentEmails.filter(keepAlive);
+      }
+      if (Array.isArray(mergedWorkspace.minedLeads)) {
+        mergedWorkspace.minedLeads = mergedWorkspace.minedLeads.filter(keepAlive);
+      }
+      if (Array.isArray(mergedWorkspace.aiChatSessions)) {
+        mergedWorkspace.aiChatSessions = mergedWorkspace.aiChatSessions.filter(keepAlive);
       }
     }
     return mergedWorkspace;
@@ -2661,8 +2766,21 @@ app.post("/api/user-data/:email/resource/:resource", (req, res) => {
       if (item.name && mergedPermDeleted.has(`camp-name:${String(item.name).trim().toLowerCase()}`)) return false;
       return true;
     };
-    workspace[resource] = items.filter(isAliveItem);
-    for (const col of ["leads", "campaigns", "smtpAccounts", "emailTemplates", "threads", "sentEmails", "leadTags", "templateCategories", "minedLeads"]) {
+    const mergedForResource = smartMergeWorkspaces(
+      {
+        ...workspace,
+        permanentlyDeletedIds: workspace.permanentlyDeletedIds,
+        deletedThreadIds: workspace.deletedThreadIds
+      },
+      {
+        [resource]: items.filter(isAliveItem),
+        permanentlyDeletedIds: workspace.permanentlyDeletedIds,
+        deletedThreadIds: workspace.deletedThreadIds,
+        updatedAt: updatedAt || (/* @__PURE__ */ new Date()).toISOString()
+      }
+    );
+    workspace[resource] = Array.isArray(mergedForResource[resource]) ? mergedForResource[resource].filter(isAliveItem) : items.filter(isAliveItem);
+    for (const col of ["leads", "campaigns", "smtpAccounts", "emailTemplates", "threads", "sentEmails", "leadTags", "templateCategories", "minedLeads", "aiChatSessions"]) {
       if (Array.isArray(workspace[col])) {
         workspace[col] = workspace[col].filter(isAliveItem);
       }
@@ -2684,6 +2802,91 @@ app.post("/api/user-data/:email/resource/:resource", (req, res) => {
   } catch (err) {
     console.error("Resource direct persistence error:", err);
     return res.status(500).json({ success: false, error: "Failed to persist resource to database" });
+  }
+});
+app.get("/api/ai-copilot/sessions", (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    const email = String(req.query.email || "").trim().toLowerCase();
+    const userId = String(req.query.userId || "").trim();
+    if (!email && !userId) {
+      return res.status(400).json({ success: false, error: "email or userId is required" });
+    }
+    const workspace = readUserWorkspace(email, userId) || {};
+    const aiChatSessions = Array.isArray(workspace.aiChatSessions) ? workspace.aiChatSessions : [];
+    const aiActiveSessionId = workspace.aiActiveSessionId || aiChatSessions[0]?.id || "session-default";
+    const permanentlyDeletedIds = Array.isArray(workspace.permanentlyDeletedIds) ? workspace.permanentlyDeletedIds : [];
+    return res.json({
+      success: true,
+      aiChatSessions,
+      aiActiveSessionId,
+      permanentlyDeletedIds,
+      updatedAt: workspace.updatedAt || (/* @__PURE__ */ new Date()).toISOString()
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Failed to read AI Copilot sessions" });
+  }
+});
+app.post("/api/ai-copilot/sessions", (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  try {
+    const {
+      email: rawEmail,
+      userId: rawUserId,
+      aiChatSessions,
+      aiActiveSessionId,
+      permanentlyDeletedIds,
+      updatedAt
+    } = req.body || {};
+    const email = String(rawEmail || "").trim().toLowerCase();
+    const userId = String(rawUserId || "").trim();
+    if (!email && !userId) {
+      return res.status(400).json({ success: false, error: "email or userId is required" });
+    }
+    if (!Array.isArray(aiChatSessions)) {
+      return res.status(400).json({ success: false, error: "aiChatSessions array is required" });
+    }
+    const existing = readUserWorkspace(email, userId) || {};
+    const merged = smartMergeWorkspaces(existing, {
+      email: email || existing.email,
+      userId: userId || existing.userId,
+      aiChatSessions,
+      aiActiveSessionId: aiActiveSessionId || existing.aiActiveSessionId,
+      permanentlyDeletedIds: Array.isArray(permanentlyDeletedIds) ? permanentlyDeletedIds : existing.permanentlyDeletedIds,
+      updatedAt: updatedAt || (/* @__PURE__ */ new Date()).toISOString()
+    });
+    const candidates = resolveUserAliasCandidates(email, userId, merged.email, merged.userId);
+    const aiPayloadStr = JSON.stringify(
+      {
+        email: merged.email,
+        userId: merged.userId,
+        aiChatSessions: merged.aiChatSessions || [],
+        aiActiveSessionId: merged.aiActiveSessionId || "",
+        permanentlyDeletedIds: merged.permanentlyDeletedIds || [],
+        updatedAt: merged.updatedAt
+      },
+      null,
+      2
+    );
+    for (const c of candidates) {
+      try {
+        const p = getAiCopilotFilePath(c);
+        import_fs.default.writeFileSync(p, aiPayloadStr, "utf-8");
+      } catch {
+      }
+    }
+    writeUserWorkspace(email || userId, merged, userId || email);
+    return res.json({
+      success: true,
+      aiChatSessions: merged.aiChatSessions || [],
+      aiActiveSessionId: merged.aiActiveSessionId || "",
+      permanentlyDeletedIds: merged.permanentlyDeletedIds || [],
+      updatedAt: merged.updatedAt
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Failed to save AI Copilot sessions" });
   }
 });
 app.post("/api/user-data/:email/leads", (req, res) => {
@@ -2870,6 +3073,10 @@ function ensureFreshPrebuiltBundle() {
       import_path.default.join(process.cwd(), "src", "context", "AppContext.tsx"),
       import_path.default.join(process.cwd(), "src", "lib", "workspaceSync.ts"),
       import_path.default.join(process.cwd(), "src", "lib", "firebase.ts"),
+      import_path.default.join(process.cwd(), "src", "components", "ai", "GeminiAssistant.tsx"),
+      import_path.default.join(process.cwd(), "src", "components", "inbox", "SmartInbox.tsx"),
+      import_path.default.join(process.cwd(), "src", "components", "drive", "GoogleDriveStorageView.tsx"),
+      import_path.default.join(process.cwd(), "src", "utils", "attachmentFastCache.ts"),
       import_path.default.join(process.cwd(), "src", "components", "campaigns", "CampaignManager.tsx"),
       import_path.default.join(process.cwd(), "src", "components", "dashboard", "MainDashboard.tsx"),
       import_path.default.join(process.cwd(), "src", "components", "trash", "TrashManager.tsx")
@@ -2951,16 +3158,17 @@ function getGeminiClient() {
   });
 }
 var FALLBACK_MODELS = [
-  "gemini-3.8-flash",
   "gemini-flash-latest",
   "gemini-3.1-flash-lite",
+  "gemini-3.8-flash",
   "gemini-3.1-flash-lite-preview",
   "gemini-3-flash-preview"
 ];
+var lastSuccessfulGeminiModel = "gemini-flash-latest";
 async function callGemini(contents, config, requestedModel) {
   const ai = getGeminiClient();
   if (ai) {
-    let targetModel = "gemini-3.8-flash";
+    let targetModel = lastSuccessfulGeminiModel || "gemini-flash-latest";
     if (requestedModel) {
       const reqLower = requestedModel.toLowerCase();
       if (reqLower.includes("lite")) {
@@ -2968,12 +3176,18 @@ async function callGemini(contents, config, requestedModel) {
       } else if (reqLower.includes("pro")) {
         targetModel = "gemini-flash-latest";
       } else if (reqLower.includes("3.8")) {
-        targetModel = "gemini-3.8-flash";
+        targetModel = lastSuccessfulGeminiModel || "gemini-flash-latest";
       } else if (reqLower.includes("latest") || reqLower.includes("flash")) {
         targetModel = "gemini-flash-latest";
       }
     }
-    const modelsToTry = [targetModel, ...FALLBACK_MODELS.filter((m) => m !== targetModel)];
+    const modelsToTry = Array.from(
+      /* @__PURE__ */ new Set([
+        targetModel,
+        ...lastSuccessfulGeminiModel ? [lastSuccessfulGeminiModel] : [],
+        ...FALLBACK_MODELS
+      ])
+    );
     for (const model of modelsToTry) {
       try {
         const response = await Promise.race([
@@ -2983,11 +3197,12 @@ async function callGemini(contents, config, requestedModel) {
             config
           }),
           new Promise(
-            (_, reject) => setTimeout(() => reject(new Error("GEMINI_CALL_TIMEOUT")), 7500)
+            (_, reject) => setTimeout(() => reject(new Error("GEMINI_CALL_TIMEOUT")), 12e3)
           )
         ]);
         const text = response?.text || "";
         if (text && String(text).trim()) {
+          lastSuccessfulGeminiModel = model;
           const promptTokens = response?.usageMetadata?.promptTokenCount || Math.max(10, Math.ceil(contents.length / 4));
           const completionTokens = response?.usageMetadata?.candidatesTokenCount || Math.max(10, Math.ceil(text.length / 4));
           const totalTokens = response?.usageMetadata?.totalTokenCount || promptTokens + completionTokens;
@@ -3421,7 +3636,7 @@ Respond ONLY with a valid JSON array of objects with the following schema:
       success: true,
       leads: generated,
       usage: { promptTokens: 380, completionTokens: 420, totalTokens: 800 },
-      modelUsed: "gemini-2.0-flash"
+      modelUsed: "gemini-3.8-flash"
     });
   } catch (err) {
     console.error("Lead gen route error:", err);
@@ -3445,7 +3660,7 @@ Respond ONLY with a valid JSON array of objects with the following schema:
       success: true,
       leads: safeGenerated,
       usage: { promptTokens: 250, completionTokens: 350, totalTokens: 600 },
-      modelUsed: "gemini-2.0-flash"
+      modelUsed: "gemini-3.8-flash"
     });
   }
 });
@@ -3523,7 +3738,7 @@ app.post("/api/gemini/generate-outreach", async (req, res) => {
       tone = "Direct & High Converting",
       senderName = "Outreach Specialist",
       type = "pitch",
-      model = "gemini-2.0-flash"
+      model = "gemini-3.8-flash"
     } = req.body;
     const systemPrompt = `You are a world-class Cold Email Copywriter and deliverability expert.
 Write a high-converting cold email tailored for:
@@ -3626,7 +3841,7 @@ ${senderName}`
       subject: picked.subject,
       body: picked.body,
       usage: { promptTokens: 120, completionTokens: 110, totalTokens: 230 },
-      modelUsed: "gemini-2.0-flash"
+      modelUsed: "gemini-3.8-flash"
     });
   } catch (err) {
     res.status(500).json({ error: err?.message || "Failed to generate outreach email" });
@@ -3634,7 +3849,7 @@ ${senderName}`
 });
 app.post("/api/gemini/optimize-body", async (req, res) => {
   try {
-    const { subject = "", body = "", targetTone = "Professional & Direct", model = "gemini-2.0-flash" } = req.body;
+    const { subject = "", body = "", targetTone = "Professional & Direct", model = "gemini-3.8-flash" } = req.body;
     if (!body) return res.status(400).json({ error: "Body is required" });
     const systemPrompt = `You are a Senior Email Deliverability Specialist.
 Rewrite the following cold email subject and body to eliminate spam triggers, maximize primary inbox placement (100% score), and optimize the tone (${targetTone}).
@@ -3688,7 +3903,7 @@ Respond ONLY in JSON format:
       optimizedBody: cleanB,
       improvements: ["Eliminated high-risk spam keywords", "Ensured compliant deliverability rating"],
       usage: { promptTokens: 95, completionTokens: 85, totalTokens: 180 },
-      modelUsed: "gemini-2.0-flash"
+      modelUsed: "gemini-3.8-flash"
     });
   } catch (err) {
     res.status(500).json({ error: "Optimization failed" });
@@ -4739,7 +4954,60 @@ try {
     if (Array.isArray(rawIdx)) {
       for (const item of rawIdx) {
         if (item && item.id) {
-          attachmentIndexMap.set(String(item.id), item);
+          const key = String(item.id);
+          attachmentIndexMap.set(key, item);
+          try {
+            const pathsToTry = [
+              import_path.default.join(ATTACHMENTS_DIR, key),
+              item.filePath
+            ].filter(Boolean);
+            for (const p of pathsToTry) {
+              if (import_fs.default.existsSync(p)) {
+                const buf = import_fs.default.readFileSync(p);
+                if (buf.length > 0) {
+                  const mime = item.mimeType || "application/octet-stream";
+                  const fname = item.name || key;
+                  attachmentMemoryBuffers.set(key, { buffer: buf, mimeType: mime, name: fname });
+                  const uidSuffixMatch = key.match(/[-_](\d+)[-_](\d+)$/);
+                  if (uidSuffixMatch) {
+                    attachmentMemoryBuffers.set(`imap-att-${uidSuffixMatch[1]}-${uidSuffixMatch[2]}`, {
+                      buffer: buf,
+                      mimeType: mime,
+                      name: fname
+                    });
+                  }
+                  break;
+                }
+              }
+            }
+          } catch {
+          }
+        }
+      }
+    }
+  }
+  if (import_fs.default.existsSync(ATTACHMENTS_DIR)) {
+    const diskFiles = import_fs.default.readdirSync(ATTACHMENTS_DIR);
+    for (const f of diskFiles) {
+      if (!attachmentMemoryBuffers.has(f)) {
+        try {
+          const fullP = import_path.default.join(ATTACHMENTS_DIR, f);
+          const buf = import_fs.default.readFileSync(fullP);
+          if (buf.length > 0) {
+            const rec = attachmentIndexMap.get(f);
+            const mime = rec?.mimeType || "application/octet-stream";
+            const fname = rec?.name || f;
+            attachmentMemoryBuffers.set(f, { buffer: buf, mimeType: mime, name: fname });
+            const uidSuffixMatch = f.match(/[-_](\d+)[-_](\d+)$/);
+            if (uidSuffixMatch) {
+              attachmentMemoryBuffers.set(`imap-att-${uidSuffixMatch[1]}-${uidSuffixMatch[2]}`, {
+                buffer: buf,
+                mimeType: mime,
+                name: fname
+              });
+            }
+          }
+        } catch {
         }
       }
     }
@@ -4795,18 +5063,23 @@ function getAttachmentBinaryById(rawId, queryName) {
     const mem = attachmentMemoryBuffers.get(key);
     if (mem && mem.buffer?.length > 0) return mem;
     const record = attachmentIndexMap.get(key);
-    const candidatePath = record?.filePath || import_path.default.join(ATTACHMENTS_DIR, key);
-    try {
-      if (import_fs.default.existsSync(candidatePath)) {
-        const buffer = import_fs.default.readFileSync(candidatePath);
-        if (buffer.length > 0) {
-          const mimeType = record?.mimeType || guessMimeFromFilename(record?.name || key);
-          const name = record?.name || queryName || key;
-          attachmentMemoryBuffers.set(key, { buffer, mimeType, name });
-          return { buffer, mimeType, name };
+    const candidatePaths = [
+      import_path.default.join(ATTACHMENTS_DIR, key),
+      record?.filePath
+    ].filter(Boolean);
+    for (const candidatePath of candidatePaths) {
+      try {
+        if (import_fs.default.existsSync(candidatePath)) {
+          const buffer = import_fs.default.readFileSync(candidatePath);
+          if (buffer.length > 0) {
+            const mimeType = record?.mimeType || guessMimeFromFilename(record?.name || key);
+            const name = record?.name || queryName || key;
+            attachmentMemoryBuffers.set(key, { buffer, mimeType, name });
+            return { buffer, mimeType, name };
+          }
         }
+      } catch {
       }
-    } catch {
     }
     return null;
   };

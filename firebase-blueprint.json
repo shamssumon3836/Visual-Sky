@@ -43,12 +43,48 @@
         }
       },
       "required": ["uid", "email", "name", "role", "createdAt", "updatedAt"]
+    },
+    "Workspace": {
+      "title": "Workspace",
+      "description": "Cross-device and cross-browser synchronized workspace and AI Outreach Copilot session state.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Owner email address"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Owner user ID"
+        },
+        "aiChatSessions": {
+          "type": "array",
+          "description": "AI Outreach Copilot conversation sessions"
+        },
+        "aiActiveSessionId": {
+          "type": "string",
+          "description": "Active AI Outreach Copilot session ID"
+        },
+        "permanentlyDeletedIds": {
+          "type": "array",
+          "description": "Tombstone IDs for permanently deleted items"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last workspace update"
+        }
+      },
+      "required": ["updatedAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
       "description": "User profile documents keyed by Firebase Auth UID"
+    },
+    "/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/Workspace" },
+      "description": "Workspace and AI Copilot sync documents keyed by canonical workspace ID"
     }
   }
 }

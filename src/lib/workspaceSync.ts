@@ -54,6 +54,34 @@ export function getCanonicalWorkspaceDocId(email?: string, userId?: string): str
   return '';
 }
 
+export function getCanonicalAiCopilotDocId(email?: string, userId?: string): string {
+  const cleanEmail = (email || '').trim().toLowerCase();
+  if (cleanEmail) {
+    return `ws_aicopilot_${cleanEmail.replace(/[^a-z0-9]/g, '_').slice(0, 95)}`;
+  }
+  const cleanUserId = (userId || '').trim().toLowerCase();
+  if (cleanUserId) {
+    return `ws_aicopilot_${cleanUserId.replace(/[^a-z0-9]/g, '_').slice(0, 95)}`;
+  }
+  return '';
+}
+
+export function isUntouchedDefaultAiSession(s: any): boolean {
+  if (!s || typeof s !== 'object') return true;
+  const msgs = Array.isArray(s.messages) ? s.messages : [];
+  if (msgs.length === 0) return true;
+  const hasUserMsg = msgs.some((m: any) => m && m.role === 'user' && String(m.content || '').trim().length > 0);
+  if (hasUserMsg) return false;
+  if (String(s.id) === 'session-default') return true;
+  if (msgs.length === 1 && String(msgs[0]?.id) === 'msg-init') return true;
+  return false;
+}
+
+export function hasRealAiCopilotSessions(sessions?: any[]): boolean {
+  if (!Array.isArray(sessions) || sessions.length === 0) return false;
+  return sessions.some((s: any) => s && !isUntouchedDefaultAiSession(s));
+}
+
 export function getLocalTombstones(): Set<string> {
   const set = new Set<string>();
   try {
@@ -201,6 +229,18 @@ export function mergeWorkspaceCollectionsById(
     const key = String(item.id);
     const existing = mergedMap.get(key);
     if (existing && Array.isArray(existing.messages) && Array.isArray(item.messages)) {
+      const exIsUntouchedDefault = key === 'session-default' && isUntouchedDefaultAiSession(existing);
+      const itemIsUntouchedDefault = key === 'session-default' && isUntouchedDefaultAiSession(item);
+
+      if (exIsUntouchedDefault && !itemIsUntouchedDefault) {
+        mergedMap.set(key, item);
+        continue;
+      }
+      if (itemIsUntouchedDefault && !exIsUntouchedDefault) {
+        mergedMap.set(key, existing);
+        continue;
+      }
+
       const msgMap = new Map<string, any>();
       for (const m of existing.messages) {
         if (!m) continue;
@@ -253,6 +293,15 @@ export function mergeWorkspaceCollectionsById(
       result.push(mergedMap.get(k));
     }
   }
+
+  // If this is an AI chat sessions collection and there is at least one real session, strip any untouched 'session-default' placeholder
+  const hasRealChatSession = result.some(
+    (s: any) => s && Array.isArray(s.messages) && s.messages.some((m: any) => m?.role === 'user' || m?.role === 'assistant') && !isUntouchedDefaultAiSession(s)
+  );
+  if (hasRealChatSession) {
+    return result.filter((s: any) => !(String(s?.id) === 'session-default' && isUntouchedDefaultAiSession(s)));
+  }
+
   return result;
 }
 
@@ -397,6 +446,7 @@ export async function queryUserWorkspace(identifiers: {
   };
 
   const canonicalDocId = getCanonicalWorkspaceDocId(cleanEmail, cleanUserId);
+  const canonicalAiDocId = getCanonicalAiCopilotDocId(cleanEmail, cleanUserId);
 
   await Promise.allSettled([
     // 1. Google Cloud Firestore (Global cross-device & cross-browser cloud authority)
@@ -415,6 +465,52 @@ export async function queryUserWorkspace(identifiers: {
           if (firestoreData && typeof firestoreData === 'object') {
             queueCandidate(firestoreData, 'firestore-db');
           }
+        }
+      } catch {}
+    })(),
+
+    // 1b. Dedicated Google Cloud Firestore AI Outreach Copilot document
+    (async () => {
+      if (!canonicalAiDocId) return;
+      try {
+        const aiDocRef = doc(db, 'workspaces', canonicalAiDocId);
+        let aiSnap;
+        try {
+          aiSnap = await withTimeout(getDocFromServer(aiDocRef), 2000);
+        } catch {
+          aiSnap = await withTimeout(getDoc(aiDocRef), 1500);
+        }
+        if (aiSnap && aiSnap.exists()) {
+          const aiData = aiSnap.data();
+          if (aiData && typeof aiData === 'object' && Array.isArray(aiData.aiChatSessions)) {
+            queueCandidate(aiData, 'firestore-db');
+          }
+        }
+      } catch {}
+    })(),
+
+    // 1c. Dedicated Backend AI Outreach Copilot endpoint
+    (async () => {
+      try {
+        const qp = new URLSearchParams();
+        if (cleanEmail) qp.set('email', cleanEmail);
+        if (cleanUserId) qp.set('userId', cleanUserId);
+        qp.set('_t', String(Date.now()));
+        const resAi = await fetch(`/api/ai-copilot/sessions?${qp.toString()}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+        });
+        const parsedAi = await safeParseResponse(resAi, 'AI Copilot fetch failed');
+        if (parsedAi.ok && parsedAi.data?.success && Array.isArray(parsedAi.data?.aiChatSessions) && parsedAi.data.aiChatSessions.length > 0) {
+          queueCandidate(
+            {
+              aiChatSessions: parsedAi.data.aiChatSessions,
+              aiActiveSessionId: parsedAi.data.aiActiveSessionId,
+              permanentlyDeletedIds: parsedAi.data.permanentlyDeletedIds,
+              updatedAt: parsedAi.data.updatedAt
+            },
+            'backend-db'
+          );
         }
       } catch {}
     })(),
@@ -548,18 +644,34 @@ export async function persistUserWorkspace(params: {
   };
 
   const canonicalDocId = getCanonicalWorkspaceDocId(cleanEmail, cleanUserId);
+  const canonicalAiDocId = getCanonicalAiCopilotDocId(cleanEmail, cleanUserId);
 
   // 1. Save to Google Cloud Firestore (Real-time cross-device & cross-browser sync)
   const firestorePromise = (async () => {
-    if (!canonicalDocId) return false;
-    try {
-      const cleanFirestorePayload = sanitizeForFirestore(payloadToSave);
-      await setDoc(doc(db, 'workspaces', canonicalDocId), cleanFirestorePayload);
-      return true;
-    } catch (err) {
-      console.warn('Firestore workspace save warning:', err);
-      return false;
+    let ok = false;
+    if (canonicalDocId) {
+      try {
+        const cleanFirestorePayload = sanitizeForFirestore(payloadToSave);
+        await setDoc(doc(db, 'workspaces', canonicalDocId), cleanFirestorePayload);
+        ok = true;
+      } catch (err) {
+        console.warn('Firestore workspace save warning:', err);
+      }
     }
+    if (canonicalAiDocId && Array.isArray(payloadToSave.aiChatSessions) && hasRealAiCopilotSessions(payloadToSave.aiChatSessions)) {
+      try {
+        await setDoc(doc(db, 'workspaces', canonicalAiDocId), {
+          email: cleanEmail,
+          userId: cleanUserId,
+          aiChatSessions: payloadToSave.aiChatSessions.slice(0, 50),
+          aiActiveSessionId: payloadToSave.aiActiveSessionId || payloadToSave.aiChatSessions[0]?.id || '',
+          permanentlyDeletedIds: (payloadToSave.permanentlyDeletedIds || []).slice(-1000),
+          updatedAt: nowIso
+        });
+        ok = true;
+      } catch {}
+    }
+    return ok;
   })();
 
   // 2. Supabase persistence (update all rows matching email + upsert canonical row)
@@ -641,4 +753,291 @@ export async function persistUserWorkspace(params: {
     success: backendSucceeded || firestoreSucceeded,
     updatedAt: authoritativeUpdatedAt
   };
+}
+
+/**
+ * Dedicated fast persistence for AI Outreach Copilot sessions across all browsers and devices.
+ * Persists simultaneously to localStorage, Central Backend (/api/ai-copilot/sessions), and Google Cloud Firestore (ws_aicopilot_<email>).
+ */
+export async function persistAiCopilotSessionsNow(params: {
+  email?: string;
+  userId?: string;
+  sessions: any[];
+  activeSessionId?: string;
+  deletedIds?: string[];
+}): Promise<boolean> {
+  const cleanEmail = (params.email || '').trim().toLowerCase();
+  const cleanUserId = (params.userId || '').trim();
+  const safeSessions = Array.isArray(params.sessions) ? params.sessions : [];
+  const nowIso = new Date().toISOString();
+
+  const tombstones = getLocalTombstones();
+  if (Array.isArray(params.deletedIds)) {
+    for (const id of params.deletedIds) {
+      if (id) tombstones.add(String(id));
+    }
+  }
+  const allDeleted = Array.from(tombstones).slice(-2000);
+
+  const cleanSessions = safeSessions.filter(
+    (s: any) => s && s.id && !tombstones.has(String(s.id)) && Array.isArray(s.messages) && s.messages.length > 0
+  );
+  const filteredSessions = hasRealAiCopilotSessions(cleanSessions)
+    ? cleanSessions.filter((s: any) => !(String(s.id) === 'session-default' && isUntouchedDefaultAiSession(s)))
+    : cleanSessions;
+
+  const resolvedActiveId =
+    params.activeSessionId && filteredSessions.some((s: any) => String(s.id) === params.activeSessionId)
+      ? params.activeSessionId
+      : filteredSessions[0]?.id || 'session-default';
+
+  try {
+    localStorage.setItem('visualsky_ai_chat_sessions', JSON.stringify(filteredSessions));
+    if (cleanEmail) {
+      localStorage.setItem(`visualsky_ai_chat_sessions_${cleanEmail}`, JSON.stringify(filteredSessions));
+    }
+    if (resolvedActiveId) {
+      localStorage.setItem('visualsky_ai_active_session_id', resolvedActiveId);
+      if (cleanEmail) {
+        localStorage.setItem(`visualsky_ai_active_session_id_${cleanEmail}`, resolvedActiveId);
+      }
+    }
+  } catch {}
+
+  if (!cleanEmail && !cleanUserId) return false;
+
+  const canonicalAiDocId = getCanonicalAiCopilotDocId(cleanEmail, cleanUserId);
+
+  const [serverOk, firestoreOk] = await Promise.all([
+    (async () => {
+      try {
+        const bodyStr = JSON.stringify({
+          email: cleanEmail,
+          userId: cleanUserId,
+          aiChatSessions: filteredSessions,
+          aiActiveSessionId: resolvedActiveId,
+          permanentlyDeletedIds: allDeleted,
+          updatedAt: nowIso
+        });
+        const res = await fetch('/api/ai-copilot/sessions', {
+          method: 'POST',
+          keepalive: bodyStr.length < 30000,
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store'
+          },
+          body: bodyStr
+        });
+        return res.ok;
+      } catch {
+        return false;
+      }
+    })(),
+    (async () => {
+      if (!canonicalAiDocId) return false;
+      try {
+        const cleanFirestoreSessions = JSON.parse(JSON.stringify(filteredSessions.slice(0, 50)));
+        await setDoc(doc(db, 'workspaces', canonicalAiDocId), {
+          email: cleanEmail,
+          userId: cleanUserId,
+          aiChatSessions: cleanFirestoreSessions,
+          aiActiveSessionId: resolvedActiveId,
+          permanentlyDeletedIds: allDeleted.slice(-1000),
+          updatedAt: nowIso
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    })()
+  ]);
+
+  return serverOk || firestoreOk;
+}
+
+/**
+ * Fetch and smart-merge AI Outreach Copilot sessions from Firestore + Backend + LocalStorage,
+ * automatically pushing any unsynced local sessions to the cloud so other browsers/devices receive them immediately.
+ */
+export async function syncAiCopilotSessions(params: {
+  email?: string;
+  userId?: string;
+  localSessions?: any[];
+  activeSessionId?: string;
+}): Promise<{
+  sessions: any[];
+  activeSessionId: string;
+  updatedFromRemote: boolean;
+}> {
+  const cleanEmail = (params.email || '').trim().toLowerCase();
+  const cleanUserId = (params.userId || '').trim();
+  const tombstones = getLocalTombstones();
+
+  let remoteSessions: any[] = [];
+  let remoteActiveId = '';
+  const canonicalAiDocId = getCanonicalAiCopilotDocId(cleanEmail, cleanUserId);
+  const canonicalWsDocId = getCanonicalWorkspaceDocId(cleanEmail, cleanUserId);
+
+  const withFastTimeout = <T>(p: Promise<T>, ms = 1800): Promise<T> =>
+    Promise.race([
+      p,
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
+    ]);
+
+  await Promise.allSettled([
+    // 1. Dedicated Backend Endpoint
+    (async () => {
+      if (!cleanEmail && !cleanUserId) return;
+      try {
+        const qp = new URLSearchParams();
+        if (cleanEmail) qp.set('email', cleanEmail);
+        if (cleanUserId) qp.set('userId', cleanUserId);
+        qp.set('_t', String(Date.now()));
+        const res = await fetch(`/api/ai-copilot/sessions?${qp.toString()}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+        });
+        const parsed = await safeParseResponse(res, 'AI Copilot sync failed');
+        const data = parsed.data;
+        if (parsed.ok && data?.success) {
+          if (Array.isArray(data.permanentlyDeletedIds)) {
+            for (const id of data.permanentlyDeletedIds) if (id) tombstones.add(String(id));
+          }
+          if (Array.isArray(data.aiChatSessions) && data.aiChatSessions.length > 0) {
+            remoteSessions = mergeWorkspaceCollectionsById(data.aiChatSessions, remoteSessions, tombstones);
+          }
+          if (data.aiActiveSessionId && !remoteActiveId) {
+            remoteActiveId = String(data.aiActiveSessionId);
+          }
+        }
+      } catch {}
+    })(),
+    // 2. Dedicated Firestore AI Copilot Document
+    (async () => {
+      if (!canonicalAiDocId) return;
+      try {
+        const docRef = doc(db, 'workspaces', canonicalAiDocId);
+        let snap;
+        try {
+          snap = await withFastTimeout(getDocFromServer(docRef), 1800);
+        } catch {
+          snap = await withFastTimeout(getDoc(docRef), 1200);
+        }
+        if (snap && snap.exists()) {
+          const d: any = snap.data();
+          if (Array.isArray(d?.permanentlyDeletedIds)) {
+            for (const id of d.permanentlyDeletedIds) if (id) tombstones.add(String(id));
+          }
+          if (Array.isArray(d?.aiChatSessions) && d.aiChatSessions.length > 0) {
+            remoteSessions = mergeWorkspaceCollectionsById(d.aiChatSessions, remoteSessions, tombstones);
+          }
+          if (d?.aiActiveSessionId) {
+            remoteActiveId = String(d.aiActiveSessionId);
+          }
+        }
+      } catch {}
+    })(),
+    // 3. Full Firestore Workspace Document fallback
+    (async () => {
+      if (!canonicalWsDocId) return;
+      try {
+        const docRef = doc(db, 'workspaces', canonicalWsDocId);
+        const snap = await withFastTimeout(getDoc(docRef), 1500);
+        if (snap && snap.exists()) {
+          const d: any = snap.data();
+          if (Array.isArray(d?.permanentlyDeletedIds)) {
+            for (const id of d.permanentlyDeletedIds) if (id) tombstones.add(String(id));
+          }
+          if (Array.isArray(d?.aiChatSessions) && d.aiChatSessions.length > 0) {
+            remoteSessions = mergeWorkspaceCollectionsById(remoteSessions, d.aiChatSessions, tombstones);
+          }
+          if (d?.aiActiveSessionId && !remoteActiveId) {
+            remoteActiveId = String(d.aiActiveSessionId);
+          }
+        }
+      } catch {}
+    })()
+  ]);
+
+  const localList = Array.isArray(params.localSessions) ? params.localSessions : [];
+  const merged = mergeWorkspaceCollectionsById(remoteSessions, localList, tombstones).filter(
+    (s: any) => s && s.id && !tombstones.has(String(s.id)) && Array.isArray(s.messages) && s.messages.length > 0
+  );
+
+  // Count total messages across sessions to detect if local had unsynced messages not yet in remote
+  const countMessages = (list: any[]) =>
+    (Array.isArray(list) ? list : [])
+      .filter((s: any) => s && !isUntouchedDefaultAiSession(s))
+      .reduce((acc, s) => acc + (Array.isArray(s.messages) ? s.messages.length : 0), 0);
+
+  const remoteMsgCount = countMessages(remoteSessions);
+  const mergedMsgCount = countMessages(merged);
+
+  const resolvedActiveId = (() => {
+    if (
+      remoteActiveId &&
+      remoteActiveId !== 'session-default' &&
+      merged.some((s: any) => String(s.id) === remoteActiveId)
+    ) {
+      return remoteActiveId;
+    }
+    if (
+      params.activeSessionId &&
+      params.activeSessionId !== 'session-default' &&
+      merged.some((s: any) => String(s.id) === params.activeSessionId)
+    ) {
+      return params.activeSessionId;
+    }
+    const firstReal = merged.find((s: any) => !isUntouchedDefaultAiSession(s));
+    if (firstReal) return String(firstReal.id);
+    return merged[0]?.id || params.activeSessionId || 'session-default';
+  })();
+
+  // If this browser had real sessions/messages that were missing on the remote server/Firestore, push them now!
+  if (mergedMsgCount > remoteMsgCount && hasRealAiCopilotSessions(merged)) {
+    persistAiCopilotSessionsNow({
+      email: cleanEmail,
+      userId: cleanUserId,
+      sessions: merged,
+      activeSessionId: resolvedActiveId,
+      deletedIds: Array.from(tombstones)
+    }).catch(() => {});
+  }
+
+  return {
+    sessions: merged,
+    activeSessionId: resolvedActiveId,
+    updatedFromRemote: merged.length > 0
+  };
+}
+
+/**
+ * Real-time Firestore listener specifically for AI Outreach Copilot sessions (< 100ms cross-browser & cross-device push).
+ */
+export function subscribeToAiCopilotSessions(
+  identifiers: { email?: string; userId?: string },
+  onUpdate: (payload: { aiChatSessions: any[]; aiActiveSessionId?: string; permanentlyDeletedIds?: string[] }) => void
+): () => void {
+  const docId = getCanonicalAiCopilotDocId(identifiers.email, identifiers.userId);
+  if (!docId) return () => {};
+  try {
+    const docRef = doc(db, 'workspaces', docId);
+    return onSnapshot(
+      docRef,
+      (snap) => {
+        if (!snap.exists()) return;
+        const d: any = snap.data();
+        if (d && Array.isArray(d.aiChatSessions)) {
+          onUpdate({
+            aiChatSessions: d.aiChatSessions,
+            aiActiveSessionId: d.aiActiveSessionId,
+            permanentlyDeletedIds: d.permanentlyDeletedIds
+          });
+        }
+      },
+      () => {}
+    );
+  } catch {
+    return () => {};
+  }
 }

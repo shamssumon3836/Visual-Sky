@@ -118,7 +118,19 @@ const getUserDataFilePath = (email: string) => {
   return path.join(DATA_DIR, `user_${safeEmail}.json`);
 };
 
+const getAiCopilotFilePath = (identifier: string) => {
+  const clean = (identifier || '').trim().toLowerCase();
+  const safe = clean.replace(/[^a-z0-9_.-]/g, '_');
+  return path.join(DATA_DIR, `ai_copilot_${safe}.json`);
+};
+
 const USERS_LIST_FILE = path.join(DATA_DIR, 'users_registry.json');
+try {
+  const seedUsersFile = path.join(process.cwd(), 'data', 'users_registry.json');
+  if (!fs.existsSync(USERS_LIST_FILE) && fs.existsSync(seedUsersFile)) {
+    fs.copyFileSync(seedUsersFile, USERS_LIST_FILE);
+  }
+} catch {}
 const PAYMENT_SETTINGS_FILE = path.join(DATA_DIR, 'payment_settings.json');
 const SUBSCRIPTIONS_FILE = path.join(DATA_DIR, 'subscriptions_registry.json');
 const TRACKING_EVENTS_FILE = path.join(DATA_DIR, 'tracking_events.json');
@@ -2677,6 +2689,17 @@ function smartMergeWorkspaces(existing: any, incoming: any): any {
       return true;
     };
 
+  const isUntouchedDefaultSession = (s: any): boolean => {
+    if (!s || typeof s !== 'object') return true;
+    const msgs = Array.isArray(s.messages) ? s.messages : [];
+    if (msgs.length === 0) return true;
+    const hasUserMsg = msgs.some((m: any) => m && m.role === 'user' && String(m.content || '').trim().length > 0);
+    if (hasUserMsg) return false;
+    if (String(s.id) === 'session-default') return true;
+    if (msgs.length === 1 && String(msgs[0]?.id) === 'msg-init') return true;
+    return false;
+  };
+
   const mergeById = (incArr: any, existingArr: any) => {
     const incList = Array.isArray(incArr) ? incArr : [];
     const exList = Array.isArray(existingArr) ? existingArr : [];
@@ -2692,6 +2715,17 @@ function smartMergeWorkspaces(existing: any, incoming: any): any {
       const key = String(item.id);
       const ex = map.get(key);
       if (ex && Array.isArray(ex.messages) && Array.isArray(item.messages)) {
+        const exIsUntouched = key === 'session-default' && isUntouchedDefaultSession(ex);
+        const incIsUntouched = key === 'session-default' && isUntouchedDefaultSession(item);
+        if (exIsUntouched && !incIsUntouched) {
+          map.set(key, item);
+          continue;
+        }
+        if (incIsUntouched && !exIsUntouched) {
+          map.set(key, ex);
+          continue;
+        }
+
         const msgMap = new Map<string, any>();
         for (const m of ex.messages) {
           if (!m) continue;
@@ -2740,6 +2774,12 @@ function smartMergeWorkspaces(existing: any, incoming: any): any {
         seen.add(k);
         out.push(map.get(k));
       }
+    }
+    const hasRealChat = out.some(
+      (s: any) => s && Array.isArray(s.messages) && s.messages.some((m: any) => m?.role === 'user' || m?.role === 'assistant') && !isUntouchedDefaultSession(s)
+    );
+    if (hasRealChat) {
+      return out.filter((s: any) => !(String(s?.id) === 'session-default' && isUntouchedDefaultSession(s)));
     }
     return out;
   };
@@ -3183,7 +3223,8 @@ function readUserWorkspace(primaryId?: string, secondaryId?: string): any | null
     for (const cand of uniqueCandidates) {
       const pathsToCheck = [
         getWorkspaceFilePath(cand),
-        getUserDataFilePath(cand)
+        getUserDataFilePath(cand),
+        getAiCopilotFilePath(cand)
       ];
       for (const p of pathsToCheck) {
         if (fs.existsSync(p)) {
@@ -3500,7 +3541,24 @@ app.post('/api/user-data/:email/resource/:resource', (req, res) => {
       return true;
     };
 
-    workspace[resource] = items.filter(isAliveItem);
+    const mergedForResource = smartMergeWorkspaces(
+      {
+        ...workspace,
+        permanentlyDeletedIds: workspace.permanentlyDeletedIds,
+        deletedThreadIds: workspace.deletedThreadIds
+      },
+      {
+        [resource]: items.filter(isAliveItem),
+        permanentlyDeletedIds: workspace.permanentlyDeletedIds,
+        deletedThreadIds: workspace.deletedThreadIds,
+        updatedAt: updatedAt || new Date().toISOString()
+      }
+    );
+
+    workspace[resource] = Array.isArray(mergedForResource[resource])
+      ? mergedForResource[resource].filter(isAliveItem)
+      : items.filter(isAliveItem);
+
     for (const col of ['leads', 'campaigns', 'smtpAccounts', 'emailTemplates', 'threads', 'sentEmails', 'leadTags', 'templateCategories', 'minedLeads', 'aiChatSessions']) {
       if (Array.isArray(workspace[col])) {
         workspace[col] = workspace[col].filter(isAliveItem);
@@ -3525,6 +3583,99 @@ app.post('/api/user-data/:email/resource/:resource', (req, res) => {
   } catch (err: any) {
     console.error('Resource direct persistence error:', err);
     return res.status(500).json({ success: false, error: 'Failed to persist resource to database' });
+  }
+});
+
+// 3b. Dedicated AI Outreach Copilot Sessions Cross-Browser & Cross-Device Sync Endpoints
+app.get('/api/ai-copilot/sessions', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const email = String(req.query.email || '').trim().toLowerCase();
+    const userId = String(req.query.userId || '').trim();
+    if (!email && !userId) {
+      return res.status(400).json({ success: false, error: 'email or userId is required' });
+    }
+    const workspace = readUserWorkspace(email, userId) || {};
+    const aiChatSessions = Array.isArray(workspace.aiChatSessions) ? workspace.aiChatSessions : [];
+    const aiActiveSessionId = workspace.aiActiveSessionId || aiChatSessions[0]?.id || 'session-default';
+    const permanentlyDeletedIds = Array.isArray(workspace.permanentlyDeletedIds) ? workspace.permanentlyDeletedIds : [];
+    return res.json({
+      success: true,
+      aiChatSessions,
+      aiActiveSessionId,
+      permanentlyDeletedIds,
+      updatedAt: workspace.updatedAt || new Date().toISOString()
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to read AI Copilot sessions' });
+  }
+});
+
+app.post('/api/ai-copilot/sessions', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const {
+      email: rawEmail,
+      userId: rawUserId,
+      aiChatSessions,
+      aiActiveSessionId,
+      permanentlyDeletedIds,
+      updatedAt
+    } = req.body || {};
+
+    const email = String(rawEmail || '').trim().toLowerCase();
+    const userId = String(rawUserId || '').trim();
+    if (!email && !userId) {
+      return res.status(400).json({ success: false, error: 'email or userId is required' });
+    }
+    if (!Array.isArray(aiChatSessions)) {
+      return res.status(400).json({ success: false, error: 'aiChatSessions array is required' });
+    }
+
+    const existing = readUserWorkspace(email, userId) || {};
+    const merged = smartMergeWorkspaces(existing, {
+      email: email || existing.email,
+      userId: userId || existing.userId,
+      aiChatSessions,
+      aiActiveSessionId: aiActiveSessionId || existing.aiActiveSessionId,
+      permanentlyDeletedIds: Array.isArray(permanentlyDeletedIds) ? permanentlyDeletedIds : existing.permanentlyDeletedIds,
+      updatedAt: updatedAt || new Date().toISOString()
+    });
+
+    // Write dedicated ai_copilot_<id>.json files + workspace_<id>.json files
+    const candidates = resolveUserAliasCandidates(email, userId, merged.email, merged.userId);
+    const aiPayloadStr = JSON.stringify(
+      {
+        email: merged.email,
+        userId: merged.userId,
+        aiChatSessions: merged.aiChatSessions || [],
+        aiActiveSessionId: merged.aiActiveSessionId || '',
+        permanentlyDeletedIds: merged.permanentlyDeletedIds || [],
+        updatedAt: merged.updatedAt
+      },
+      null,
+      2
+    );
+    for (const c of candidates) {
+      try {
+        const p = getAiCopilotFilePath(c);
+        fs.writeFileSync(p, aiPayloadStr, 'utf-8');
+      } catch {}
+    }
+
+    writeUserWorkspace(email || userId, merged, userId || email);
+
+    return res.json({
+      success: true,
+      aiChatSessions: merged.aiChatSessions || [],
+      aiActiveSessionId: merged.aiActiveSessionId || '',
+      permanentlyDeletedIds: merged.permanentlyDeletedIds || [],
+      updatedAt: merged.updatedAt
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to save AI Copilot sessions' });
   }
 });
 
@@ -3711,6 +3862,10 @@ function ensureFreshPrebuiltBundle() {
       path.join(process.cwd(), 'src', 'context', 'AppContext.tsx'),
       path.join(process.cwd(), 'src', 'lib', 'workspaceSync.ts'),
       path.join(process.cwd(), 'src', 'lib', 'firebase.ts'),
+      path.join(process.cwd(), 'src', 'components', 'ai', 'GeminiAssistant.tsx'),
+      path.join(process.cwd(), 'src', 'components', 'inbox', 'SmartInbox.tsx'),
+      path.join(process.cwd(), 'src', 'components', 'drive', 'GoogleDriveStorageView.tsx'),
+      path.join(process.cwd(), 'src', 'utils', 'attachmentFastCache.ts'),
       path.join(process.cwd(), 'src', 'components', 'campaigns', 'CampaignManager.tsx'),
       path.join(process.cwd(), 'src', 'components', 'dashboard', 'MainDashboard.tsx'),
       path.join(process.cwd(), 'src', 'components', 'trash', 'TrashManager.tsx')
@@ -3803,12 +3958,13 @@ function getGeminiClient(): GoogleGenAI | null {
 
 // Resilient Gemini model caller with multi-model fallback & fast timeout
 const FALLBACK_MODELS = [
-  'gemini-3.8-flash',
   'gemini-flash-latest',
   'gemini-3.1-flash-lite',
+  'gemini-3.8-flash',
   'gemini-3.1-flash-lite-preview',
   'gemini-3-flash-preview'
 ];
+let lastSuccessfulGeminiModel: string | null = 'gemini-flash-latest';
 
 interface GeminiCallResult {
   text: string;
@@ -3823,7 +3979,7 @@ interface GeminiCallResult {
 async function callGemini(contents: string, config?: any, requestedModel?: string): Promise<GeminiCallResult | null> {
   const ai = getGeminiClient();
   if (ai) {
-    let targetModel = 'gemini-3.8-flash';
+    let targetModel = lastSuccessfulGeminiModel || 'gemini-flash-latest';
     if (requestedModel) {
       const reqLower = requestedModel.toLowerCase();
       if (reqLower.includes('lite')) {
@@ -3831,13 +3987,19 @@ async function callGemini(contents: string, config?: any, requestedModel?: strin
       } else if (reqLower.includes('pro')) {
         targetModel = 'gemini-flash-latest';
       } else if (reqLower.includes('3.8')) {
-        targetModel = 'gemini-3.8-flash';
+        targetModel = lastSuccessfulGeminiModel || 'gemini-flash-latest';
       } else if (reqLower.includes('latest') || reqLower.includes('flash')) {
         targetModel = 'gemini-flash-latest';
       }
     }
 
-    const modelsToTry = [targetModel, ...FALLBACK_MODELS.filter(m => m !== targetModel)];
+    const modelsToTry = Array.from(
+      new Set([
+        targetModel,
+        ...(lastSuccessfulGeminiModel ? [lastSuccessfulGeminiModel] : []),
+        ...FALLBACK_MODELS
+      ])
+    );
 
     for (const model of modelsToTry) {
       try {
@@ -3848,12 +4010,13 @@ async function callGemini(contents: string, config?: any, requestedModel?: strin
             config,
           }),
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('GEMINI_CALL_TIMEOUT')), 7500)
+            setTimeout(() => reject(new Error('GEMINI_CALL_TIMEOUT')), 12000)
           )
         ]);
 
         const text = response?.text || '';
         if (text && String(text).trim()) {
+          lastSuccessfulGeminiModel = model;
           const promptTokens = response?.usageMetadata?.promptTokenCount || Math.max(10, Math.ceil(contents.length / 4));
           const completionTokens = response?.usageMetadata?.candidatesTokenCount || Math.max(10, Math.ceil(text.length / 4));
           const totalTokens = response?.usageMetadata?.totalTokenCount || (promptTokens + completionTokens);
@@ -4329,7 +4492,7 @@ Respond ONLY with a valid JSON array of objects with the following schema:
       success: true, 
       leads: generated,
       usage: { promptTokens: 380, completionTokens: 420, totalTokens: 800 },
-      modelUsed: 'gemini-2.0-flash'
+      modelUsed: 'gemini-3.8-flash'
     });
   } catch (err: any) {
     console.error('Lead gen route error:', err);
@@ -4354,7 +4517,7 @@ Respond ONLY with a valid JSON array of objects with the following schema:
       success: true, 
       leads: safeGenerated,
       usage: { promptTokens: 250, completionTokens: 350, totalTokens: 600 },
-      modelUsed: 'gemini-2.0-flash'
+      modelUsed: 'gemini-3.8-flash'
     });
   }
 });
@@ -4451,7 +4614,7 @@ app.post('/api/gemini/generate-outreach', async (req, res) => {
       tone = 'Direct & High Converting',
       senderName = 'Outreach Specialist',
       type = 'pitch',
-      model = 'gemini-2.0-flash'
+      model = 'gemini-3.8-flash'
     } = req.body;
 
     const systemPrompt = `You are a world-class Cold Email Copywriter and deliverability expert.
@@ -4531,7 +4694,7 @@ Respond ONLY with valid JSON in this exact structure:
       subject: picked.subject, 
       body: picked.body,
       usage: { promptTokens: 120, completionTokens: 110, totalTokens: 230 },
-      modelUsed: 'gemini-2.0-flash'
+      modelUsed: 'gemini-3.8-flash'
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to generate outreach email' });
@@ -4541,7 +4704,7 @@ Respond ONLY with valid JSON in this exact structure:
 // Endpoint: AI Anti-Spam Polish & Email Rewriter
 app.post('/api/gemini/optimize-body', async (req, res) => {
   try {
-    const { subject = '', body = '', targetTone = 'Professional & Direct', model = 'gemini-2.0-flash' } = req.body;
+    const { subject = '', body = '', targetTone = 'Professional & Direct', model = 'gemini-3.8-flash' } = req.body;
 
     if (!body) return res.status(400).json({ error: 'Body is required' });
 
@@ -4601,7 +4764,7 @@ Respond ONLY in JSON format:
       optimizedBody: cleanB,
       improvements: ['Eliminated high-risk spam keywords', 'Ensured compliant deliverability rating'],
       usage: { promptTokens: 95, completionTokens: 85, totalTokens: 180 },
-      modelUsed: 'gemini-2.0-flash'
+      modelUsed: 'gemini-3.8-flash'
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Optimization failed' });

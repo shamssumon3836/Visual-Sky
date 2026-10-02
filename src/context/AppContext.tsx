@@ -23,7 +23,18 @@ import {
 import confetti from 'canvas-confetti';
 import { audioEngine } from '../utils/audioPlayer';
 import { supabase, isSupabaseConfigured, signOutSupabase } from '../lib/supabase';
-import { queryUserWorkspace, persistUserWorkspace, subscribeToUserWorkspace, mergeWorkspaceCollectionsById, WorkspaceData } from '../lib/workspaceSync';
+import {
+  queryUserWorkspace,
+  persistUserWorkspace,
+  subscribeToUserWorkspace,
+  mergeWorkspaceCollectionsById,
+  isUntouchedDefaultAiSession,
+  hasRealAiCopilotSessions,
+  persistAiCopilotSessionsNow,
+  syncAiCopilotSessions,
+  subscribeToAiCopilotSessions,
+  WorkspaceData
+} from '../lib/workspaceSync';
 import { safeParseResponse } from '../lib/safeFetch';
 
 // Helper to calculate automatic 4-Week SMTP Warm-up Schedule limits:
@@ -1257,30 +1268,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ]
   });
 
-  const [aiChatSessions, setAiChatSessionsState] = useState<AIChatSession[]>(() => {
+  const readAllLocalAiSessions = (): AIChatSession[] => {
     try {
       const permDeleted = getPermanentlyDeletedSet();
-      const saved = localStorage.getItem('visualsky_ai_chat_sessions');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const valid = parsed.filter(
-            (s: any) =>
-              s &&
-              typeof s.id === 'string' &&
-              !permDeleted.has(String(s.id)) &&
-              Array.isArray(s.messages) &&
-              s.messages.length > 0
-          );
-          if (valid.length > 0) return valid;
+      const cleanEm = (currentUser?.email || '').trim().toLowerCase();
+      const candidateKeys = new Set<string>([
+        ...(cleanEm ? [`visualsky_ai_chat_sessions_${cleanEm}`] : []),
+        'visualsky_ai_chat_sessions',
+        'visualsky_ai_sessions',
+        'visualsky_chat_sessions',
+        'visualsky_copilot_sessions'
+      ]);
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && /ai_chat_sessions|copilot_sessions/i.test(k)) {
+          candidateKeys.add(k);
         }
+      }
+      let combined: any[] = [];
+      for (const key of candidateKeys) {
+        try {
+          const raw = localStorage.getItem(key);
+          if (!raw) continue;
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const valid = parsed.filter(
+              (s: any) =>
+                s &&
+                typeof s.id === 'string' &&
+                !permDeleted.has(String(s.id)) &&
+                Array.isArray(s.messages) &&
+                s.messages.length > 0
+            );
+            if (valid.length > 0) {
+              combined = mergeWorkspaceCollectionsById(combined, valid, permDeleted);
+            }
+          }
+        } catch {}
+      }
+      if (combined.length > 0) {
+        return combined;
       }
     } catch {}
     return [createDefaultAiChatSession(currentUser?.name)];
-  });
+  };
+
+  const [aiChatSessions, setAiChatSessionsState] = useState<AIChatSession[]>(readAllLocalAiSessions);
 
   const [aiActiveSessionId, setAiActiveSessionIdState] = useState<string>(() => {
     try {
+      const cleanEm = (currentUser?.email || '').trim().toLowerCase();
+      if (cleanEm) {
+        const userSpecific = localStorage.getItem(`visualsky_ai_active_session_id_${cleanEm}`);
+        if (userSpecific) return userSpecific;
+      }
       const savedId = localStorage.getItem('visualsky_ai_active_session_id');
       if (savedId) return savedId;
     } catch {}
@@ -1485,13 +1526,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return nowIso;
   };
 
+  const resolveActiveUserIdentity = (): { email: string; userId: string; isAuth: boolean } => {
+    let email = (currentUser?.email || loadedWorkspaceEmailRef.current || '').trim().toLowerCase();
+    let userId = (currentUser?.id || currentUser?.supabaseId || loadedWorkspaceUserIdRef.current || '').trim();
+    let isAuth = Boolean(isAuthenticated);
+    if (!email || !isAuth) {
+      try {
+        const storedAuth = localStorage.getItem('visualsky_authenticated') === 'true';
+        const rawUser = localStorage.getItem('visualsky_current_user');
+        if (rawUser) {
+          const parsed = JSON.parse(rawUser);
+          if (parsed && parsed.email) {
+            email = email || String(parsed.email).trim().toLowerCase();
+            userId = userId || String(parsed.id || parsed.supabaseId || '').trim();
+            if (storedAuth) isAuth = true;
+          }
+        }
+      } catch {}
+    }
+    return { email, userId, isAuth };
+  };
+
   // Silent background workspace save to database (never triggers UI re-renders or page refreshes)
   const saveWorkspaceToDatabase = async (): Promise<boolean> => {
-    if (!isAuthenticated || !currentUser?.email) return false;
+    const { email: cleanEmail, userId: cleanUserId, isAuth } = resolveActiveUserIdentity();
+    if (!isAuth || !cleanEmail) return false;
     if (isHydratingRef.current) return false;
 
-    const cleanEmail = currentUser.email.trim().toLowerCase();
-    const cleanUserId = (currentUser.id || currentUser.supabaseId || '').trim();
     const nowIso = markLocalWorkspaceMutated();
 
     try {
@@ -1596,10 +1657,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch {}
     }
 
-    if (!isAuthenticated || !currentUser?.email) return;
-    const cleanEmail = currentUser.email.trim().toLowerCase();
-    const cleanUserId = (currentUser.id || currentUser.supabaseId || '').trim();
+    const { email: cleanEmail, userId: cleanUserId, isAuth } = resolveActiveUserIdentity();
+    if (resource === 'aiChatSessions' && cleanEmail) {
+      try {
+        localStorage.setItem(`visualsky_ai_chat_sessions_${cleanEmail}`, JSON.stringify(items));
+      } catch {}
+    }
+    if (!isAuth || !cleanEmail) return;
     const allDeletedIds = Array.from(getPermanentlyDeletedSet());
+
+    if (resource === 'aiChatSessions') {
+      persistAiCopilotSessionsNow({
+        email: cleanEmail,
+        userId: cleanUserId,
+        sessions: items,
+        activeSessionId: latestWorkspaceRef.current?.aiActiveSessionId || aiActiveSessionId,
+        deletedIds: allDeletedIds
+      }).catch(() => {});
+    }
 
     try {
       // Fast granular resource endpoint with keepalive so even immediate page reload persists deletions
@@ -1793,47 +1868,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 9b. AI Outreach Copilot Sessions Hydration (Cross-Browser & Cross-Device Sync)
-    if (Array.isArray(data.aiChatSessions) && data.aiChatSessions.length > 0) {
-      const currentLocalSessions = Array.isArray(latestWorkspaceRef.current.aiChatSessions)
-        ? latestWorkspaceRef.current.aiChatSessions
-        : aiChatSessions;
-      const mergedSessions = mergeWorkspaceCollectionsById(
-        data.aiChatSessions,
-        currentLocalSessions,
-        permDeletedSet
-      ).filter((s: any) => s && Array.isArray(s.messages) && s.messages.length > 0);
+    const currentLocalSessions = Array.isArray(latestWorkspaceRef.current.aiChatSessions)
+      ? latestWorkspaceRef.current.aiChatSessions
+      : aiChatSessions;
+    const remoteAiSessions = Array.isArray(data.aiChatSessions) ? data.aiChatSessions : [];
+    const mergedSessions = mergeWorkspaceCollectionsById(
+      remoteAiSessions,
+      currentLocalSessions,
+      permDeletedSet
+    ).filter((s: any) => s && Array.isArray(s.messages) && s.messages.length > 0);
 
-      if (mergedSessions.length > 0) {
-        setAiChatSessionsState(mergedSessions);
-        try {
-          localStorage.setItem('visualsky_ai_chat_sessions', JSON.stringify(mergedSessions));
-        } catch {}
-        (latestWorkspaceRef.current as any).aiChatSessions = mergedSessions;
-      }
-    } else if (!isBackgroundPoll) {
-      // If remote workspace does not yet have aiChatSessions but this browser has user sessions in localStorage, push them to cloud!
-      const localSessions = Array.isArray(latestWorkspaceRef.current.aiChatSessions)
-        ? latestWorkspaceRef.current.aiChatSessions
-        : aiChatSessions;
-      const hasRealUserChat = localSessions.some(
-        (s: any) =>
-          s &&
-          (s.id !== 'session-default' ||
-            (Array.isArray(s.messages) && s.messages.some((m: any) => m.role === 'user')))
-      );
-      if (hasRealUserChat) {
-        setTimeout(() => {
-          persistResourceDirectly('aiChatSessions', localSessions).catch(() => {});
-        }, 300);
-      }
-    }
+    const countRealMessages = (list: any[]) =>
+      (Array.isArray(list) ? list : [])
+        .filter((s: any) => s && !isUntouchedDefaultAiSession(s))
+        .reduce((acc, s) => acc + (Array.isArray(s.messages) ? s.messages.length : 0), 0);
 
-    if (data.aiActiveSessionId && typeof data.aiActiveSessionId === 'string') {
-      setAiActiveSessionIdState(data.aiActiveSessionId);
+    const remoteRealMsgCount = countRealMessages(remoteAiSessions);
+    const mergedRealMsgCount = countRealMessages(mergedSessions);
+
+    if (mergedSessions.length > 0) {
+      setAiChatSessionsState(mergedSessions);
+      const { email: activeEm, userId: activeUid } = resolveActiveUserIdentity();
       try {
-        localStorage.setItem('visualsky_ai_active_session_id', data.aiActiveSessionId);
+        localStorage.setItem('visualsky_ai_chat_sessions', JSON.stringify(mergedSessions));
+        if (activeEm) {
+          localStorage.setItem(`visualsky_ai_chat_sessions_${activeEm}`, JSON.stringify(mergedSessions));
+        }
       } catch {}
-      (latestWorkspaceRef.current as any).aiActiveSessionId = data.aiActiveSessionId;
+      (latestWorkspaceRef.current as any).aiChatSessions = mergedSessions;
+
+      // Resolve best active session ID (never get stuck on an untouched 'session-default' if a real session exists)
+      const candidateActiveId =
+        (data.aiActiveSessionId && data.aiActiveSessionId !== 'session-default' && mergedSessions.some((s: any) => s.id === data.aiActiveSessionId))
+          ? data.aiActiveSessionId
+          : (latestWorkspaceRef.current.aiActiveSessionId &&
+              latestWorkspaceRef.current.aiActiveSessionId !== 'session-default' &&
+              mergedSessions.some((s: any) => s.id === latestWorkspaceRef.current.aiActiveSessionId))
+          ? latestWorkspaceRef.current.aiActiveSessionId
+          : (mergedSessions.find((s: any) => !isUntouchedDefaultAiSession(s))?.id || mergedSessions[0]?.id || 'session-default');
+
+      if (candidateActiveId) {
+        setAiActiveSessionIdState(candidateActiveId);
+        try {
+          localStorage.setItem('visualsky_ai_active_session_id', candidateActiveId);
+          if (activeEm) {
+            localStorage.setItem(`visualsky_ai_active_session_id_${activeEm}`, candidateActiveId);
+          }
+        } catch {}
+        (latestWorkspaceRef.current as any).aiActiveSessionId = candidateActiveId;
+      }
+
+      // If this browser has real user messages/sessions that are not yet in the remote snapshot, push them now (even during background poll!)
+      if (mergedRealMsgCount > remoteRealMsgCount && hasRealAiCopilotSessions(mergedSessions) && activeEm) {
+        setTimeout(() => {
+          persistAiCopilotSessionsNow({
+            email: activeEm,
+            userId: activeUid,
+            sessions: mergedSessions,
+            activeSessionId: candidateActiveId,
+            deletedIds: Array.from(permDeletedSet)
+          }).catch(() => {});
+          persistResourceDirectly('aiChatSessions', mergedSessions).catch(() => {});
+        }, 120);
+      }
     }
 
     // 10. Column Settings Hydration
@@ -1911,24 +2008,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         loadedWorkspaceUserIdRef.current = cleanUserId;
         return applied;
       } else {
-        if (!isBackgroundPoll) {
-          const hasLocalData =
-            (latestWorkspaceRef.current.leads && latestWorkspaceRef.current.leads.length > 0) ||
-            (latestWorkspaceRef.current.campaigns && latestWorkspaceRef.current.campaigns.length > 0) ||
-            (latestWorkspaceRef.current.smtpAccounts && latestWorkspaceRef.current.smtpAccounts.length > 0) ||
-            (latestWorkspaceRef.current.threads && latestWorkspaceRef.current.threads.length > 0) ||
-            (latestWorkspaceRef.current.minedLeads && latestWorkspaceRef.current.minedLeads.length > 0) ||
-            (latestWorkspaceRef.current.aiChatSessions && latestWorkspaceRef.current.aiChatSessions.length > 0);
-          if (hasLocalData) {
-            await persistUserWorkspace({
-              userId: cleanUserId,
-              email: cleanEmail,
-              data: latestWorkspaceRef.current
-            });
-          }
-          loadedWorkspaceEmailRef.current = cleanEmail;
-          loadedWorkspaceUserIdRef.current = cleanUserId;
+        const hasLocalData =
+          (latestWorkspaceRef.current.leads && latestWorkspaceRef.current.leads.length > 0) ||
+          (latestWorkspaceRef.current.campaigns && latestWorkspaceRef.current.campaigns.length > 0) ||
+          (latestWorkspaceRef.current.smtpAccounts && latestWorkspaceRef.current.smtpAccounts.length > 0) ||
+          (latestWorkspaceRef.current.threads && latestWorkspaceRef.current.threads.length > 0) ||
+          (latestWorkspaceRef.current.minedLeads && latestWorkspaceRef.current.minedLeads.length > 0) ||
+          hasRealAiCopilotSessions(latestWorkspaceRef.current.aiChatSessions);
+        if (hasLocalData) {
+          await persistUserWorkspace({
+            userId: cleanUserId,
+            email: cleanEmail,
+            data: latestWorkspaceRef.current
+          });
         }
+        loadedWorkspaceEmailRef.current = cleanEmail;
+        loadedWorkspaceUserIdRef.current = cleanUserId;
         return true;
       }
     } catch (err) {
@@ -2009,6 +2104,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [allUsers]);
   useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_mined_leads', JSON.stringify(minedLeads)); } catch {} } }, [minedLeads]);
+  useEffect(() => {
+    if (hasMountedStorageRef.current) {
+      try {
+        localStorage.setItem('visualsky_ai_chat_sessions', JSON.stringify(aiChatSessions));
+        const cleanEm = (currentUser?.email || '').trim().toLowerCase();
+        if (cleanEm) {
+          localStorage.setItem(`visualsky_ai_chat_sessions_${cleanEm}`, JSON.stringify(aiChatSessions));
+        }
+      } catch {}
+    }
+  }, [aiChatSessions, currentUser?.email]);
+  useEffect(() => {
+    if (hasMountedStorageRef.current && aiActiveSessionId) {
+      try {
+        localStorage.setItem('visualsky_ai_active_session_id', aiActiveSessionId);
+        const cleanEm = (currentUser?.email || '').trim().toLowerCase();
+        if (cleanEm) {
+          localStorage.setItem(`visualsky_ai_active_session_id_${cleanEm}`, aiActiveSessionId);
+        }
+      } catch {}
+    }
+  }, [aiActiveSessionId, currentUser?.email]);
   useEffect(() => { if (hasMountedStorageRef.current) { try { localStorage.setItem('visualsky_notification_settings', JSON.stringify(notificationSettings)); } catch {} } }, [notificationSettings]);
   useEffect(() => {
     hasMountedStorageRef.current = true;
@@ -2046,8 +2163,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const unsubscribeFirestore = subscribeToUserWorkspace(
       { userId: cleanUserId, email: cleanEmail },
       (remoteData) => {
-        if (Date.now() - lastLocalMutationMsRef.current < 2500) return;
+        if (Date.now() - lastLocalMutationMsRef.current < 1800) return;
         applyRemoteWorkspaceSnapshot(remoteData, true);
+      }
+    );
+
+    const unsubscribeAiCopilot = subscribeToAiCopilotSessions(
+      { userId: cleanUserId, email: cleanEmail },
+      (aiData) => {
+        if (Date.now() - lastLocalMutationMsRef.current < 1500) return;
+        if (Array.isArray(aiData.permanentlyDeletedIds) && aiData.permanentlyDeletedIds.length > 0) {
+          recordPermanentlyDeletedIds(aiData.permanentlyDeletedIds.map(String));
+        }
+        const permDel = getPermanentlyDeletedSet();
+        const localList = Array.isArray(latestWorkspaceRef.current.aiChatSessions)
+          ? latestWorkspaceRef.current.aiChatSessions
+          : aiChatSessions;
+        const merged = mergeWorkspaceCollectionsById(aiData.aiChatSessions, localList, permDel).filter(
+          (s: any) => s && Array.isArray(s.messages) && s.messages.length > 0
+        );
+        if (merged.length > 0) {
+          setAiChatSessionsState(merged);
+          (latestWorkspaceRef.current as any).aiChatSessions = merged;
+          try {
+            localStorage.setItem('visualsky_ai_chat_sessions', JSON.stringify(merged));
+            localStorage.setItem(`visualsky_ai_chat_sessions_${cleanEmail}`, JSON.stringify(merged));
+          } catch {}
+          const nextActive =
+            aiData.aiActiveSessionId &&
+            aiData.aiActiveSessionId !== 'session-default' &&
+            merged.some((s: any) => s.id === aiData.aiActiveSessionId)
+              ? aiData.aiActiveSessionId
+              : merged.find((s: any) => !isUntouchedDefaultAiSession(s))?.id || merged[0]?.id;
+          if (nextActive) {
+            setAiActiveSessionIdState(nextActive);
+            (latestWorkspaceRef.current as any).aiActiveSessionId = nextActive;
+          }
+        }
       }
     );
 
@@ -2083,6 +2235,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       unsubscribeFirestore();
+      unsubscribeAiCopilot();
       clearInterval(pollTimer);
       window.removeEventListener('focus', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);
@@ -4946,13 +5099,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setAiChatSessions: React.Dispatch<React.SetStateAction<AIChatSession[]>> = (updater) => {
     setAiChatSessionsState(prev => {
       const next = typeof updater === 'function' ? (updater as (p: AIChatSession[]) => AIChatSession[])(prev) : updater;
-      const safeNext = Array.isArray(next) && next.length > 0 ? next : [createDefaultAiChatSession(currentUser?.name)];
+      const rawNext = Array.isArray(next) && next.length > 0 ? next : [createDefaultAiChatSession(currentUser?.name)];
+      const safeNext = hasRealAiCopilotSessions(rawNext)
+        ? rawNext.filter(s => !(s.id === 'session-default' && isUntouchedDefaultAiSession(s)))
+        : rawNext;
       const nextIds = new Set(safeNext.map(s => String(s.id)));
-      const removedIds = prev
-        .map(s => String(s.id))
-        .filter(id => id && id !== 'session-default' && !nextIds.has(id));
-      if (removedIds.length > 0) {
-        recordPermanentlyDeletedIds(removedIds);
+      const removedSessions = prev.filter(s => s && s.id && !nextIds.has(String(s.id)));
+      const tombstonesToRecord: string[] = [];
+      for (const rem of removedSessions) {
+        if (rem.id !== 'session-default') {
+          tombstonesToRecord.push(String(rem.id));
+        }
+        if (Array.isArray(rem.messages)) {
+          for (const m of rem.messages) {
+            if (m && m.id && m.id !== 'msg-init') {
+              tombstonesToRecord.push(String(m.id));
+            }
+          }
+        }
+      }
+      if (tombstonesToRecord.length > 0) {
+        recordPermanentlyDeletedIds(tombstonesToRecord);
       }
       persistResourceDirectly('aiChatSessions', safeNext);
       return safeNext;
@@ -4961,22 +5128,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const setAiActiveSessionId = (id: string) => {
     setAiActiveSessionIdState(id);
+    const { email: cleanEm, userId: cleanUid, isAuth } = resolveActiveUserIdentity();
     try {
       localStorage.setItem('visualsky_ai_active_session_id', id);
+      if (cleanEm) {
+        localStorage.setItem(`visualsky_ai_active_session_id_${cleanEm}`, id);
+      }
     } catch {}
     if (latestWorkspaceRef.current) {
       (latestWorkspaceRef.current as any).aiActiveSessionId = id;
     }
-    setTimeout(() => {
-      saveWorkspaceToDatabase().catch(() => {});
-    }, 150);
+    if (isAuth && cleanEm) {
+      const currentSessions = Array.isArray(latestWorkspaceRef.current?.aiChatSessions)
+        ? latestWorkspaceRef.current.aiChatSessions
+        : aiChatSessions;
+      persistAiCopilotSessionsNow({
+        email: cleanEm,
+        userId: cleanUid,
+        sessions: currentSessions,
+        activeSessionId: id
+      }).catch(() => {});
+    }
   };
 
   const deleteAiChatSession = (sessionId: string) => {
-    if (sessionId && sessionId !== 'session-default') {
-      recordPermanentlyDeletedIds([sessionId]);
-    }
     setAiChatSessionsState(prev => {
+      const target = prev.find(s => s.id === sessionId);
+      const idsToTombstone: string[] = [];
+      if (sessionId && sessionId !== 'session-default') {
+        idsToTombstone.push(sessionId);
+      }
+      if (target && Array.isArray(target.messages)) {
+        for (const m of target.messages) {
+          if (m && m.id && m.id !== 'msg-init') {
+            idsToTombstone.push(String(m.id));
+          }
+        }
+      }
+      if (idsToTombstone.length > 0) {
+        recordPermanentlyDeletedIds(idsToTombstone);
+      }
+
       if (prev.length <= 1) {
         const resetSession: AIChatSession = {
           id: `session-${Date.now()}`,
@@ -4984,13 +5176,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           createdAt: 'Just now',
           messages: createDefaultAiChatSession(currentUser?.name).messages
         };
-        setAiActiveSessionId(resetSession.id);
+        setAiActiveSessionIdState(resetSession.id);
+        if (latestWorkspaceRef.current) {
+          (latestWorkspaceRef.current as any).aiActiveSessionId = resetSession.id;
+        }
         persistResourceDirectly('aiChatSessions', [resetSession]);
         return [resetSession];
       }
       const remaining = prev.filter(s => s.id !== sessionId);
+      const nextActiveId = aiActiveSessionId === sessionId ? (remaining[0]?.id || 'session-default') : aiActiveSessionId;
       if (aiActiveSessionId === sessionId) {
-        setAiActiveSessionId(remaining[0]?.id || 'session-default');
+        setAiActiveSessionIdState(nextActiveId);
+        if (latestWorkspaceRef.current) {
+          (latestWorkspaceRef.current as any).aiActiveSessionId = nextActiveId;
+        }
       }
       persistResourceDirectly('aiChatSessions', remaining);
       return remaining;
