@@ -112,8 +112,13 @@ export const DomainProspectorPanel: React.FC<DomainProspectorPanelProps> = ({
           {/* Target Website / Seed Domain */}
           <div className="md:col-span-2 space-y-1.5">
             <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
-              <span>Benchmark Website Domain or Competitor URL</span>
-              <span className="text-[10px] text-indigo-400">e.g. linear.app, stripe.com, shopify.com</span>
+              <span className="flex items-center gap-1.5 text-indigo-300">
+                <Globe className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Benchmark Website Domain or Competitor URL (Type Any Website):</span>
+              </span>
+              <span className="text-[10px] text-indigo-400 font-semibold bg-indigo-950/70 px-2 py-0.5 rounded-full border border-indigo-500/30">
+                Type Any Domain
+              </span>
             </label>
             <div className="relative">
               <Globe className="w-4 h-4 text-indigo-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -121,7 +126,7 @@ export const DomainProspectorPanel: React.FC<DomainProspectorPanelProps> = ({
                 type="text"
                 value={seedDomain}
                 onChange={(e) => setSeedDomain(e.target.value)}
-                placeholder="e.g. stripe.com or companydomain.com"
+                placeholder="Type ANY domain (e.g. stripe.com, shopify.com, webflow.com, pathao.com, or your competitor's site)..."
                 className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-9 pr-3 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
                 required
               />
@@ -152,8 +157,18 @@ export const DomainProspectorPanel: React.FC<DomainProspectorPanelProps> = ({
         </div>
 
         {/* Target Decision Maker Role Selection */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-bold text-slate-300 block">Target Decision Maker Role</label>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs font-bold text-slate-300">
+            <span>Target Decision Maker Role (Type Custom Role or Select Preset):</span>
+            <span className="text-[10px] text-indigo-400 font-normal">e.g. Founder, Medical Director, Managing Partner</span>
+          </div>
+          <input
+            type="text"
+            value={targetRole}
+            onChange={(e) => setTargetRole(e.target.value)}
+            placeholder="Type any custom role (e.g. Managing Partner, VP Procurement, Chief Medical Officer)..."
+            className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none font-medium"
+          />
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
             {rolePresets.map((r) => {
               const isSelected = targetRole === r;
@@ -162,7 +177,7 @@ export const DomainProspectorPanel: React.FC<DomainProspectorPanelProps> = ({
                   key={r}
                   type="button"
                   onClick={() => setTargetRole(r)}
-                  className={`py-2 px-2 rounded-xl text-[11px] font-bold border transition text-center truncate cursor-pointer ${
+                  className={`py-1.5 px-2 rounded-xl text-[11px] font-bold border transition text-center truncate cursor-pointer ${
                     isSelected
                       ? 'bg-indigo-600 border-indigo-400 text-white shadow-md'
                       : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:bg-slate-850'
