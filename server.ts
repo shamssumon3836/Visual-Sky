@@ -7465,11 +7465,16 @@ async function startServer() {
     process.env.NODE_ENV !== 'production';
   const isProdServer = !isDevTsx;
 
-  // Refresh prebuilt assets on dev startup only if prebuilt/app.js is missing
-  if (isDevTsx && !fs.existsSync(prebuiltAppJsPath)) {
+  // Refresh prebuilt assets on dev startup so any code changes are immediately compiled into prebuilt/app.js
+  if (isDevTsx) {
     try {
       const cp = await import('child_process');
       cp.execSync('node scripts/sync-prebuilt.cjs', { cwd: process.cwd(), stdio: 'inherit' });
+      if (fs.existsSync(runtimeAppJsCandidate)) {
+        try {
+          fs.unlinkSync(runtimeAppJsCandidate);
+        } catch {}
+      }
     } catch (e) {
       console.warn('[Server Startup] sync-prebuilt warning:', e);
     }

@@ -28,11 +28,7 @@ import {
   EyeOff,
   Search,
   RefreshCw,
-  Save,
-  FolderOpen,
-  Link2,
-  ExternalLink,
-  Paperclip
+  Save
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { OWNER_PAYOUT_ACCOUNTS, BDT_CLIENT_PLANS } from '../auth/AuthModal';
@@ -48,33 +44,8 @@ export const OwnerPanel: React.FC = () => {
     leads,
     smtpAccounts,
     campaigns,
-    addNotification,
-    driveStorageSettings,
-    updateDriveStorageSettings,
-    setActiveTab: setGlobalTab
+    addNotification
   } = useApp();
-
-  const [driveUrlInput, setDriveUrlInput] = useState<string>(driveStorageSettings?.folderUrl || '');
-  const [driveLabelInput, setDriveLabelInput] = useState<string>(
-    driveStorageSettings?.folderName || 'My Google Drive Email Attachments'
-  );
-  const [driveSavedMsg, setDriveSavedMsg] = useState<boolean>(false);
-
-  useEffect(() => {
-    setDriveUrlInput(driveStorageSettings?.folderUrl || '');
-    setDriveLabelInput(driveStorageSettings?.folderName || 'My Google Drive Email Attachments');
-  }, [driveStorageSettings?.folderUrl, driveStorageSettings?.folderName]);
-
-  const handleSaveOwnerDriveSettings = (e: React.FormEvent) => {
-    e.preventDefault();
-    updateDriveStorageSettings({
-      folderUrl: driveUrlInput.trim(),
-      folderName: driveLabelInput.trim() || 'My Google Drive Email Attachments'
-    });
-    setDriveSavedMsg(true);
-    confetti({ particleCount: 45, spread: 60, origin: { y: 0.25 } });
-    setTimeout(() => setDriveSavedMsg(false), 3000);
-  };
 
   const [activeTab, setActiveTab] = useState<'credentials' | 'billing' | 'customers' | 'system'>('credentials');
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -676,102 +647,6 @@ export const OwnerPanel: React.FC = () => {
             </button>
           </div>
         </form>
-      </div>
-
-      {/* =================================================================== */}
-      {/* ALWAYS-VISIBLE GOOGLE DRIVE FOLDER LINK & ATTACHMENT STORAGE EDITOR */}
-      {/* =================================================================== */}
-      <div className="bg-slate-900/95 border-2 border-emerald-500/50 rounded-2xl p-5 md:p-6 space-y-4 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-800">
-          <div>
-            <h2 className="text-base font-bold text-slate-100 flex items-center gap-2 flex-wrap">
-              <FolderOpen className="w-4 h-4 text-emerald-400" />
-              <span>
-                ☁️ ইমেইল ফাইল অ্যাটাচমেন্টের Google Drive Folder Link সেটিংস (Set / Change Google Drive Link Anytime)
-              </span>
-              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-[10px] font-black text-emerald-300">
-                0 KB Hosting Used
-              </span>
-            </h2>
-            <p className="text-xs text-slate-300 mt-1">
-              ইনবক্স ও মেইলে যেকোনো ফাইল (PDF, Image, ZIP, Doc, Video) অ্যাটাচ করলে সেটি হোস্টিংয়ের জায়গা না নিয়ে আপনার Google Drive-এ স্টোর হবে। নিচে আপনার <strong>Google Drive Folder Link</strong> পেস্ট করে সেভ করুন এবং পরবর্তীতে যখন ইচ্ছা এখান থেকে লিংক পরিবর্তন (Change) করুন।
-            </p>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {driveStorageSettings?.folderUrl && (
-              <a
-                href={driveStorageSettings.folderUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-xs font-bold text-emerald-300 flex items-center gap-1.5 transition"
-              >
-                <span>Open Drive Folder</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-            )}
-            <button
-              type="button"
-              onClick={() => setGlobalTab('drive_storage')}
-              className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-xs font-bold text-cyan-300 flex items-center gap-1.5 cursor-pointer transition"
-            >
-              <Paperclip className="w-3.5 h-3.5" />
-              <span>Attach Files &amp; Hub</span>
-            </button>
-          </div>
-        </div>
-
-        <form onSubmit={handleSaveOwnerDriveSettings} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-          <div className="md:col-span-2">
-            <label className="block text-xs font-semibold text-slate-200 mb-1.5">
-              আপনার Google Drive Shared Folder Link (যেকোনো সময় পরিবর্তনযোগ্য) *
-            </label>
-            <div className="relative">
-              <Link2 className="w-4 h-4 text-emerald-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="url"
-                required
-                value={driveUrlInput}
-                onChange={(e) => setDriveUrlInput(e.target.value)}
-                placeholder="https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz?usp=sharing"
-                className="w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm font-mono text-white focus:outline-none focus:border-emerald-400"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-200 mb-1.5">
-              Folder Name / Label (ঐচ্ছিক)
-            </label>
-            <input
-              type="text"
-              value={driveLabelInput}
-              onChange={(e) => setDriveLabelInput(e.target.value)}
-              placeholder="My Google Drive Email Attachments"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-100 focus:outline-none focus:border-emerald-400"
-            />
-          </div>
-
-          <div>
-            <button
-              type="submit"
-              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-emerald-500/25"
-            >
-              <Save className="w-4 h-4" />
-              <span>
-                {driveStorageSettings?.folderUrl
-                  ? 'Update Google Drive Link'
-                  : 'Save Google Drive Link'}
-              </span>
-            </button>
-          </div>
-        </form>
-
-        {driveSavedMsg && (
-          <div className="p-3 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 text-xs font-bold flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>✅ আপনার Google Drive ফোল্ডার লিংক সফলভাবে সেভ ও আপডেট হয়েছে!</span>
-          </div>
-        )}
       </div>
 
       {/* =================================================================== */}

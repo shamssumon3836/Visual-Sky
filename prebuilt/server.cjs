@@ -42,6 +42,7 @@ var import_imapflow = require("imapflow");
 var import_mailparser = require("mailparser");
 var import_crypto = __toESM(require("crypto"), 1);
 var import_dns = __toESM(require("dns"), 1);
+var import_zlib = __toESM(require("zlib"), 1);
 import_dotenv.default.config();
 process.env.GOMAXPROCS = "1";
 process.env.UV_THREADPOOL_SIZE = "1";
@@ -4483,24 +4484,53 @@ app.post("/api/smtp/send", async (req, res) => {
     const incomingAttachments = Array.isArray(attachments) ? attachments : [];
     const savedDriveCfg = getSavedDriveStorageSettings();
     for (const att of incomingAttachments) {
-      if (att && att.name && att.contentBase64) {
+      if (!att || !att.name) continue;
+      const attId = String(att.id || `out-att-${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, "_");
+      att.id = attId;
+      att.viewUrl = `/api/attachments/view/${encodeURIComponent(attId)}`;
+      att.downloadUrl = `/api/attachments/download/${encodeURIComponent(attId)}`;
+      let buf = null;
+      if (att.contentBase64) {
         const cleanB64 = String(att.contentBase64).replace(/^data:[^;]+;base64,/, "");
-        const buf = Buffer.from(cleanB64, "base64");
-        const attId = String(att.id || `out-att-${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, "_");
-        att.id = attId;
-        att.viewUrl = `/api/attachments/view/${encodeURIComponent(attId)}`;
-        att.downloadUrl = `/api/attachments/download/${encodeURIComponent(attId)}`;
-        if (buf.length > 0) {
-          storeAttachmentBinary(attId, att.name, att.mimeType || "application/octet-stream", buf, {
-            source: "outgoing",
-            senderEmail,
-            recipientEmail: cleanRecipientEmail,
-            subject: cleanSubject,
-            driveFolderUrl: att.driveFolderUrl || savedDriveCfg.folderUrl || void 0,
-            driveFileUrl: att.driveFileUrl && !String(att.driveFileUrl).includes("/folders/") ? att.driveFileUrl : void 0,
-            uploadedToDrive: Boolean(att.uploadedToDrive || att.driveFileUrl && !String(att.driveFileUrl).includes("/folders/"))
-          });
+        buf = Buffer.from(cleanB64, "base64");
+      } else {
+        const cachedBin = getAttachmentBinaryById(attId, att.name);
+        if (cachedBin && cachedBin.buffer?.length > 0) {
+          buf = cachedBin.buffer;
+          att.contentBase64 = cachedBin.buffer.toString("base64");
         }
+      }
+      if (buf && buf.length > 0) {
+        let driveFolderUrl = att.driveFolderUrl || savedDriveCfg.folderUrl || void 0;
+        let driveFileUrl = att.driveFileUrl && !String(att.driveFileUrl).includes("/folders/") ? att.driveFileUrl : void 0;
+        let uploadedToDrive = Boolean(att.uploadedToDrive || driveFileUrl);
+        if (!uploadedToDrive && savedDriveCfg.appsScriptWebAppUrl) {
+          const bridgeRes = await uploadBufferToGoogleDrive({
+            fileName: att.name,
+            mimeType: att.mimeType || "application/octet-stream",
+            buffer: buf,
+            folderUrl: driveFolderUrl,
+            folderId: savedDriveCfg.folderId,
+            appsScriptWebAppUrl: savedDriveCfg.appsScriptWebAppUrl
+          });
+          if (bridgeRes.uploadedViaBridge) {
+            uploadedToDrive = true;
+            driveFileUrl = bridgeRes.driveFileUrl;
+            driveFolderUrl = bridgeRes.driveFolderUrl || driveFolderUrl;
+            att.driveFileUrl = driveFileUrl;
+            att.driveFolderUrl = driveFolderUrl;
+            att.uploadedToDrive = true;
+          }
+        }
+        storeAttachmentBinary(attId, att.name, att.mimeType || "application/octet-stream", buf, {
+          source: "outgoing",
+          senderEmail,
+          recipientEmail: cleanRecipientEmail,
+          subject: cleanSubject,
+          driveFolderUrl,
+          driveFileUrl,
+          uploadedToDrive
+        });
       }
     }
     const validBinaryAttachments = incomingAttachments.filter(
@@ -4859,58 +4889,13 @@ try {
         if (item && item.id) {
           const key = String(item.id);
           attachmentIndexMap.set(key, item);
-          try {
-            const pathsToTry = [
-              import_path.default.join(ATTACHMENTS_DIR, key),
-              item.filePath
-            ].filter(Boolean);
-            for (const p of pathsToTry) {
-              if (import_fs.default.existsSync(p)) {
-                const buf = import_fs.default.readFileSync(p);
-                if (buf.length > 0) {
-                  const mime = item.mimeType || "application/octet-stream";
-                  const fname = item.name || key;
-                  attachmentMemoryBuffers.set(key, { buffer: buf, mimeType: mime, name: fname });
-                  const uidSuffixMatch = key.match(/[-_](\d+)[-_](\d+)$/);
-                  if (uidSuffixMatch) {
-                    attachmentMemoryBuffers.set(`imap-att-${uidSuffixMatch[1]}-${uidSuffixMatch[2]}`, {
-                      buffer: buf,
-                      mimeType: mime,
-                      name: fname
-                    });
-                  }
-                  break;
-                }
-              }
-            }
-          } catch {
-          }
-        }
-      }
-    }
-  }
-  if (import_fs.default.existsSync(ATTACHMENTS_DIR)) {
-    const diskFiles = import_fs.default.readdirSync(ATTACHMENTS_DIR);
-    for (const f of diskFiles) {
-      if (!attachmentMemoryBuffers.has(f)) {
-        try {
-          const fullP = import_path.default.join(ATTACHMENTS_DIR, f);
-          const buf = import_fs.default.readFileSync(fullP);
-          if (buf.length > 0) {
-            const rec = attachmentIndexMap.get(f);
-            const mime = rec?.mimeType || "application/octet-stream";
-            const fname = rec?.name || f;
-            attachmentMemoryBuffers.set(f, { buffer: buf, mimeType: mime, name: fname });
-            const uidSuffixMatch = f.match(/[-_](\d+)[-_](\d+)$/);
-            if (uidSuffixMatch) {
-              attachmentMemoryBuffers.set(`imap-att-${uidSuffixMatch[1]}-${uidSuffixMatch[2]}`, {
-                buffer: buf,
-                mimeType: mime,
-                name: fname
-              });
+          if (item.uploadedToDrive && item.driveFileUrl && !String(item.driveFileUrl).includes("/folders/")) {
+            try {
+              const p = item.filePath || import_path.default.join(ATTACHMENTS_DIR, key);
+              if (p && import_fs.default.existsSync(p)) import_fs.default.unlinkSync(p);
+            } catch {
             }
           }
-        } catch {
         }
       }
     }
@@ -4930,16 +4915,25 @@ function storeAttachmentBinary(id, name, mimeType, buffer, meta = {}) {
   const cleanMime = String(mimeType || "application/octet-stream").trim() || "application/octet-stream";
   const filePath = import_path.default.join(ATTACHMENTS_DIR, safeId);
   attachmentMemoryBuffers.set(safeId, { buffer, mimeType: cleanMime, name: cleanName });
-  if (attachmentMemoryBuffers.size > 150) {
+  if (attachmentMemoryBuffers.size > 25) {
     const oldestKey = attachmentMemoryBuffers.keys().next().value;
     if (oldestKey) attachmentMemoryBuffers.delete(oldestKey);
   }
-  try {
-    import_fs.default.writeFileSync(filePath, buffer);
-  } catch {
-  }
   const existing = attachmentIndexMap.get(safeId);
   const savedSettings = getSavedDriveStorageSettings();
+  const isUploadedToDrive = Boolean(meta.uploadedToDrive ?? existing?.uploadedToDrive ?? false);
+  const resolvedDriveFileUrl = meta.driveFileUrl || existing?.driveFileUrl || void 0;
+  if (isUploadedToDrive && resolvedDriveFileUrl && !String(resolvedDriveFileUrl).includes("/folders/")) {
+    try {
+      if (import_fs.default.existsSync(filePath)) import_fs.default.unlinkSync(filePath);
+    } catch {
+    }
+  } else {
+    try {
+      import_fs.default.writeFileSync(filePath, buffer);
+    } catch {
+    }
+  }
   const record = {
     id: safeId,
     name: cleanName,
@@ -4947,8 +4941,8 @@ function storeAttachmentBinary(id, name, mimeType, buffer, meta = {}) {
     mimeType: cleanMime,
     filePath,
     driveFolderUrl: meta.driveFolderUrl || existing?.driveFolderUrl || savedSettings.folderUrl || void 0,
-    driveFileUrl: meta.driveFileUrl || existing?.driveFileUrl || void 0,
-    uploadedToDrive: meta.uploadedToDrive ?? existing?.uploadedToDrive ?? false,
+    driveFileUrl: resolvedDriveFileUrl,
+    uploadedToDrive: isUploadedToDrive,
     source: meta.source || existing?.source || "incoming",
     senderEmail: meta.senderEmail || existing?.senderEmail,
     recipientEmail: meta.recipientEmail || existing?.recipientEmail,
@@ -5311,6 +5305,11 @@ app.get("/api/attachments/view/:id", async (req, res) => {
   const queryIdx = typeof req.query.idx === "string" ? req.query.idx : "";
   const item = await resolveAttachmentBinaryOnDemand(req.params.id, queryName, queryMsgId, queryIdx);
   if (!item || !item.buffer || item.buffer.length === 0) {
+    const safeId = String(req.params.id || "").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const rec = attachmentIndexMap.get(safeId);
+    if (rec?.driveFileUrl) {
+      return res.redirect(rec.driveFileUrl);
+    }
     res.setHeader("Content-Type", "application/json");
     return res.status(404).json({ success: false, error: "Attachment not found" });
   }
@@ -5328,6 +5327,11 @@ app.get("/api/attachments/download/:id", async (req, res) => {
   const queryIdx = typeof req.query.idx === "string" ? req.query.idx : "";
   const item = await resolveAttachmentBinaryOnDemand(req.params.id, queryName, queryMsgId, queryIdx);
   if (!item || !item.buffer || item.buffer.length === 0) {
+    const safeId = String(req.params.id || "").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const rec = attachmentIndexMap.get(safeId);
+    if (rec?.driveFileUrl) {
+      return res.redirect(rec.driveFileUrl);
+    }
     res.setHeader("Content-Type", "application/json");
     return res.status(404).json({ success: false, error: "Attachment not found" });
   }
@@ -5895,6 +5899,12 @@ app.post("/api/drive-storage/sync-file/:id", async (req, res) => {
         record.driveFolderUrl = result.driveFolderUrl;
         record.driveFileUrl = result.driveFileUrl;
         record.uploadedToDrive = true;
+        if (record.filePath && import_fs.default.existsSync(record.filePath)) {
+          try {
+            import_fs.default.unlinkSync(record.filePath);
+          } catch {
+          }
+        }
         attachmentIndexMap.set(safeId, record);
         saveAttachmentIndexToDisk();
       }
@@ -5999,13 +6009,20 @@ async function startServer() {
   const publicCandidate = import_path.default.join(process.cwd(), "public");
   const prebuiltAppJsPath = import_path.default.join(prebuiltCandidate, "app.js");
   const prebuiltAppCssPath = import_path.default.join(prebuiltCandidate, "app.css");
+  const prebuiltFirebaseRuntimePath = import_path.default.join(prebuiltCandidate, "firebase-runtime.js");
   const runtimeAppJsCandidate = import_path.default.join(DATA_DIR, "runtime-app.js");
   const isDevTsx = Boolean(process.argv[1] && process.argv[1].endsWith("server.ts")) && process.env.NODE_ENV !== "production";
   const isProdServer = !isDevTsx;
-  if (isDevTsx && !import_fs.default.existsSync(prebuiltAppJsPath)) {
+  if (isDevTsx) {
     try {
       const cp = await import("child_process");
       cp.execSync("node scripts/sync-prebuilt.cjs", { cwd: process.cwd(), stdio: "inherit" });
+      if (import_fs.default.existsSync(runtimeAppJsCandidate)) {
+        try {
+          import_fs.default.unlinkSync(runtimeAppJsCandidate);
+        } catch {
+        }
+      }
     } catch (e) {
       console.warn("[Server Startup] sync-prebuilt warning:", e);
     }
@@ -6036,14 +6053,16 @@ async function startServer() {
       return cached;
     }
     const raw = import_fs.default.readFileSync(filePath);
+    const gzip = import_zlib.default.gzipSync(raw, { level: 6 });
     const etag = `"v-${Math.floor(mtimeMs).toString(36)}-${raw.byteLength.toString(36)}"`;
-    const entry = { mtimeMs, etag, raw };
+    const entry = { mtimeMs, etag, raw, gzip };
     memoryAssetCache.set(filePath, entry);
     return entry;
   };
   try {
     getCachedAsset(getActiveAppJsPath());
     getCachedAsset(prebuiltAppCssPath);
+    getCachedAsset(prebuiltFirebaseRuntimePath);
   } catch {
   }
   const getDynamicAssetVersion = () => {
@@ -6065,11 +6084,28 @@ async function startServer() {
       }
       res.setHeader("Content-Type", contentType);
       res.setHeader("ETag", asset.etag);
-      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Vary", "Accept-Encoding");
+      const hasVersionQuery = Boolean(req.query && req.query.v);
+      res.setHeader(
+        "Cache-Control",
+        hasVersionQuery ? "public, max-age=31536000, immutable" : "public, max-age=300, stale-while-revalidate=86400"
+      );
       if (req.headers["if-none-match"] === asset.etag) {
         return res.status(304).end();
       }
+      const acceptEncoding = String(req.headers["accept-encoding"] || "");
+      if (acceptEncoding.includes("gzip")) {
+        res.setHeader("Content-Encoding", "gzip");
+        res.setHeader("Content-Length", String(asset.gzip.byteLength));
+        if (req.method === "HEAD") {
+          return res.status(200).end();
+        }
+        return res.status(200).end(asset.gzip);
+      }
       res.setHeader("Content-Length", String(asset.raw.byteLength));
+      if (req.method === "HEAD") {
+        return res.status(200).end();
+      }
       return res.status(200).end(asset.raw);
     } catch {
       return res.sendFile(filePath);
@@ -6086,7 +6122,15 @@ async function startServer() {
   app.get(["/prebuilt/bundle.css", "/prebuilt/app.css"], (req, res) => {
     return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, "text/css; charset=utf-8");
   });
-  app.get("/prebuilt/firebase-runtime.js", (_req, res) => {
+  app.get("/prebuilt/firebase-runtime.js", (req, res) => {
+    if (import_fs.default.existsSync(prebuiltFirebaseRuntimePath)) {
+      return sendMemoryCachedAsset(
+        req,
+        res,
+        prebuiltFirebaseRuntimePath,
+        "application/javascript; charset=utf-8"
+      );
+    }
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
     return res.status(200).end("export {};\n");
@@ -6096,31 +6140,46 @@ async function startServer() {
     app.use(import_express.default.static(publicCandidate, { index: false, etag: true, maxAge: "1d" }));
   }
   let cachedHtmlVersion = "";
-  let cachedHtmlString = "";
-  const sendFreshIndexHtml = (res) => {
+  let cachedHtmlRaw = null;
+  let cachedHtmlGzip = null;
+  const sendFreshIndexHtml = (req, res) => {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
+    res.setHeader("Vary", "Accept-Encoding");
     const distCandidate = import_path.default.join(process.cwd(), "dist");
     const htmlPath = import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "index.html")) ? import_path.default.join(prebuiltCandidate, "index.html") : import_fs.default.existsSync(import_path.default.join(distCandidate, "index.html")) ? import_path.default.join(distCandidate, "index.html") : import_path.default.join(process.cwd(), "index.html");
     try {
       const v = getDynamicAssetVersion();
-      if (cachedHtmlString && cachedHtmlVersion === v) {
-        return res.send(cachedHtmlString);
+      if (!cachedHtmlRaw || !cachedHtmlGzip || cachedHtmlVersion !== v) {
+        let html = import_fs.default.readFileSync(htmlPath, "utf8");
+        html = html.replace(/\/prebuilt\/(bundle|app)\.css(\?v=[^"']*)?/g, `/prebuilt/bundle.css?v=${v}`).replace(/\/prebuilt\/(bundle|app)\.js(\?v=[^"']*)?/g, `/prebuilt/bundle.js?v=${v}`);
+        cachedHtmlVersion = v;
+        cachedHtmlRaw = Buffer.from(html, "utf8");
+        cachedHtmlGzip = import_zlib.default.gzipSync(cachedHtmlRaw, { level: 6 });
       }
-      let html = import_fs.default.readFileSync(htmlPath, "utf8");
-      html = html.replace(/\/prebuilt\/(bundle|app)\.css(\?v=[^"']*)?/g, `/prebuilt/bundle.css?v=${v}`).replace(/\/prebuilt\/(bundle|app)\.js(\?v=[^"']*)?/g, `/prebuilt/bundle.js?v=${v}`);
-      cachedHtmlVersion = v;
-      cachedHtmlString = html;
-      return res.send(html);
+      const acceptEncoding = String(req.headers["accept-encoding"] || "");
+      if (acceptEncoding.includes("gzip") && cachedHtmlGzip) {
+        res.setHeader("Content-Encoding", "gzip");
+        res.setHeader("Content-Length", String(cachedHtmlGzip.byteLength));
+        if (req.method === "HEAD") {
+          return res.status(200).end();
+        }
+        return res.status(200).end(cachedHtmlGzip);
+      }
+      res.setHeader("Content-Length", String(cachedHtmlRaw.byteLength));
+      if (req.method === "HEAD") {
+        return res.status(200).end();
+      }
+      return res.status(200).end(cachedHtmlRaw);
     } catch {
       return res.sendFile(htmlPath);
     }
   };
-  app.get(["/", "/index.html"], (_req, res, next) => {
+  app.get(["/", "/index.html"], (req, res, next) => {
     if (import_fs.default.existsSync(prebuiltAppJsPath) && import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "index.html"))) {
-      return sendFreshIndexHtml(res);
+      return sendFreshIndexHtml(req, res);
     }
     return next();
   });
@@ -6131,8 +6190,8 @@ async function startServer() {
       maxAge: "1h"
     })
   );
-  app.get("*", (_req, res) => {
-    return sendFreshIndexHtml(res);
+  app.get("*", (req, res) => {
+    return sendFreshIndexHtml(req, res);
   });
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`VisualSky AI Cold Outreach Platform running at http://0.0.0.0:${PORT}`);
