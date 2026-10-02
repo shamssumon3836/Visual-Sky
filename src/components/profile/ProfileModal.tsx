@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { 
   User, 
@@ -12,13 +12,11 @@ import {
   Building, 
   Phone, 
   Mail, 
-  Globe, 
   ShieldCheck, 
-  Sparkles,
   AlertCircle,
-  HardDrive,
-  FolderOpen,
-  ExternalLink
+  Upload,
+  Trash2,
+  RefreshCw
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -47,20 +45,13 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
     logout, 
     requestLogout,
     addNotification,
-    driveStorageSettings,
-    updateDriveStorageSettings
+    driveStorageSettings
   } = useApp();
 
-  const [activeSubTab, setActiveSubTab] = useState<'profile' | 'avatar' | 'security' | 'drive'>('profile');
-  const [driveFolderUrl, setDriveFolderUrl] = useState(driveStorageSettings.folderUrl || '');
-  const [driveFolderName, setDriveFolderName] = useState(driveStorageSettings.folderName || 'Visual Sky Email Attachments');
-  const [driveAppsScriptUrl, setDriveAppsScriptUrl] = useState(driveStorageSettings.appsScriptWebAppUrl || '');
-
-  useEffect(() => {
-    setDriveFolderUrl(driveStorageSettings.folderUrl || '');
-    setDriveFolderName(driveStorageSettings.folderName || 'Visual Sky Email Attachments');
-    setDriveAppsScriptUrl(driveStorageSettings.appsScriptWebAppUrl || '');
-  }, [driveStorageSettings.folderUrl, driveStorageSettings.folderName, driveStorageSettings.appsScriptWebAppUrl]);
+  const [activeSubTab, setActiveSubTab] = useState<'profile' | 'avatar' | 'security'>('profile');
+  const [isDraggingAvatar, setIsDraggingAvatar] = useState<boolean>(false);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState<boolean>(false);
+  const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Form Fields
   const [name, setName] = useState(currentUser.name || '');
@@ -91,6 +82,106 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
     setPhone(currentUser.phone || '+1 (415) 890-4211');
     setAvatar(currentUser.avatar || PRESET_AVATARS[0]);
   }, [currentUser]);
+
+  // Compress & resize uploaded image to lightweight 256x256 avatar (prevents page load slowdown & hosting bloat)
+  const compressImageFileToDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const rawDataUrl = String(reader.result || '');
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const maxDim = 256;
+            let width = img.width || maxDim;
+            let height = img.height || maxDim;
+            if (width > height) {
+              if (width > maxDim) {
+                height = Math.round((height * maxDim) / width);
+                width = maxDim;
+              }
+            } else {
+              if (height > maxDim) {
+                width = Math.round((width * maxDim) / height);
+                height = maxDim;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(img, 0, 0, width, height);
+              const compressed = canvas.toDataURL('image/jpeg', 0.86);
+              resolve(compressed);
+            } else {
+              resolve(rawDataUrl);
+            }
+          } catch {
+            resolve(rawDataUrl);
+          }
+        };
+        img.onerror = () => resolve(rawDataUrl);
+        img.src = rawDataUrl;
+      };
+      reader.onerror = () => reject(new Error('Failed to read image file'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleUploadCustomAvatarFile = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const file = fileList[0];
+    if (!file.type.startsWith('image/') && !/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name)) {
+      addNotification({
+        title: '⚠️ Invalid Image Format',
+        message: 'অনুগ্রহ করে একটি ছবি (JPG, PNG, WEBP, GIF) সিলেক্ট করুন।',
+        type: 'system'
+      });
+      return;
+    }
+
+    setIsUploadingAvatar(true);
+    try {
+      const optimizedDataUrl = await compressImageFileToDataUrl(file);
+      setAvatar(optimizedDataUrl);
+      setCustomAvatarUrl('');
+      updateUserProfile({ avatar: optimizedDataUrl });
+
+      // If Google Drive folder is linked in Sidebar, also back up the profile photo to Google Drive silently
+      if (driveStorageSettings?.folderUrl || driveStorageSettings?.appsScriptWebAppUrl) {
+        fetch('/api/drive-storage/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileName: `profile-avatar-${(name || 'user').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.jpg`,
+            mimeType: 'image/jpeg',
+            size: optimizedDataUrl.length,
+            contentBase64: optimizedDataUrl,
+            folderUrl: driveStorageSettings.folderUrl,
+            folderId: driveStorageSettings.folderId,
+            appsScriptWebAppUrl: driveStorageSettings.appsScriptWebAppUrl,
+            source: 'profile_avatar'
+          })
+        }).catch(() => {});
+      }
+
+      confetti({ particleCount: 35, spread: 55, origin: { y: 0.35 } });
+      addNotification({
+        title: '📸 Profile Picture Uploaded!',
+        message: 'আপনার প্রোফাইল ছবি সফলভাবে আপডেট ও সেভ হয়েছে।',
+        type: 'system'
+      });
+    } catch {
+      addNotification({
+        title: '⚠️ Upload Failed',
+        message: 'ছবিটি লোড করা যায়নি, আবার চেষ্টা করুন।',
+        type: 'system'
+      });
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -157,27 +248,32 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-gradient-to-r from-blue-950/40 via-slate-900 to-cyan-950/40">
           <div className="flex items-center gap-3">
-            <div className="relative">
+            <div
+              onClick={() => {
+                setActiveSubTab('avatar');
+                setTimeout(() => avatarFileInputRef.current?.click(), 80);
+              }}
+              title="Click to upload your own profile photo"
+              className="relative group cursor-pointer"
+            >
               {avatar ? (
                 <img 
                   src={avatar} 
                   alt={name} 
-                  className="w-10 h-10 rounded-2xl object-cover ring-2 ring-cyan-500/50 shadow-md"
+                  className="w-11 h-11 rounded-2xl object-cover ring-2 ring-cyan-500/50 shadow-md group-hover:opacity-80 transition"
                 />
               ) : (
-                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-cyan-500 to-indigo-600 text-black flex items-center justify-center font-black text-sm shadow-md">
+                <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-cyan-500 to-indigo-600 text-black flex items-center justify-center font-black text-sm shadow-md">
                   {initials}
                 </div>
               )}
-              {currentUser.role === 'owner' && (
-                <span className="absolute -bottom-1 -right-1 p-0.5 bg-amber-400 text-slate-950 rounded-full text-[9px] font-black leading-none shadow">
-                  👑
-                </span>
-              )}
+              <span className="absolute -bottom-1 -right-1 p-1 bg-cyan-500 text-slate-950 rounded-full text-[9px] font-black leading-none shadow flex items-center justify-center">
+                <Camera className="w-3 h-3" />
+              </span>
             </div>
             <div>
               <h3 className="font-black text-slate-100 text-base leading-tight">My Profile &amp; Account Settings</h3>
-              <p className="text-[11px] text-slate-400 font-medium">Manage your personal info, photo, and security</p>
+              <p className="text-[11px] text-slate-400 font-medium">Manage your personal info, custom profile photo, and security</p>
             </div>
           </div>
           <button 
@@ -227,19 +323,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
           >
             <Lock className="w-3.5 h-3.5" />
             <span>Password &amp; Security</span>
-          </button>
-
-          <button 
-            type="button" 
-            onClick={() => setActiveSubTab('drive')}
-            className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
-              activeSubTab === 'drive'
-                ? 'border-emerald-400 text-emerald-300 font-black'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
-            <span>☁️ Google Drive Folder</span>
           </button>
         </div>
 
@@ -396,9 +479,110 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
           {/* TAB 2: Profile Photo / Avatar */}
           {activeSubTab === 'avatar' && (
             <div className="space-y-4">
+              <input
+                ref={avatarFileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  handleUploadCustomAvatarFile(e.target.files);
+                  e.target.value = '';
+                }}
+              />
+
+              {/* Live Avatar Preview & Quick Action Bar */}
+              <div className="p-4 bg-slate-900/80 rounded-2xl border border-cyan-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3.5">
+                  <img
+                    src={customAvatarUrl.trim() || avatar}
+                    alt="Preview"
+                    className="w-16 h-16 rounded-2xl object-cover ring-2 ring-cyan-400 shadow-lg shrink-0"
+                  />
+                  <div>
+                    <div className="font-black text-slate-100 text-sm">Current Profile Picture</div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      আপনার নিজের ছবি আপলোড করুন (Drag &amp; Drop অথবা ফোল্ডার থেকে সিলেক্ট করুন)
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => avatarFileInputRef.current?.click()}
+                    disabled={isUploadingAvatar}
+                    className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer transition shadow-md"
+                  >
+                    {isUploadingAvatar ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Upload className="w-3.5 h-3.5" />
+                    )}
+                    <span>{isUploadingAvatar ? 'Uploading...' : 'Upload My Photo'}</span>
+                  </button>
+                  {avatar !== PRESET_AVATARS[0] && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAvatar(PRESET_AVATARS[0]);
+                        setCustomAvatarUrl('');
+                      }}
+                      className="p-2 rounded-xl bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-300 border border-slate-700 cursor-pointer transition"
+                      title="Reset to default avatar"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Drag & Drop + Click to Browse Custom Picture Upload Zone */}
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsDraggingAvatar(true);
+                }}
+                onDragEnter={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsDraggingAvatar(true);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsDraggingAvatar(false);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsDraggingAvatar(false);
+                  if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+                    handleUploadCustomAvatarFile(e.dataTransfer.files);
+                  }
+                }}
+                onClick={() => avatarFileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl p-5 text-center space-y-2 cursor-pointer transition ${
+                  isDraggingAvatar
+                    ? 'border-cyan-400 bg-cyan-500/15 scale-[1.01]'
+                    : 'border-cyan-500/40 hover:border-cyan-400 bg-slate-950/70 hover:bg-slate-900/80'
+                }`}
+              >
+                <div className="w-11 h-11 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400 mx-auto">
+                  <Camera className="w-5 h-5" />
+                </div>
+                <div className="text-xs sm:text-sm font-black text-white">
+                  {isDraggingAvatar
+                    ? '📂 এখানে আপনার ছবি ছেড়ে দিন (Drop Image Here)...'
+                    : '📸 আপনার নিজের ছবি এখানে Drag & Drop করুন অথবা ক্লিক করে ফোল্ডার থেকে সিলেক্ট করুন'}
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Supports JPG, PNG, WEBP, GIF • Auto-optimized so page load stays 100% fast
+                </p>
+              </div>
+
               <div>
                 <label className="block text-[11px] font-bold text-slate-300 mb-2">
-                  Choose from Preset Avatars
+                  Or Choose from Preset Avatars
                 </label>
                 <div className="grid grid-cols-4 gap-3">
                   {PRESET_AVATARS.map((url, idx) => (
@@ -437,19 +621,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
                   placeholder="https://images.unsplash.com/... or company logo URL"
                   className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-cyan-400 rounded-xl text-slate-100 text-xs focus:outline-none transition"
                 />
-              </div>
-
-              {/* Preview */}
-              <div className="p-4 bg-slate-900/60 rounded-2xl border border-slate-800 flex items-center gap-3">
-                <img
-                  src={customAvatarUrl.trim() || avatar}
-                  alt="Preview"
-                  className="w-12 h-12 rounded-2xl object-cover ring-2 ring-cyan-400 shadow-xs"
-                />
-                <div>
-                  <div className="font-bold text-slate-100 text-xs">Live Avatar Preview</div>
-                  <div className="text-[11px] text-slate-400">Will be displayed on your email outbox header &amp; top navbar</div>
-                </div>
               </div>
             </div>
           )}
@@ -539,108 +710,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
 
               <div className="p-3 bg-amber-950/40 border border-amber-500/30 rounded-xl text-amber-300 text-[11px]">
                 💡 Tip: Never share your master password or app passwords. Keep 2FA enabled on Google Workspace.
-              </div>
-            </div>
-          )}
-
-          {/* TAB 4: Google Drive Attachment Storage */}
-          {activeSubTab === 'drive' && (
-            <div className="space-y-4">
-              <div className="p-3.5 bg-emerald-950/25 border border-emerald-500/30 rounded-2xl space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-emerald-300 font-extrabold text-xs">
-                    <HardDrive className="w-4 h-4 text-emerald-400" />
-                    <span>Google Drive Attachment Cloud (0 KB Hosting Disk)</span>
-                  </div>
-                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
-                    driveStorageSettings.folderUrl
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                  }`}>
-                    {driveStorageSettings.folderUrl ? '✓ Linked' : 'Not Set'}
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-300 leading-relaxed">
-                  ইনবক্স বা মেইলে যেকোনো ফাইল Attach করলে সেটি আপনার হোস্টিং সার্ভারে জায়গা না নিয়ে সরাসরি আপনার Google Drive ফোল্ডারের সাথে যুক্ত থাকবে। আপনি যেকোনো সময় নিচের লিংক পরিবর্তন করতে পারবেন।
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                  Google Drive Shared Folder Link <span className="text-emerald-400">*</span>
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="url"
-                    value={driveFolderUrl}
-                    onChange={(e) => setDriveFolderUrl(e.target.value)}
-                    placeholder="https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz?usp=sharing"
-                    className="flex-1 px-3 py-2 bg-slate-900 border border-slate-800 focus:border-emerald-400 rounded-xl text-slate-100 text-xs focus:outline-none font-mono"
-                  />
-                  {driveFolderUrl.trim() && (
-                    <a
-                      href={driveFolderUrl.trim()}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-300 rounded-xl border border-slate-700 flex items-center gap-1 font-bold text-[11px] shrink-0"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" /> Open
-                    </a>
-                  )}
-                </div>
-                {driveStorageSettings.folderId && (
-                  <p className="text-[10px] text-emerald-400 font-mono mt-1">
-                    ✓ Detected Folder ID: {driveStorageSettings.folderId}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                  Folder Display Name
-                </label>
-                <input
-                  type="text"
-                  value={driveFolderName}
-                  onChange={(e) => setDriveFolderName(e.target.value)}
-                  placeholder="Visual Sky Email Attachments"
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-emerald-400 rounded-xl text-slate-100 text-xs focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                  Google Apps Script Auto-Upload Bridge URL (Optional)
-                </label>
-                <input
-                  type="url"
-                  value={driveAppsScriptUrl}
-                  onChange={(e) => setDriveAppsScriptUrl(e.target.value)}
-                  placeholder="https://script.google.com/macros/s/.../exec"
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-cyan-400 rounded-xl text-slate-100 text-xs focus:outline-none font-mono"
-                />
-                <p className="text-[10px] text-slate-500 mt-1">
-                  Smart Inbox-এর Google Drive সেকশন থেকে ১-ক্লিকে স্ক্রিপ্ট কপি করে দিলে ফাইল অটোমেটিক আপনার ফোল্ডারে তৈরি হবে।
-                </p>
-              </div>
-
-              <div className="pt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    updateDriveStorageSettings({
-                      folderUrl: driveFolderUrl.trim(),
-                      folderName: driveFolderName.trim() || 'Visual Sky Email Attachments',
-                      appsScriptWebAppUrl: driveAppsScriptUrl.trim(),
-                      autoAttachDriveLinkInEmail: true,
-                    });
-                    confetti({ particleCount: 35, spread: 60, origin: { y: 0.7 } });
-                  }}
-                  className="flex-1 py-2.5 px-4 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-black rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-2"
-                >
-                  <FolderOpen className="w-4 h-4" />
-                  <span>Save / Change Google Drive Folder Link</span>
-                </button>
               </div>
             </div>
           )}

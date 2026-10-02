@@ -88,6 +88,7 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
   const [stagedAttachments, setStagedAttachments] = useState<EmailAttachment[]>([]);
   const [serverFiles, setServerFiles] = useState<any[]>([]);
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [isDraggingOverDrive, setIsDraggingOverDrive] = useState<boolean>(false);
   const [isTestingDrive, setIsTestingDrive] = useState<boolean>(false);
   const [syncingAttachmentId, setSyncingAttachmentId] = useState<string | null>(null);
   const [previewAtt, setPreviewAtt] = useState<EmailAttachment | null>(null);
@@ -156,12 +157,6 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
     }
     return Array.from(map.values());
   }, [stagedAttachments, serverFiles, threads, driveStorageSettings.folderUrl]);
-
-  useEffect(() => {
-    allVaultAttachments.slice(0, 8).forEach(att => {
-      warmAttachmentInBackground(att as any);
-    });
-  }, [allVaultAttachments]);
 
   useEffect(() => {
     if (!previewAtt) {
@@ -753,22 +748,53 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
             />
 
             <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDraggingOverDrive(true);
+              }}
+              onDragEnter={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDraggingOverDrive(true);
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDraggingOverDrive(false);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDraggingOverDrive(false);
+                if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+                  handleSelectFiles(e.dataTransfer.files);
+                }
+              }}
               onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-emerald-500/40 hover:border-emerald-400 bg-slate-950/70 hover:bg-emerald-950/20 rounded-2xl p-6 text-center space-y-2.5 cursor-pointer transition group"
+              className={`border-2 border-dashed rounded-2xl p-6 text-center space-y-2.5 cursor-pointer transition group ${
+                isDraggingOverDrive
+                  ? 'border-emerald-400 bg-emerald-500/15 scale-[1.01]'
+                  : 'border-emerald-500/40 hover:border-emerald-400 bg-slate-950/70 hover:bg-emerald-950/20'
+              }`}
             >
               <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mx-auto group-hover:scale-110 transition">
                 <Upload className="w-6 h-6" />
               </div>
               <div className="text-sm font-black text-white">
-                {isUploading ? 'Uploading & Syncing File(s)...' : '📎 Click to Upload Any File or Image'}
+                {isUploading
+                  ? 'Uploading & Syncing File(s)...'
+                  : isDraggingOverDrive
+                  ? '📂 ফাইলগুলো এখানে ছেড়ে দিন (Drop Files Here)...'
+                  : '📎 Drag & Drop Files Here or Click to Browse'}
               </div>
               <p className="text-xs text-slate-400">
-                যেকোনো ফাইল (PDF, PNG, JPG, DOCX, XLSX, ZIP, MP4) সিলেক্ট করুন — সরাসরি প্রিভিউ, ডাউনলোড এবং আপনার Google Drive ফোল্ডারে যুক্ত হবে।
+                যেকোনো ফাইল (PDF, PNG, JPG, DOCX, XLSX, ZIP, MP4) এখানে Drag &amp; Drop করুন অথবা ক্লিক করে ফোল্ডার থেকে সিলেক্ট করুন — সরাসরি আপনার Google Drive ফোল্ডারে যুক্ত হবে।
               </p>
               <div className="pt-1">
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-extrabold border border-emerald-500/30">
+                <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[11px] font-black shadow">
                   <Paperclip className="w-3 h-3" />
-                  <span>Choose Files (*/*)</span>
+                  <span>Browse / Select from Folder</span>
                 </span>
               </div>
             </div>

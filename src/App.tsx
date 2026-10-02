@@ -18,12 +18,7 @@ import {
   BarChart3,
   Bot, 
   ShieldCheck, 
-  Grid,
-  FolderOpen,
-  Paperclip,
-  Link2,
-  ExternalLink,
-  CheckCircle2
+  Grid
 } from 'lucide-react';
 
 // Static imports so all views and modals bundle into a single self-contained file with zero stale chunk requests
@@ -57,17 +52,8 @@ const MainContent: React.FC = () => {
     setIsLogoutConfirmOpen, 
     logout,
     activeFollowUpCohort,
-    wizardLaunchRequest,
-    driveStorageSettings,
-    updateDriveStorageSettings
+    wizardLaunchRequest
   } = useApp();
-  
-  const [globalDriveUrl, setGlobalDriveUrl] = useState<string>(driveStorageSettings?.folderUrl || '');
-  const [globalDriveSaved, setGlobalDriveSaved] = useState<boolean>(false);
-
-  useEffect(() => {
-    setGlobalDriveUrl(driveStorageSettings?.folderUrl || '');
-  }, [driveStorageSettings?.folderUrl]);
   
   const [isAuthOpen, setIsAuthOpen] = useState<boolean>(false);
   const [authInitialPortal, setAuthInitialPortal] = useState<'client' | 'agency'>('client');
@@ -286,86 +272,6 @@ const MainContent: React.FC = () => {
         onOpenMobileMenu={() => setIsMobileDrawerOpen(true)}
       />
 
-      {/* Always-Visible Global Google Drive Folder Link & Email Attachment Bar (hidden on inbox/drive_storage where dedicated bar exists) */}
-      {activeTab !== 'inbox' && activeTab !== 'drive_storage' && (
-        <div className="bg-gradient-to-r from-emerald-950/90 via-[#090d16] to-cyan-950/90 border-b border-emerald-500/40 px-3 sm:px-6 py-1.5 flex flex-wrap items-center justify-between gap-2 shrink-0 z-30">
-          <div className="flex items-center gap-2 flex-wrap flex-1 min-w-[240px]">
-            <button
-              type="button"
-              onClick={() => setActiveTab('drive_storage')}
-              className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-black text-[11px] flex items-center gap-1.5 shrink-0 cursor-pointer transition"
-            >
-              <FolderOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span className="hidden sm:inline">☁️ Google Drive Folder Link (0 KB Hosting):</span>
-              <span className="sm:hidden">☁️ Drive Link:</span>
-            </button>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                updateDriveStorageSettings({ folderUrl: globalDriveUrl.trim() });
-                setGlobalDriveSaved(true);
-                setTimeout(() => setGlobalDriveSaved(false), 2500);
-              }}
-              className="flex items-center gap-1.5 flex-1 min-w-[180px] max-w-xl"
-            >
-              <div className="relative flex-1">
-                <Link2 className="w-3.5 h-3.5 text-emerald-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="url"
-                  value={globalDriveUrl}
-                  onChange={(e) => setGlobalDriveUrl(e.target.value)}
-                  placeholder="Paste Google Drive Folder Link..."
-                  className="w-full bg-slate-950/95 border border-emerald-500/40 focus:border-emerald-400 rounded-lg pl-8 pr-2.5 py-1 text-[11px] text-slate-100 placeholder-slate-400 font-mono focus:outline-none"
-                />
-              </div>
-              <button
-                type="submit"
-                className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] shrink-0 cursor-pointer transition whitespace-nowrap shadow"
-              >
-                {globalDriveSaved
-                  ? '✓ Saved!'
-                  : driveStorageSettings?.folderUrl
-                  ? '💾 Save'
-                  : '💾 Save Link'}
-              </button>
-              {driveStorageSettings?.folderUrl && (
-                <a
-                  href={driveStorageSettings.folderUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-cyan-500/40 text-cyan-300 font-bold text-[11px] flex items-center gap-1 shrink-0 transition whitespace-nowrap"
-                  title="Open Connected Google Drive Folder"
-                >
-                  <span className="hidden sm:inline">Open Drive</span>
-                  <ExternalLink className="w-3 h-3 shrink-0" />
-                </a>
-              )}
-            </form>
-          </div>
-
-          <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => handleOpenSendMail()}
-              className="px-2.5 py-1 rounded-lg bg-emerald-600/25 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-200 font-extrabold text-[11px] flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
-            >
-              <Paperclip className="w-3 h-3 text-emerald-400" />
-              <span>📎 Attach File &amp; Send Mail</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('drive_storage')}
-              className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
-            >
-              <FolderOpen className="w-3 h-3 text-cyan-400" />
-              <span>⚙️ Drive Hub</span>
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Body Layout: Sidebar + Main Content View */}
       <div className="flex-1 flex overflow-hidden min-h-0">
         <Sidebar onOpenBilling={() => setIsBillingOpen(true)} />
@@ -435,16 +341,6 @@ const MainContent: React.FC = () => {
           {unreadCount > 0 && (
             <span className="absolute top-1 right-2 w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
           )}
-        </button>
-
-        <button
-          onClick={() => setActiveTab('drive_storage')}
-          className={`flex flex-col items-center gap-1 text-[10px] font-bold py-1.5 px-2 rounded-xl transition cursor-pointer ${
-            activeTab === 'drive_storage' ? 'text-emerald-400 bg-emerald-500/10' : 'text-emerald-400/80 hover:text-emerald-300'
-          }`}
-        >
-          <FolderOpen className="w-4 h-4" />
-          <span>Drive Link</span>
         </button>
 
         <button

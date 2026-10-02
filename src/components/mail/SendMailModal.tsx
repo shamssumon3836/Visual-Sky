@@ -22,9 +22,7 @@ import {
   RefreshCw,
   Sliders,
   Check,
-  HardDrive,
-  FolderOpen,
-  ExternalLink
+  Upload
 } from 'lucide-react';
 import { INITIAL_TEMPLATES } from '../templates/TemplateManager';
 import { auditEmailDeliverability } from '../../utils/spamChecker';
@@ -52,16 +50,12 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
   defaultRecipientName = '',
   initialLead
 }) => {
-  const { leads, smtpAccounts, currentUser, addNotification, sendDirectEmail, emailTemplates, deductAiTokens, driveStorageSettings, updateDriveStorageSettings } = useApp();
+  const { leads, smtpAccounts, currentUser, addNotification, sendDirectEmail, emailTemplates, deductAiTokens, driveStorageSettings } = useApp();
   const [attachments, setAttachments] = useState<EmailAttachment[]>([]);
   const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
-  const [showDriveLinkEditor, setShowDriveLinkEditor] = useState(false);
-  const [driveUrlDraft, setDriveUrlDraft] = useState(driveStorageSettings.folderUrl || '');
+  const [showAttachDropzone, setShowAttachDropzone] = useState(false);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    setDriveUrlDraft(driveStorageSettings.folderUrl || '');
-  }, [driveStorageSettings.folderUrl]);
 
   const formatBytes = (bytes: number): string => {
     if (!bytes || bytes <= 0) return '0 B';
@@ -99,34 +93,40 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
 
         let driveFileUrl = driveStorageSettings.folderUrl || '';
         let driveFolderUrl = driveStorageSettings.folderUrl || '';
+        let uploadedToDrive = false;
+        const attId = `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
         try {
           const resp = await fetch('/api/drive-storage/upload', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              id: attId,
               fileName: file.name,
               mimeType: file.type || 'application/octet-stream',
               size: file.size,
               contentBase64: base64Data,
               folderUrl: driveStorageSettings.folderUrl,
+              folderId: driveStorageSettings.folderId,
               appsScriptWebAppUrl: driveStorageSettings.appsScriptWebAppUrl,
             }),
           });
           const data = await resp.json().catch(() => ({}));
           if (data?.driveFileUrl) driveFileUrl = data.driveFileUrl;
           if (data?.driveFolderUrl) driveFolderUrl = data.driveFolderUrl;
+          if (data?.uploadedToDrive) uploadedToDrive = true;
         } catch {
           // Non-fatal fallback
         }
 
         added.push({
-          id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          id: attId,
           name: file.name,
           size: file.size,
           mimeType: file.type || 'application/octet-stream',
           driveFileUrl: driveFileUrl || driveFolderUrl || 'https://drive.google.com/drive/my-drive',
           driveFolderUrl: driveFolderUrl || 'https://drive.google.com/drive/my-drive',
+          uploadedToDrive,
           uploadedAt: new Date().toISOString(),
           storageProvider: 'google_drive',
           contentBase64: base64Data,
@@ -709,7 +709,7 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
             />
           </div>
 
-          {/* Gmail-Style File Attachment & Google Drive Folder Bar */}
+          {/* File Attachment Section (Drag & Drop + Browse from Folder -> Auto-Uploaded to Sidebar Google Drive) */}
           <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-2.5">
             <input
               ref={fileInputRef}
@@ -725,7 +725,7 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => setShowAttachDropzone((prev) => !prev)}
                   disabled={isUploadingToDrive}
                   className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
                 >
@@ -734,63 +734,72 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
                   ) : (
                     <Paperclip className="w-3.5 h-3.5 text-cyan-400" />
                   )}
-                  <span>{isUploadingToDrive ? 'Linking Drive...' : 'Attach Any File (Google Drive)'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowDriveLinkEditor(!showDriveLinkEditor)}
-                  className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 border transition cursor-pointer ${
-                    driveStorageSettings.folderUrl
-                      ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300 hover:bg-emerald-900/50'
-                      : 'bg-amber-950/40 border-amber-500/30 text-amber-300 hover:bg-amber-900/50'
-                  }`}
-                >
-                  <HardDrive className="w-3.5 h-3.5" />
-                  <span>{driveStorageSettings.folderUrl ? '✓ Google Drive Folder Linked (Change)' : 'Set Google Drive Folder Link'}</span>
+                  <span>{isUploadingToDrive ? 'Uploading to Google Drive...' : '📎 Attach File (Drag & Drop / Browse)'}</span>
                 </button>
               </div>
               <span className="text-[10px] text-slate-500 font-semibold">
-                ☁️ 0 KB Hosting Storage • Stored in your Google Drive
+                ☁️ Auto-uploads to your Sidebar Google Drive • 0 KB Hosting Used
               </span>
             </div>
 
-            {/* Always-Visible Google Drive Folder Link Input (Share or Change Anytime) */}
-            <div className="p-2.5 bg-slate-950/90 border border-emerald-500/40 rounded-xl flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-              <div className="flex items-center gap-1.5 text-[11px] font-extrabold text-emerald-300 shrink-0">
-                <HardDrive className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>Google Drive Link:</span>
-              </div>
-              <input
-                type="url"
-                value={driveUrlDraft}
-                onChange={(e) => setDriveUrlDraft(e.target.value)}
-                placeholder="Paste Google Drive Folder Link (https://drive.google.com/drive/folders/...)"
-                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-emerald-400"
-              />
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    updateDriveStorageSettings({ folderUrl: driveUrlDraft.trim() });
-                    setShowDriveLinkEditor(false);
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] cursor-pointer whitespace-nowrap"
-                >
-                  {driveStorageSettings.folderUrl ? 'Change / Save Link' : 'Save Drive Link'}
-                </button>
-                {driveStorageSettings.folderUrl && (
-                  <a
-                    href={driveStorageSettings.folderUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-emerald-300 hover:bg-slate-700 text-[11px] font-bold flex items-center gap-1 whitespace-nowrap"
+            {showAttachDropzone && (
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsDraggingFiles(true);
+                }}
+                onDragEnter={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsDraggingFiles(true);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsDraggingFiles(false);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsDraggingFiles(false);
+                  if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+                    handleAttachFiles(e.dataTransfer.files);
+                  }
+                }}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl p-4 text-center space-y-2 cursor-pointer transition ${
+                  isDraggingFiles
+                    ? 'border-emerald-400 bg-emerald-500/15 scale-[1.01]'
+                    : 'border-cyan-500/40 hover:border-cyan-400 bg-slate-950/80 hover:bg-slate-900'
+                }`}
+              >
+                <div className="w-10 h-10 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400 mx-auto">
+                  <Upload className="w-5 h-5" />
+                </div>
+                <div className="text-xs font-black text-white">
+                  {isDraggingFiles
+                    ? '📂 ফাইলগুলো এখানে ছেড়ে দিন (Drop Files Here)...'
+                    : '📎 ফাইল এখানে Drag & Drop করুন অথবা ক্লিক করে ফোল্ডার থেকে সিলেক্ট করুন'}
+                </div>
+                <p className="text-[10px] text-slate-400">
+                  সব ফাইল সরাসরি সাইডবারে দেওয়া আপনার Google Drive লিংকে আপলোড হবে (হোস্টিংয়ে জায়গা নিবে না)
+                </p>
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      fileInputRef.current?.click();
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] inline-flex items-center gap-1.5 cursor-pointer shadow"
                   >
-                    <ExternalLink className="w-3 h-3" /> Open
-                  </a>
-                )}
+                    <Paperclip className="w-3 h-3" />
+                    <span>Browse / Select from Folder</span>
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
             {attachments.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
@@ -802,9 +811,6 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
                     <Paperclip className="w-3 h-3 text-cyan-400 shrink-0" />
                     <span className="truncate max-w-[180px] font-semibold">{att.name}</span>
                     <span className="text-[9px] text-slate-400 font-mono">({formatBytes(att.size)})</span>
-                    <span className="px-1.5 py-0.2 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[8px] font-extrabold">
-                      Drive
-                    </span>
                     <button
                       type="button"
                       onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
@@ -934,13 +940,13 @@ export const SendMailModal: React.FC<SendMailModalProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => setShowAttachDropzone((prev) => !prev)}
                 disabled={isUploadingToDrive}
                 className="px-3.5 py-2 rounded-xl bg-emerald-600/25 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-200 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer transition"
-                title="Attach any file (stored in Google Drive — 0 KB on hosting)"
+                title="Attach any file (Drag & Drop or Select from Folder)"
               >
                 <Paperclip className="w-3.5 h-3.5 text-emerald-400" />
-                <span>📎 Attach File {attachments.length > 0 ? `(${attachments.length})` : '(Google Drive)'}</span>
+                <span>📎 Attach File {attachments.length > 0 ? `(${attachments.length})` : ''}</span>
               </button>
             </div>
 

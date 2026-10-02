@@ -5559,24 +5559,58 @@ app.post('/api/smtp/send', async (req, res) => {
     const incomingAttachments: any[] = Array.isArray(attachments) ? attachments : [];
     const savedDriveCfg = getSavedDriveStorageSettings();
     for (const att of incomingAttachments) {
-      if (att && att.name && att.contentBase64) {
+      if (!att || !att.name) continue;
+      const attId = String(att.id || `out-att-${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+      att.id = attId;
+      att.viewUrl = `/api/attachments/view/${encodeURIComponent(attId)}`;
+      att.downloadUrl = `/api/attachments/download/${encodeURIComponent(attId)}`;
+
+      let buf: Buffer | null = null;
+      if (att.contentBase64) {
         const cleanB64 = String(att.contentBase64).replace(/^data:[^;]+;base64,/, '');
-        const buf = Buffer.from(cleanB64, 'base64');
-        const attId = String(att.id || `out-att-${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, '_');
-        att.id = attId;
-        att.viewUrl = `/api/attachments/view/${encodeURIComponent(attId)}`;
-        att.downloadUrl = `/api/attachments/download/${encodeURIComponent(attId)}`;
-        if (buf.length > 0) {
-          storeAttachmentBinary(attId, att.name, att.mimeType || 'application/octet-stream', buf, {
-            source: 'outgoing',
-            senderEmail,
-            recipientEmail: cleanRecipientEmail,
-            subject: cleanSubject,
-            driveFolderUrl: att.driveFolderUrl || savedDriveCfg.folderUrl || undefined,
-            driveFileUrl: att.driveFileUrl && !String(att.driveFileUrl).includes('/folders/') ? att.driveFileUrl : undefined,
-            uploadedToDrive: Boolean(att.uploadedToDrive || (att.driveFileUrl && !String(att.driveFileUrl).includes('/folders/')))
-          });
+        buf = Buffer.from(cleanB64, 'base64');
+      } else {
+        const cachedBin = getAttachmentBinaryById(attId, att.name);
+        if (cachedBin && cachedBin.buffer?.length > 0) {
+          buf = cachedBin.buffer;
+          att.contentBase64 = cachedBin.buffer.toString('base64');
         }
+      }
+
+      if (buf && buf.length > 0) {
+        let driveFolderUrl = att.driveFolderUrl || savedDriveCfg.folderUrl || undefined;
+        let driveFileUrl =
+          att.driveFileUrl && !String(att.driveFileUrl).includes('/folders/') ? att.driveFileUrl : undefined;
+        let uploadedToDrive = Boolean(att.uploadedToDrive || driveFileUrl);
+
+        if (!uploadedToDrive && savedDriveCfg.appsScriptWebAppUrl) {
+          const bridgeRes = await uploadBufferToGoogleDrive({
+            fileName: att.name,
+            mimeType: att.mimeType || 'application/octet-stream',
+            buffer: buf,
+            folderUrl: driveFolderUrl,
+            folderId: savedDriveCfg.folderId,
+            appsScriptWebAppUrl: savedDriveCfg.appsScriptWebAppUrl
+          });
+          if (bridgeRes.uploadedViaBridge) {
+            uploadedToDrive = true;
+            driveFileUrl = bridgeRes.driveFileUrl;
+            driveFolderUrl = bridgeRes.driveFolderUrl || driveFolderUrl;
+            att.driveFileUrl = driveFileUrl;
+            att.driveFolderUrl = driveFolderUrl;
+            att.uploadedToDrive = true;
+          }
+        }
+
+        storeAttachmentBinary(attId, att.name, att.mimeType || 'application/octet-stream', buf, {
+          source: 'outgoing',
+          senderEmail,
+          recipientEmail: cleanRecipientEmail,
+          subject: cleanSubject,
+          driveFolderUrl,
+          driveFileUrl,
+          uploadedToDrive
+        });
       }
     }
 
@@ -6067,59 +6101,14 @@ try {
         if (item && item.id) {
           const key = String(item.id);
           attachmentIndexMap.set(key, item);
-          // Pre-warm attachment binary into RAM on startup for <1ms View & Download response
-          try {
-            const pathsToTry = [
-              path.join(ATTACHMENTS_DIR, key),
-              item.filePath
-            ].filter(Boolean);
-            for (const p of pathsToTry) {
-              if (fs.existsSync(p)) {
-                const buf = fs.readFileSync(p);
-                if (buf.length > 0) {
-                  const mime = item.mimeType || 'application/octet-stream';
-                  const fname = item.name || key;
-                  attachmentMemoryBuffers.set(key, { buffer: buf, mimeType: mime, name: fname });
-                  const uidSuffixMatch = key.match(/[-_](\d+)[-_](\d+)$/);
-                  if (uidSuffixMatch) {
-                    attachmentMemoryBuffers.set(`imap-att-${uidSuffixMatch[1]}-${uidSuffixMatch[2]}`, {
-                      buffer: buf,
-                      mimeType: mime,
-                      name: fname
-                    });
-                  }
-                  break;
-                }
-              }
-            }
-          } catch {}
-        }
-      }
-    }
-  }
-  // Also pre-warm any additional files inside ATTACHMENTS_DIR
-  if (fs.existsSync(ATTACHMENTS_DIR)) {
-    const diskFiles = fs.readdirSync(ATTACHMENTS_DIR);
-    for (const f of diskFiles) {
-      if (!attachmentMemoryBuffers.has(f)) {
-        try {
-          const fullP = path.join(ATTACHMENTS_DIR, f);
-          const buf = fs.readFileSync(fullP);
-          if (buf.length > 0) {
-            const rec = attachmentIndexMap.get(f);
-            const mime = rec?.mimeType || 'application/octet-stream';
-            const fname = rec?.name || f;
-            attachmentMemoryBuffers.set(f, { buffer: buf, mimeType: mime, name: fname });
-            const uidSuffixMatch = f.match(/[-_](\d+)[-_](\d+)$/);
-            if (uidSuffixMatch) {
-              attachmentMemoryBuffers.set(`imap-att-${uidSuffixMatch[1]}-${uidSuffixMatch[2]}`, {
-                buffer: buf,
-                mimeType: mime,
-                name: fname
-              });
-            }
+          // If already synced to Google Drive, remove any leftover local disk binary to keep hosting storage 0MB
+          if (item.uploadedToDrive && item.driveFileUrl && !String(item.driveFileUrl).includes('/folders/')) {
+            try {
+              const p = item.filePath || path.join(ATTACHMENTS_DIR, key);
+              if (p && fs.existsSync(p)) fs.unlinkSync(p);
+            } catch {}
           }
-        } catch {}
+        }
       }
     }
   }
@@ -6147,17 +6136,27 @@ function storeAttachmentBinary(
   const filePath = path.join(ATTACHMENTS_DIR, safeId);
 
   attachmentMemoryBuffers.set(safeId, { buffer, mimeType: cleanMime, name: cleanName });
-  if (attachmentMemoryBuffers.size > 150) {
+  if (attachmentMemoryBuffers.size > 25) {
     const oldestKey = attachmentMemoryBuffers.keys().next().value;
     if (oldestKey) attachmentMemoryBuffers.delete(oldestKey);
   }
 
-  try {
-    fs.writeFileSync(filePath, buffer);
-  } catch {}
-
   const existing = attachmentIndexMap.get(safeId);
   const savedSettings = getSavedDriveStorageSettings();
+  const isUploadedToDrive = Boolean(meta.uploadedToDrive ?? existing?.uploadedToDrive ?? false);
+  const resolvedDriveFileUrl = meta.driveFileUrl || existing?.driveFileUrl || undefined;
+
+  // Only write to local disk if NOT uploaded to Google Drive (saves 100% of domain hosting space when Drive is linked)
+  if (isUploadedToDrive && resolvedDriveFileUrl && !String(resolvedDriveFileUrl).includes('/folders/')) {
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch {}
+  } else {
+    try {
+      fs.writeFileSync(filePath, buffer);
+    } catch {}
+  }
+
   const record: StoredAttachmentRecord = {
     id: safeId,
     name: cleanName,
@@ -6165,8 +6164,8 @@ function storeAttachmentBinary(
     mimeType: cleanMime,
     filePath,
     driveFolderUrl: meta.driveFolderUrl || existing?.driveFolderUrl || savedSettings.folderUrl || undefined,
-    driveFileUrl: meta.driveFileUrl || existing?.driveFileUrl || undefined,
-    uploadedToDrive: meta.uploadedToDrive ?? existing?.uploadedToDrive ?? false,
+    driveFileUrl: resolvedDriveFileUrl,
+    uploadedToDrive: isUploadedToDrive,
     source: meta.source || existing?.source || 'incoming',
     senderEmail: meta.senderEmail || existing?.senderEmail,
     recipientEmail: meta.recipientEmail || existing?.recipientEmail,
@@ -6615,6 +6614,11 @@ app.get('/api/attachments/view/:id', async (req, res) => {
   const queryIdx = typeof req.query.idx === 'string' ? req.query.idx : '';
   const item = await resolveAttachmentBinaryOnDemand(req.params.id, queryName, queryMsgId, queryIdx);
   if (!item || !item.buffer || item.buffer.length === 0) {
+    const safeId = String(req.params.id || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const rec = attachmentIndexMap.get(safeId);
+    if (rec?.driveFileUrl) {
+      return res.redirect(rec.driveFileUrl);
+    }
     res.setHeader('Content-Type', 'application/json');
     return res.status(404).json({ success: false, error: 'Attachment not found' });
   }
@@ -6637,6 +6641,11 @@ app.get('/api/attachments/download/:id', async (req, res) => {
   const queryIdx = typeof req.query.idx === 'string' ? req.query.idx : '';
   const item = await resolveAttachmentBinaryOnDemand(req.params.id, queryName, queryMsgId, queryIdx);
   if (!item || !item.buffer || item.buffer.length === 0) {
+    const safeId = String(req.params.id || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const rec = attachmentIndexMap.get(safeId);
+    if (rec?.driveFileUrl) {
+      return res.redirect(rec.driveFileUrl);
+    }
     res.setHeader('Content-Type', 'application/json');
     return res.status(404).json({ success: false, error: 'Attachment not found' });
   }
@@ -7326,6 +7335,11 @@ app.post('/api/drive-storage/sync-file/:id', async (req, res) => {
         record.driveFolderUrl = result.driveFolderUrl;
         record.driveFileUrl = result.driveFileUrl;
         record.uploadedToDrive = true;
+        if (record.filePath && fs.existsSync(record.filePath)) {
+          try {
+            fs.unlinkSync(record.filePath);
+          } catch {}
+        }
         attachmentIndexMap.set(safeId, record);
         saveAttachmentIndexToDisk();
       }

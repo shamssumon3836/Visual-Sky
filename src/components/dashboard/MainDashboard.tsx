@@ -38,9 +38,6 @@ import {
   CornerDownRight,
   SlidersHorizontal,
   Workflow,
-  FolderOpen,
-  Link2,
-  Paperclip,
   Trash2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
@@ -64,21 +61,12 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
     openCampaignWizard,
     currentUser,
     simulateIncomingReply,
-    addNotification,
-    driveStorageSettings,
-    updateDriveStorageSettings
+    addNotification
   } = useApp();
 
   const campaigns = useMemo(() => rawCampaigns.filter(c => c && !c.isTrash), [rawCampaigns]);
   const sentEmails = useMemo(() => (rawSentEmails || []).filter(s => s && !s.isTrash), [rawSentEmails]);
   const emailTemplates = useMemo(() => (rawEmailTemplates || []).filter(t => t && !t.isTrash), [rawEmailTemplates]);
-
-  const [quickDriveUrl, setQuickDriveUrl] = useState<string>(driveStorageSettings?.folderUrl || '');
-  const [isEditingQuickDrive, setIsEditingQuickDrive] = useState<boolean>(false);
-
-  React.useEffect(() => {
-    setQuickDriveUrl(driveStorageSettings?.folderUrl || '');
-  }, [driveStorageSettings?.folderUrl]);
 
   const [filterActiveStatus, setFilterActiveStatus] = useState<'all' | 'running' | 'paused'>('all');
   const [funnelTimeRange, setFunnelTimeRange] = useState<'7d' | '30d' | 'all'>('30d');
@@ -192,105 +180,6 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
               <Sparkles className="w-4 h-4 text-purple-400" />
               <span>Mine Leads</span>
             </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ☁️ GOOGLE DRIVE FOLDER LINK & ATTACHMENT STORAGE QUICK SECTION */}
-      <div className="rounded-3xl bg-gradient-to-r from-emerald-950/60 via-slate-900/95 to-cyan-950/50 border border-emerald-500/40 p-4 sm:p-5 shadow-xl">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-            <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-300 shrink-0 shadow-inner">
-              <FolderOpen className="w-5 h-5" />
-            </div>
-            <div className="min-w-0 space-y-0.5">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-sm sm:text-base font-black text-white">
-                  ☁️ Google Drive Attachment Storage &amp; Folder Link
-                </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                  0 KB Hosting Used
-                </span>
-                {driveStorageSettings?.folderUrl ? (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-400 text-slate-950">
-                    ✓ Folder Linked
-                  </span>
-                ) : (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                    Set Your Drive Link
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-slate-300">
-                ইনবক্স ও মেইলে যেকোনো ফাইল (PDF, Image, ZIP, Doc, Video) অ্যাটাচ করলে সেটি আপনার হোস্টিংয়ের জায়গা না নিয়ে Google Drive-এ স্টোর হবে। এখান থেকে আপনার Google Drive ফোল্ডারের লিংক যুক্ত বা যেকোনো সময় পরিবর্তন (Change) করুন।
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
-            {driveStorageSettings?.folderUrl && !isEditingQuickDrive ? (
-              <>
-                <a
-                  href={driveStorageSettings.folderUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3.5 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-900 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 transition"
-                >
-                  <span>Open Connected Drive Folder</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-                <button
-                  type="button"
-                  onClick={() => setIsEditingQuickDrive(true)}
-                  className="px-3.5 py-2.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer transition"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Change Drive Link</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('drive_storage')}
-                  className="px-3.5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition"
-                >
-                  <Paperclip className="w-3.5 h-3.5" />
-                  <span>Manage &amp; Attach Files</span>
-                </button>
-              </>
-            ) : (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  updateDriveStorageSettings({ folderUrl: quickDriveUrl.trim() });
-                  setIsEditingQuickDrive(false);
-                }}
-                className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full lg:w-auto"
-              >
-                <div className="relative min-w-[260px] sm:min-w-[320px]">
-                  <Link2 className="w-3.5 h-3.5 text-emerald-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="url"
-                    required
-                    value={quickDriveUrl}
-                    onChange={(e) => setQuickDriveUrl(e.target.value)}
-                    placeholder="Paste Google Drive Folder Link (https://drive.google.com/...)"
-                    className="w-full bg-slate-950 border border-emerald-500/40 focus:border-emerald-400 rounded-xl pl-8 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-black text-xs cursor-pointer transition whitespace-nowrap"
-                >
-                  Save Drive Link
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('drive_storage')}
-                  className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold cursor-pointer transition whitespace-nowrap"
-                >
-                  Full Settings ↗
-                </button>
-              </form>
-            )}
           </div>
         </div>
       </div>
