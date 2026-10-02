@@ -229,29 +229,35 @@ export const SmartInbox: React.FC = () => {
     return mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
   };
 
-  const getAttachmentViewSrc = (att: EmailAttachment): string => {
+  const getAttachmentViewSrc = (att: EmailAttachment & { _msgId?: string; _idx?: number }): string => {
     if (!att) return '';
     if (att.contentBase64 && att.contentBase64.startsWith('data:')) return att.contentBase64;
-    const nameParam = att.name ? `?name=${encodeURIComponent(att.name)}` : '';
-    if (att.id) return `/api/attachments/view/${encodeURIComponent(att.id)}${nameParam}`;
-    if (att.viewUrl) {
-      return att.viewUrl.includes('?name=') ? att.viewUrl : `${att.viewUrl}${nameParam}`;
-    }
-    if (att.driveFileUrl && !att.driveFileUrl.includes('/folders/')) return att.driveFileUrl;
-    return '';
+    if (att.viewUrl && /^https?:\/\//i.test(att.viewUrl)) return att.viewUrl;
+    const params = new URLSearchParams();
+    if (att.name) params.set('name', att.name);
+    if (att._msgId) params.set('msgId', att._msgId);
+    if (typeof att._idx === 'number') params.set('idx', String(att._idx));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const targetId = att.id || 'attachment';
+    return `/api/attachments/view/${encodeURIComponent(targetId)}${qs}`;
   };
 
-  const getAttachmentDownloadSrc = (att: EmailAttachment): string => {
+  const getAttachmentDownloadSrc = (att: EmailAttachment & { _msgId?: string; _idx?: number }): string => {
     if (!att) return '';
-    const nameParam = att.name ? `?name=${encodeURIComponent(att.name)}` : '';
-    if (att.id) return `/api/attachments/download/${encodeURIComponent(att.id)}${nameParam}`;
-    if (att.downloadUrl) {
-      return att.downloadUrl.includes('?name=') ? att.downloadUrl : `${att.downloadUrl}${nameParam}`;
-    }
-    return getAttachmentViewSrc(att);
+    if (att.downloadUrl && /^https?:\/\//i.test(att.downloadUrl)) return att.downloadUrl;
+    const params = new URLSearchParams();
+    if (att.name) params.set('name', att.name);
+    if (att._msgId) params.set('msgId', att._msgId);
+    if (typeof att._idx === 'number') params.set('idx', String(att._idx));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const targetId = att.id || 'attachment';
+    return `/api/attachments/download/${encodeURIComponent(targetId)}${qs}`;
   };
 
-  const handleDownloadAttachment = async (att: EmailAttachment, e?: React.MouseEvent) => {
+  const handleDownloadAttachment = async (
+    att: EmailAttachment & { _msgId?: string; _idx?: number },
+    e?: React.MouseEvent
+  ) => {
     if (e) e.stopPropagation();
     if (!att) return;
     const fileName = att.name || 'attachment';
@@ -267,7 +273,7 @@ export const SmartInbox: React.FC = () => {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
         return;
       }
 
@@ -283,7 +289,7 @@ export const SmartInbox: React.FC = () => {
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
           return;
         }
       }
@@ -2435,14 +2441,14 @@ export const SmartInbox: React.FC = () => {
                           {mainReply}
                         </div>
 
-                        {/* Inline Image Previews + Attached Files View & Download Bar */}
+                        {/* Lightweight On-Demand Attached Files Bar (View & Download Buttons Only — Zero Auto-Load Overhead) */}
                         {Array.isArray((m as any).attachments) && (m as any).attachments.length > 0 && (
-                          <div className="pt-2.5 border-t border-slate-800/80 space-y-2.5">
+                          <div className="pt-2.5 border-t border-slate-800/80 space-y-2">
                             <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-bold text-emerald-300">
                               <span className="flex items-center gap-1.5">
                                 <Paperclip className="w-3.5 h-3.5 text-emerald-400" />
                                 <span>
-                                  {(m as any).attachments.length} Attached File(s) / Image(s) — View &amp; Download Ready
+                                  {(m as any).attachments.length} Attached File(s) — Click View to Open or Download to Save
                                 </span>
                               </span>
                               {driveStorageSettings.folderUrl && (
@@ -2459,71 +2465,13 @@ export const SmartInbox: React.FC = () => {
                               )}
                             </div>
 
-                            {/* Inline Visual Preview for Any Attached Images / Pictures */}
-                            {(m as any).attachments.some((att: EmailAttachment) => isImageAttachment(att)) && (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                {(m as any).attachments
-                                  .filter((att: EmailAttachment) => isImageAttachment(att))
-                                  .map((att: EmailAttachment, imgIdx: number) => {
-                                    const imgSrc = getAttachmentViewSrc(att);
-                                    if (!imgSrc) return null;
-                                    return (
-                                      <div
-                                        key={`img-prev-${att.id || imgIdx}`}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setPreviewAttachment(att);
-                                        }}
-                                        className="group relative rounded-2xl overflow-hidden border border-emerald-500/30 bg-slate-950/95 shadow-lg cursor-pointer hover:border-cyan-400/70 transition"
-                                      >
-                                        <div className="bg-slate-950 flex items-center justify-center p-2 max-h-64 overflow-hidden">
-                                          <img
-                                            src={imgSrc}
-                                            alt={att.name || 'Email Image'}
-                                            className="max-h-60 w-auto object-contain rounded-lg transition group-hover:scale-[1.02]"
-                                            loading="lazy"
-                                          />
-                                        </div>
-                                        <div className="px-3 py-2 bg-slate-900/95 border-t border-slate-800 flex items-center justify-between gap-2">
-                                          <div className="min-w-0">
-                                            <div className="text-[11px] font-bold text-white truncate">
-                                              🖼️ {att.name}
-                                            </div>
-                                            <div className="text-[10px] text-slate-400 font-mono">
-                                              {formatFileSize(att.size)}
-                                            </div>
-                                          </div>
-                                          <div className="flex items-center gap-1.5 shrink-0">
-                                            <button
-                                              type="button"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                setPreviewAttachment(att);
-                                              }}
-                                              className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 text-[10px] font-extrabold cursor-pointer transition"
-                                            >
-                                              👁️ View
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={(e) => handleDownloadAttachment(att, e)}
-                                              className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black cursor-pointer transition"
-                                            >
-                                              ⬇️ Download
-                                            </button>
-                                          </div>
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                              </div>
-                            )}
-
-                            {/* File Action Cards for All Attachments (Images, PDFs, Docs, ZIP, etc.) */}
+                            {/* Lightweight Action Cards for All Attachments (No heavy inline image rendering on page) */}
                             <div className="flex flex-wrap gap-2">
                               {(m as any).attachments.map((att: EmailAttachment, attIdx: number) => {
+                                const enrichedAtt = { ...att, _msgId: String(m.id || ''), _idx: attIdx };
                                 const hasRealDriveFile =
                                   Boolean(att.driveFileUrl && !String(att.driveFileUrl).includes('/folders/'));
+                                const isImg = isImageAttachment(att);
                                 return (
                                   <div
                                     key={att.id || attIdx}
@@ -2531,13 +2479,13 @@ export const SmartInbox: React.FC = () => {
                                     className="px-3 py-2 rounded-xl bg-slate-950/95 border border-emerald-500/30 hover:border-emerald-400/60 flex items-center justify-between gap-3 text-xs text-slate-100 transition shadow-sm"
                                   >
                                     <div
-                                      onClick={() => setPreviewAttachment(att)}
+                                      onClick={() => setPreviewAttachment(enrichedAtt as any)}
                                       className="flex items-center gap-2 min-w-0 cursor-pointer"
                                     >
                                       <Paperclip className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                                       <div className="min-w-0">
-                                        <div className="font-bold text-[11px] text-white truncate max-w-[190px] hover:text-cyan-300">
-                                          {att.name}
+                                        <div className="font-bold text-[11px] text-white truncate max-w-[210px] hover:text-cyan-300">
+                                          {isImg ? '🖼️ ' : '📄 '}{att.name}
                                         </div>
                                         <div className="text-[9px] text-slate-400 font-mono flex items-center gap-1">
                                           <span>{formatFileSize(att.size)}</span>
@@ -2554,17 +2502,20 @@ export const SmartInbox: React.FC = () => {
                                     <div className="flex items-center gap-1.5 shrink-0">
                                       <button
                                         type="button"
-                                        onClick={() => setPreviewAttachment(att)}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setPreviewAttachment(enrichedAtt as any);
+                                        }}
                                         className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-200 text-[10px] font-extrabold cursor-pointer transition"
-                                        title="Preview / View File"
+                                        title="Click to View File / Image"
                                       >
                                         👁️ View
                                       </button>
                                       <button
                                         type="button"
-                                        onClick={(e) => handleDownloadAttachment(att, e)}
+                                        onClick={(e) => handleDownloadAttachment(enrichedAtt as any, e)}
                                         className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-black cursor-pointer transition"
-                                        title="Download File to Device"
+                                        title="Click to Download File"
                                       >
                                         ⬇️ Download
                                       </button>
@@ -2582,7 +2533,7 @@ export const SmartInbox: React.FC = () => {
                                         <button
                                           type="button"
                                           disabled={syncingDriveAttId === att.id}
-                                          onClick={(e) => handleSyncAttachmentToDrive(att, e)}
+                                          onClick={(e) => handleSyncAttachmentToDrive(enrichedAtt as any, e)}
                                           className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 text-[10px] font-bold cursor-pointer transition disabled:opacity-50"
                                           title="Add this file directly into your Google Drive folder"
                                         >
@@ -3508,11 +3459,22 @@ export const SmartInbox: React.FC = () => {
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={(e) => handleDownloadAttachment(previewAttachment, e)}
+                  onClick={(e) => handleDownloadAttachment(previewAttachment as any, e)}
                   className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer transition shadow"
                 >
                   <span>⬇️ Download File</span>
                 </button>
+                {getAttachmentViewSrc(previewAttachment as any) && (
+                  <a
+                    href={getAttachmentViewSrc(previewAttachment as any)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 font-bold text-xs flex items-center gap-1 transition"
+                  >
+                    <span>Open in New Tab</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
                 {previewAttachment.driveFileUrl && !previewAttachment.driveFileUrl.includes('/folders/') ? (
                   <a
                     href={previewAttachment.driveFileUrl}

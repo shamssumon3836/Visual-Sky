@@ -125,6 +125,19 @@ export function scrubWorkspaceCollections(rawWorkspace: any, extraTombstones?: I
 function sanitizeForFirestore(payload: WorkspaceData): WorkspaceData {
   try {
     const clone: any = JSON.parse(JSON.stringify(payload));
+    if (Array.isArray(clone.threads)) {
+      for (const t of clone.threads) {
+        for (const m of t?.messages || []) {
+          if (Array.isArray(m?.attachments)) {
+            for (const a of m.attachments) {
+              if (a && a.contentBase64) {
+                delete a.contentBase64;
+              }
+            }
+          }
+        }
+      }
+    }
     if (Array.isArray(clone.sentEmails) && clone.sentEmails.length > 400) {
       clone.sentEmails = clone.sentEmails.slice(0, 400);
     }

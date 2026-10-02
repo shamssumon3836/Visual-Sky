@@ -6029,13 +6029,36 @@ function guessMimeFromFilename(name: string): string {
 // checks workspace JSON snapshots and fetches the message directly from IMAP on the spot!
 async function resolveAttachmentBinaryOnDemand(
   rawId: string,
-  queryName?: string
+  queryName?: string,
+  queryMsgId?: string,
+  queryIdx?: string
 ): Promise<{ buffer: Buffer; mimeType: string; name: string } | null> {
   const existing = getAttachmentBinaryById(rawId, queryName);
   if (existing) return existing;
 
   const safeId = String(rawId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
   const cleanQueryName = String(queryName || '').trim().toLowerCase();
+  const cleanMsgId = String(queryMsgId || '').trim();
+  const parsedIdx = queryIdx !== undefined && queryIdx !== '' ? Number(queryIdx) : -1;
+
+  // Extract UID from either attachment ID (e.g. imap-att-...-57-0) or parent message ID (e.g. imap-57)
+  const uidMatchFromAtt = safeId.match(/[-_](\d+)[-_](\d+)$/);
+  const uidMatchFromMsg = cleanMsgId.match(/(\d+)$/);
+  const targetUid = uidMatchFromAtt
+    ? Number(uidMatchFromAtt[1])
+    : uidMatchFromMsg
+    ? Number(uidMatchFromMsg[1])
+    : 0;
+  const targetIdx = uidMatchFromAtt
+    ? Number(uidMatchFromAtt[2])
+    : parsedIdx >= 0
+    ? parsedIdx
+    : 0;
+
+  if (targetUid > 0) {
+    const bySynthesizedId = getAttachmentBinaryById(`imap-att-${targetUid}-${targetIdx}`, queryName);
+    if (bySynthesizedId) return bySynthesizedId;
+  }
 
   // 1. Check saved workspace_*.json files on disk in case base64 was stored in a workspace snapshot
   try {
@@ -6072,10 +6095,6 @@ async function resolveAttachmentBinaryOnDemand(
   } catch {}
 
   // 2. Live On-Demand IMAP Fetch by UID (or recent messages scan)
-  const uidMatch = safeId.match(/[-_](\d+)[-_](\d+)$/);
-  const targetUid = uidMatch ? Number(uidMatch[1]) : 0;
-
-  // Gather candidate IMAP credentials from saved workspaces + system default
   const imapCandidates: Array<{ host: string; port: number; user: string; pass: string }> = [];
   const seenUsers = new Set<string>();
   const addImapCandidate = (host?: string, user?: string, pass?: string, port?: number) => {
@@ -6137,12 +6156,7 @@ async function resolveAttachmentBinaryOnDemand(
       const lock = await client.getMailboxLock('INBOX');
       try {
         const safeUserSlug = cand.user.toLowerCase().replace(/[^a-z0-9]/gi, '_');
-        const fetchRange = targetUid > 0 ? [targetUid] : `${Math.max(1, (Number((client.mailbox as any)?.exists) || 20) - 19)}:*`;
-        const fetchOpts = targetUid > 0 ? { uid: true } : undefined;
-
-        for await (const msg of client.fetch(fetchRange as any, { uid: true, source: true }, fetchOpts)) {
-          if (!msg?.source) continue;
-          const parsed = await simpleParser(msg.source);
+        const storeParsedMsgAttachments = (msgUid: number, parsed: any) => {
           if (Array.isArray(parsed.attachments)) {
             for (let idx = 0; idx < parsed.attachments.length; idx++) {
               const att: any = parsed.attachments[idx];
@@ -6156,14 +6170,82 @@ async function resolveAttachmentBinaryOnDemand(
               const mime = String(att.contentType || 'application/octet-stream').trim();
               const fname =
                 String(att.filename || '').trim() ||
-                `attachment-${msg.uid}-${idx + 1}`;
-              const canonicalId = `imap-att-${safeUserSlug}-${msg.uid}-${idx}`;
-              const legacyAliasId = `imap-att-${msg.uid}-${idx}`;
+                `attachment-${msgUid}-${idx + 1}`;
+              const canonicalId = `imap-att-${safeUserSlug}-${msgUid}-${idx}`;
+              const legacyAliasId = `imap-att-${msgUid}-${idx}`;
 
               storeAttachmentBinary(canonicalId, fname, mime, buf, { source: 'incoming' });
               attachmentMemoryBuffers.set(legacyAliasId, { buffer: buf, mimeType: mime, name: fname });
             }
           }
+          // Also extract inline data:image/ from HTML if present
+          const rawHtml = String(parsed.html || '');
+          if (rawHtml) {
+            const unquoted = rawHtml
+              .replace(/<div[^>]*class=["'][^"']*gmail_quote[\s\S]*$/i, '')
+              .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, '');
+            const imgRegex = /<img[^>]+src=["'](data:image\/[^"']+)["'][^>]*>/gi;
+            let imgMatch: RegExpExecArray | null;
+            let inlineIdx = 0;
+            while ((imgMatch = imgRegex.exec(unquoted)) !== null) {
+              const imgSrc = (imgMatch[1] || '').trim();
+              const mMime = imgSrc.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.*)$/);
+              if (mMime && mMime[2]) {
+                inlineIdx++;
+                const mimeType = mMime[1];
+                const ext = mimeType.includes('png') ? 'png' : mimeType.includes('gif') ? 'gif' : 'jpg';
+                const buf = Buffer.from(mMime[2], 'base64');
+                if (buf.length <= 120 && ext === 'gif') continue;
+                const canonicalInlineId = `imap-inline-${safeUserSlug}-${msgUid}-${inlineIdx}`;
+                const legacyInlineId = `imap-inline-${msgUid}-${inlineIdx}`;
+                const fileName = `inline-image-${inlineIdx}.${ext}`;
+                storeAttachmentBinary(canonicalInlineId, fileName, mimeType, buf, { source: 'incoming' });
+                attachmentMemoryBuffers.set(legacyInlineId, { buffer: buf, mimeType: mimeType, name: fileName });
+              }
+            }
+          }
+        };
+
+        if (targetUid > 0) {
+          for await (const msg of client.fetch([targetUid] as any, { uid: true, source: true }, { uid: true })) {
+            if (!msg?.source) continue;
+            const parsed = await simpleParser(msg.source);
+            storeParsedMsgAttachments(msg.uid, parsed);
+          }
+        }
+
+        let resolved =
+          getAttachmentBinaryById(rawId, queryName) ||
+          (targetUid > 0 ? getAttachmentBinaryById(`imap-att-${targetUid}-${targetIdx}`, queryName) : null);
+
+        // If still not found (e.g. targetUid was 0 or mismatched), scan last 20 messages in INBOX
+        if (!resolved) {
+          const totalExists = Number((client.mailbox as any)?.exists) || 0;
+          if (totalExists > 0) {
+            const seqRange = `${Math.max(1, totalExists - 19)}:*`;
+            for await (const msg of client.fetch(seqRange, { uid: true, source: true })) {
+              if (!msg?.source) continue;
+              const parsed = await simpleParser(msg.source);
+              storeParsedMsgAttachments(msg.uid, parsed);
+            }
+          }
+          resolved =
+            getAttachmentBinaryById(rawId, queryName) ||
+            (targetUid > 0 ? getAttachmentBinaryById(`imap-att-${targetUid}-${targetIdx}`, queryName) : null);
+        }
+
+        if (resolved) {
+          try {
+            lock.release();
+          } catch {}
+          try {
+            await client.logout();
+          } catch {
+            try {
+              client.close();
+            } catch {}
+          }
+          return resolved;
         }
       } finally {
         try {
@@ -6177,9 +6259,6 @@ async function resolveAttachmentBinaryOnDemand(
           client.close();
         } catch {}
       }
-
-      const resolvedAfterFetch = getAttachmentBinaryById(rawId, queryName);
-      if (resolvedAfterFetch) return resolvedAfterFetch;
     } catch {
       try {
         client.close();
@@ -6275,7 +6354,9 @@ async function uploadBufferToGoogleDrive(params: {
 // Endpoint: View Attachment Inline (Images, PDFs, Text, Videos, etc.)
 app.get('/api/attachments/view/:id', async (req, res) => {
   const queryName = typeof req.query.name === 'string' ? req.query.name : '';
-  const item = await resolveAttachmentBinaryOnDemand(req.params.id, queryName);
+  const queryMsgId = typeof req.query.msgId === 'string' ? req.query.msgId : '';
+  const queryIdx = typeof req.query.idx === 'string' ? req.query.idx : '';
+  const item = await resolveAttachmentBinaryOnDemand(req.params.id, queryName, queryMsgId, queryIdx);
   if (!item || !item.buffer || item.buffer.length === 0) {
     res.setHeader('Content-Type', 'application/json');
     return res.status(404).json({ success: false, error: 'Attachment not found' });
@@ -6295,7 +6376,9 @@ app.get('/api/attachments/view/:id', async (req, res) => {
 // Endpoint: Force Download Attachment Binary to User's Device
 app.get('/api/attachments/download/:id', async (req, res) => {
   const queryName = typeof req.query.name === 'string' ? req.query.name : '';
-  const item = await resolveAttachmentBinaryOnDemand(req.params.id, queryName);
+  const queryMsgId = typeof req.query.msgId === 'string' ? req.query.msgId : '';
+  const queryIdx = typeof req.query.idx === 'string' ? req.query.idx : '';
+  const item = await resolveAttachmentBinaryOnDemand(req.params.id, queryName, queryMsgId, queryIdx);
   if (!item || !item.buffer || item.buffer.length === 0) {
     res.setHeader('Content-Type', 'application/json');
     return res.status(404).json({ success: false, error: 'Attachment not found' });
@@ -6511,7 +6594,7 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
         }
 
         if (recentUids.length > 0) {
-          const cachePrefix = `v3::${userLower}`;
+          const cachePrefix = `v5::${userLower}`;
           const uncachedUids = recentUids.filter(uid => !imapUidMessageCache.has(`${cachePrefix}::${uid}`));
 
           if (uncachedUids.length > 0) {
@@ -6622,15 +6705,10 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
                         });
                       }
 
-                      // Only include inline base64 in JSON if <= 120 KB so localStorage (5MB) and Firestore (1MB) never overflow;
-                      // larger files (like 2.5MB PNGs/PDFs) stream directly via /api/attachments/view/:id and /api/attachments/download/:id
-                      const b64Str =
-                        rawBuf.length > 0 && rawBuf.length <= 120 * 1024
-                          ? `data:${mimeType};base64,${rawBuf.toString('base64')}`
-                          : undefined;
-
-                      if (b64Str) {
-                        seenBase64Prefixes.add(b64Str.slice(0, 120));
+                      // Do not include heavy inline base64 in sync JSON so page load stays instant (0 KB overhead);
+                      // files/images are fetched on-demand only when the user clicks View or Download.
+                      if (rawBuf.length > 0) {
+                        seenBase64Prefixes.add(`data:${mimeType};base64,${rawBuf.slice(0, 96).toString('base64')}`.slice(0, 120));
                       }
 
                       extractedAttachments.push({
@@ -6643,8 +6721,7 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
                         driveFolderUrl,
                         driveFileUrl,
                         uploadedToDrive,
-                        source: 'incoming',
-                        contentBase64: b64Str
+                        source: 'incoming'
                       });
                     }
                   }
@@ -6689,16 +6766,20 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
                             subject: msgSubject,
                             driveFolderUrl: driveSettings.folderUrl || undefined
                           });
+                          attachmentMemoryBuffers.set(`imap-inline-${message.uid}-${inlineIdx}`, {
+                            buffer: buf,
+                            mimeType,
+                            name: fileName
+                          });
                           extractedAttachments.push({
                             id: attId,
                             name: fileName,
                             size: buf.length,
                             mimeType,
-                            viewUrl: `/api/attachments/view/${encodeURIComponent(attId)}`,
-                            downloadUrl: `/api/attachments/download/${encodeURIComponent(attId)}`,
+                            viewUrl: `/api/attachments/view/${encodeURIComponent(attId)}?name=${encodeURIComponent(fileName)}`,
+                            downloadUrl: `/api/attachments/download/${encodeURIComponent(attId)}?name=${encodeURIComponent(fileName)}`,
                             driveFolderUrl: driveSettings.folderUrl || undefined,
-                            source: 'incoming',
-                            contentBase64: buf.length <= 4 * 1024 * 1024 ? imgSrc : undefined
+                            source: 'incoming'
                           });
                         }
                       } else if (/^https?:\/\//i.test(imgSrc)) {

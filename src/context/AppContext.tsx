@@ -648,10 +648,7 @@ const sanitizeThreadsArray = (list: EmailThread[]): EmailThread[] => {
                   : att.id
                   ? `/api/attachments/download/${encodeURIComponent(att.id)}${nameParam}`
                   : att.downloadUrl,
-              contentBase64:
-                att.contentBase64 && String(att.contentBase64).length <= 160000
-                  ? att.contentBase64
-                  : undefined
+              contentBase64: undefined
             };
           })
         : undefined;
@@ -4018,10 +4015,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                       ...att,
                       viewUrl: att.id ? `/api/attachments/view/${encodeURIComponent(att.id)}${nameParam}` : att.viewUrl,
                       downloadUrl: att.id ? `/api/attachments/download/${encodeURIComponent(att.id)}${nameParam}` : att.downloadUrl,
-                      contentBase64:
-                        att.contentBase64 && String(att.contentBase64).length <= 160000
-                          ? att.contentBase64
-                          : undefined
+                      contentBase64: undefined
                     };
                   })
                 : undefined;
@@ -4126,11 +4120,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           // Clean body text so HTML tags, '>' quote markers, and raw {{website}} tokens never appear in Smart Inbox
           const incomingAttsList: EmailAttachment[] | undefined =
             Array.isArray(msg.attachments) && msg.attachments.length > 0
-              ? msg.attachments.map((att: any) => ({
-                  ...att,
-                  viewUrl: att.viewUrl || (att.id ? `/api/attachments/view/${encodeURIComponent(att.id)}` : undefined),
-                  downloadUrl: att.downloadUrl || (att.id ? `/api/attachments/download/${encodeURIComponent(att.id)}` : undefined)
-                }))
+              ? msg.attachments.map((att: any) => {
+                  const nameParam = att.name ? `?name=${encodeURIComponent(att.name)}` : '';
+                  return {
+                    ...att,
+                    viewUrl: att.id ? `/api/attachments/view/${encodeURIComponent(att.id)}${nameParam}` : att.viewUrl,
+                    downloadUrl: att.id ? `/api/attachments/download/${encodeURIComponent(att.id)}${nameParam}` : att.downloadUrl,
+                    contentBase64: undefined
+                  };
+                })
               : undefined;
           const rawReplyText = String(msg.text || msg.fullText || msg.html || '').trim();
           const replyText =

@@ -137,9 +137,11 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
     }
     for (const t of threads) {
       for (const m of t.messages || []) {
-        for (const a of m.attachments || []) {
+        const atts = m.attachments || [];
+        for (let idx = 0; idx < atts.length; idx++) {
+          const a = atts[idx];
           if (a && a.id && !map.has(a.id)) {
-            map.set(a.id, a);
+            map.set(a.id, { ...a, _msgId: String(m.id || ''), _idx: idx } as any);
           }
         }
       }
@@ -358,9 +360,31 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
     setSyncingAttachmentId(null);
   };
 
-  const handleDownload = async (att: EmailAttachment) => {
+  const getVaultAttachmentViewUrl = (att: EmailAttachment & { _msgId?: string; _idx?: number }): string => {
+    if (!att) return '';
+    if (att.contentBase64 && att.contentBase64.startsWith('data:')) return att.contentBase64;
+    if (att.viewUrl && /^https?:\/\//i.test(att.viewUrl)) return att.viewUrl;
+    const params = new URLSearchParams();
+    if (att.name) params.set('name', att.name);
+    if (att._msgId) params.set('msgId', att._msgId);
+    if (typeof att._idx === 'number') params.set('idx', String(att._idx));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return `/api/attachments/view/${encodeURIComponent(att.id || 'attachment')}${qs}`;
+  };
+
+  const getVaultAttachmentDownloadUrl = (att: EmailAttachment & { _msgId?: string; _idx?: number }): string => {
+    if (!att) return '';
+    if (att.downloadUrl && /^https?:\/\//i.test(att.downloadUrl)) return att.downloadUrl;
+    const params = new URLSearchParams();
+    if (att.name) params.set('name', att.name);
+    if (att._msgId) params.set('msgId', att._msgId);
+    if (typeof att._idx === 'number') params.set('idx', String(att._idx));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return `/api/attachments/download/${encodeURIComponent(att.id || 'attachment')}${qs}`;
+  };
+
+  const handleDownload = async (att: EmailAttachment & { _msgId?: string; _idx?: number }) => {
     const fileName = att.name || 'attachment';
-    const nameParam = att.name ? `?name=${encodeURIComponent(att.name)}` : '';
     try {
       if (att.contentBase64 && att.contentBase64.startsWith('data:')) {
         const res = await fetch(att.contentBase64);
@@ -372,10 +396,10 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
         return;
       }
-      const url = `/api/attachments/download/${encodeURIComponent(att.id)}${nameParam}`;
+      const url = getVaultAttachmentDownloadUrl(att);
       const res = await fetch(url);
       if (res.ok) {
         const blob = await res.blob();
@@ -386,7 +410,7 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
         return;
       }
     } catch {}
@@ -815,38 +839,22 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
               const isImg =
                 String(att.mimeType || '').toLowerCase().startsWith('image/') ||
                 /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(att.name || '');
-              const nameParam = att.name ? `?name=${encodeURIComponent(att.name)}` : '';
-              const viewSrc =
-                att.contentBase64 && att.contentBase64.startsWith('data:')
-                  ? att.contentBase64
-                  : `/api/attachments/view/${encodeURIComponent(att.id)}${nameParam}`;
 
               return (
                 <div
                   key={att.id}
-                  className="p-3 rounded-2xl bg-slate-950 border border-slate-800 hover:border-emerald-500/40 flex flex-col justify-between gap-3 transition"
+                  className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 hover:border-emerald-500/40 flex flex-col justify-between gap-3 transition"
                 >
-                  <div className="space-y-2.5">
-                    {isImg && (
-                      <div
-                        onClick={() => setPreviewAtt(att)}
-                        className="h-36 w-full rounded-xl overflow-hidden bg-slate-900 border border-slate-800 flex items-center justify-center cursor-pointer group"
-                      >
-                        <img
-                          src={viewSrc}
-                          alt={att.name}
-                          className="max-h-full max-w-full object-contain group-hover:scale-105 transition"
-                        />
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                      <Paperclip className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-extrabold text-white truncate" title={att.name}>
+                        {isImg ? '🖼️ ' : '📄 '}{att.name}
                       </div>
-                    )}
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="text-xs font-extrabold text-white truncate" title={att.name}>
-                          {att.name}
-                        </div>
-                        <div className="text-[10px] text-slate-400 font-mono">
-                          {formatFileSize(att.size)} • {att.uploadedToDrive ? '☁️ Saved in Drive' : '📦 Local Ready'}
-                        </div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                        {formatFileSize(att.size)} • {att.uploadedToDrive ? '☁️ Saved in Drive' : '📦 Ready'}
                       </div>
                     </div>
                   </div>
@@ -862,7 +870,7 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleDownload(att)}
+                      onClick={() => handleDownload(att as any)}
                       className="px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[11px] font-black flex items-center gap-1 cursor-pointer"
                     >
                       <Download className="w-3 h-3" />
@@ -895,7 +903,7 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
         )}
       </div>
 
-      {/* Preview Modal */}
+      {/* Preview Modal (Opened Only When User Clicks View) */}
       {previewAtt && (
         <div
           className="fixed inset-0 z-[80] bg-black/85 backdrop-blur-md flex items-center justify-center p-4"
@@ -910,12 +918,21 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => handleDownload(previewAtt)}
+                  onClick={() => handleDownload(previewAtt as any)}
                   className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1 cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Download</span>
                 </button>
+                <a
+                  href={getVaultAttachmentViewUrl(previewAtt as any)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-bold flex items-center gap-1"
+                >
+                  <span>Open in New Tab</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
                 <button
                   type="button"
                   onClick={() => setPreviewAtt(null)}
@@ -929,17 +946,13 @@ export const GoogleDriveStorageView: React.FC<GoogleDriveStorageViewProps> = ({ 
               {String(previewAtt.mimeType || '').toLowerCase().startsWith('image/') ||
               /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(previewAtt.name || '') ? (
                 <img
-                  src={
-                    previewAtt.contentBase64 && previewAtt.contentBase64.startsWith('data:')
-                      ? previewAtt.contentBase64
-                      : `/api/attachments/view/${encodeURIComponent(previewAtt.id)}${previewAtt.name ? `?name=${encodeURIComponent(previewAtt.name)}` : ''}`
-                  }
+                  src={getVaultAttachmentViewUrl(previewAtt as any)}
                   alt={previewAtt.name}
                   className="max-h-[70vh] max-w-full object-contain rounded-lg"
                 />
               ) : (
                 <iframe
-                  src={`/api/attachments/view/${encodeURIComponent(previewAtt.id)}${previewAtt.name ? `?name=${encodeURIComponent(previewAtt.name)}` : ''}`}
+                  src={getVaultAttachmentViewUrl(previewAtt as any)}
                   title={previewAtt.name}
                   className="w-full h-[65vh] rounded-lg bg-white border-0"
                 />
