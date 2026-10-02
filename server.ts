@@ -3782,6 +3782,18 @@ function healCpanelGitRepo() {
   ]);
   for (const root of candidateRoots) {
     healSingleGitDir(path.join(root, '.git'));
+    const pbDir = path.join(root, 'prebuilt');
+    try {
+      if (fs.existsSync(pbDir)) {
+        for (const f of fs.readdirSync(pbDir)) {
+          if (f.endsWith('.br') || f.endsWith('.gz')) {
+            try {
+              fs.unlinkSync(path.join(pbDir, f));
+            } catch {}
+          }
+        }
+      }
+    } catch {}
   }
 }
 
@@ -7528,7 +7540,7 @@ async function startServer() {
   };
 
   // Serve RAM-cached JS & CSS bundles in <0.1ms
-  app.get('/prebuilt/app.js', (req, res) => {
+  app.get(['/prebuilt/bundle.js', '/prebuilt/app.js'], (req, res) => {
     return sendMemoryCachedAsset(
       req,
       res,
@@ -7537,7 +7549,7 @@ async function startServer() {
     );
   });
 
-  app.get('/prebuilt/app.css', (req, res) => {
+  app.get(['/prebuilt/bundle.css', '/prebuilt/app.css'], (req, res) => {
     return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, 'text/css; charset=utf-8');
   });
 
@@ -7573,8 +7585,8 @@ async function startServer() {
       }
       let html = fs.readFileSync(htmlPath, 'utf8');
       html = html
-        .replace(/\/prebuilt\/app\.css(\?v=[^"']*)?/g, `/prebuilt/app.css?v=${v}`)
-        .replace(/\/prebuilt\/app\.js(\?v=[^"']*)?/g, `/prebuilt/app.js?v=${v}`);
+        .replace(/\/prebuilt\/(bundle|app)\.css(\?v=[^"']*)?/g, `/prebuilt/bundle.css?v=${v}`)
+        .replace(/\/prebuilt\/(bundle|app)\.js(\?v=[^"']*)?/g, `/prebuilt/bundle.js?v=${v}`);
       cachedHtmlVersion = v;
       cachedHtmlString = html;
       return res.send(html);

@@ -1,5 +1,6 @@
 ---
 deployment:
   tasks:
+    - /bin/rm -f ./prebuilt/*.br ./prebuilt/*.gz ./prebuilt/firebase-runtime.js
     - /bin/mkdir -p ./tmp
     - /bin/touch ./tmp/restart.txt

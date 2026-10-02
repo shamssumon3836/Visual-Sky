@@ -3015,6 +3015,20 @@ function healCpanelGitRepo() {
   ]);
   for (const root of candidateRoots) {
     healSingleGitDir(import_path.default.join(root, ".git"));
+    const pbDir = import_path.default.join(root, "prebuilt");
+    try {
+      if (import_fs.default.existsSync(pbDir)) {
+        for (const f of import_fs.default.readdirSync(pbDir)) {
+          if (f.endsWith(".br") || f.endsWith(".gz")) {
+            try {
+              import_fs.default.unlinkSync(import_path.default.join(pbDir, f));
+            } catch {
+            }
+          }
+        }
+      }
+    } catch {
+    }
   }
 }
 healCpanelGitRepo();
@@ -6061,7 +6075,7 @@ async function startServer() {
       return res.sendFile(filePath);
     }
   };
-  app.get("/prebuilt/app.js", (req, res) => {
+  app.get(["/prebuilt/bundle.js", "/prebuilt/app.js"], (req, res) => {
     return sendMemoryCachedAsset(
       req,
       res,
@@ -6069,7 +6083,7 @@ async function startServer() {
       "application/javascript; charset=utf-8"
     );
   });
-  app.get("/prebuilt/app.css", (req, res) => {
+  app.get(["/prebuilt/bundle.css", "/prebuilt/app.css"], (req, res) => {
     return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, "text/css; charset=utf-8");
   });
   app.get("/prebuilt/firebase-runtime.js", (_req, res) => {
@@ -6096,7 +6110,7 @@ async function startServer() {
         return res.send(cachedHtmlString);
       }
       let html = import_fs.default.readFileSync(htmlPath, "utf8");
-      html = html.replace(/\/prebuilt\/app\.css(\?v=[^"']*)?/g, `/prebuilt/app.css?v=${v}`).replace(/\/prebuilt\/app\.js(\?v=[^"']*)?/g, `/prebuilt/app.js?v=${v}`);
+      html = html.replace(/\/prebuilt\/(bundle|app)\.css(\?v=[^"']*)?/g, `/prebuilt/bundle.css?v=${v}`).replace(/\/prebuilt\/(bundle|app)\.js(\?v=[^"']*)?/g, `/prebuilt/bundle.js?v=${v}`);
       cachedHtmlVersion = v;
       cachedHtmlString = html;
       return res.send(html);

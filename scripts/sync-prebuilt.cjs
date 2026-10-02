@@ -20,7 +20,9 @@ for (const dir of [prebuiltDir, prebuiltAssetsDir, rootAssetsDir]) {
           const isPrebuiltCore =
             dir === prebuiltDir &&
             (f === 'app.js' ||
+              f === 'bundle.js' ||
               f === 'app.css' ||
+              f === 'bundle.css' ||
               f === 'tailwind-bundle.css' ||
               f === 'server.cjs' ||
               f === 'index.html' ||
@@ -51,8 +53,9 @@ if (fs.existsSync(distAssets)) {
   if (cssFile) {
     const cssPath = path.join(distAssets, cssFile);
     fs.copyFileSync(cssPath, path.join(prebuiltDir, 'app.css'));
+    fs.copyFileSync(cssPath, path.join(prebuiltDir, 'bundle.css'));
     fs.copyFileSync(cssPath, path.join(prebuiltDir, 'tailwind-bundle.css'));
-    console.log('[sync-prebuilt] Copied', cssFile, '-> prebuilt/app.css');
+    console.log('[sync-prebuilt] Copied', cssFile, '-> prebuilt/bundle.css & prebuilt/app.css');
   }
 }
 
@@ -121,7 +124,8 @@ try {
         })
       }
     });
-    console.log('[sync-prebuilt] Built self-contained prebuilt/app.js');
+    fs.copyFileSync(prebuiltAppJs, path.join(prebuiltDir, 'bundle.js'));
+    console.log('[sync-prebuilt] Built self-contained prebuilt/bundle.js & prebuilt/app.js');
   }
 } catch (err) {
   console.warn('[sync-prebuilt] app esbuild warning:', err && err.message);
@@ -141,8 +145,8 @@ const cleanHtml = `<!doctype html>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="preload" href="/prebuilt/app.css?v=${versionTag}" as="style" />
-    <link rel="modulepreload" href="/prebuilt/app.js?v=${versionTag}" />
+    <link rel="preload" href="/prebuilt/bundle.css?v=${versionTag}" as="style" />
+    <link rel="modulepreload" href="/prebuilt/bundle.js?v=${versionTag}" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#080c14" />
@@ -169,11 +173,11 @@ const cleanHtml = `<!doctype html>
         border-radius: 16px !important;
       }
     </style>
-    <link rel="stylesheet" href="/prebuilt/app.css?v=${versionTag}" />
+    <link rel="stylesheet" href="/prebuilt/bundle.css?v=${versionTag}" />
   </head>
   <body style="background-color: #080c14; color: #f1f5f9; margin: 0; min-height: 100vh;">
     <div id="root"></div>
-    <script type="module" src="/prebuilt/app.js?v=${versionTag}"></script>
+    <script type="module" src="/prebuilt/bundle.js?v=${versionTag}"></script>
   </body>
 </html>
 `;
@@ -187,9 +191,11 @@ try {
     fs.mkdirSync(distPrebuiltDir, { recursive: true });
     if (fs.existsSync(path.join(prebuiltDir, 'app.js'))) {
       fs.copyFileSync(path.join(prebuiltDir, 'app.js'), path.join(distPrebuiltDir, 'app.js'));
+      fs.copyFileSync(path.join(prebuiltDir, 'app.js'), path.join(distPrebuiltDir, 'bundle.js'));
     }
     if (fs.existsSync(path.join(prebuiltDir, 'app.css'))) {
       fs.copyFileSync(path.join(prebuiltDir, 'app.css'), path.join(distPrebuiltDir, 'app.css'));
+      fs.copyFileSync(path.join(prebuiltDir, 'app.css'), path.join(distPrebuiltDir, 'bundle.css'));
     }
   }
 } catch {}

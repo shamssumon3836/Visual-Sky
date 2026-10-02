@@ -104,6 +104,18 @@ function healCpanelGitRepo() {
   ]);
   for (const root of candidateRoots) {
     healSingleGitDir(path.join(root, '.git'));
+    const pbDir = path.join(root, 'prebuilt');
+    try {
+      if (fs.existsSync(pbDir)) {
+        for (const f of fs.readdirSync(pbDir)) {
+          if (f.endsWith('.br') || f.endsWith('.gz')) {
+            try {
+              fs.unlinkSync(path.join(pbDir, f));
+            } catch (_e) {}
+          }
+        }
+      }
+    } catch (_e) {}
   }
 }
 
