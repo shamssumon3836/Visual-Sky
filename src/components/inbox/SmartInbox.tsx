@@ -1807,317 +1807,6 @@ export const SmartInbox: React.FC = () => {
                     </button>
                   </div>
                 </div>
-
-                {/* Row 2: Horizontally Scrollable Action & Filter Strip (100% Mobile-Thumb Friendly) */}
-                {(() => {
-                  const allMsgs = Array.isArray(currentThread.messages) ? currentThread.messages : [];
-                  const leadRepliesCount = allMsgs.filter(m => m.sender === 'lead').length;
-                  const sentMsgsCount = allMsgs.filter(m => m.sender === 'user').length;
-                  return (
-                    <div className="flex items-center gap-1.5 pt-1 border-t border-slate-800/80 overflow-x-auto no-scrollbar text-[11px] pb-0.5">
-                      {/* Quick Attach File */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsComposerMinimized(false);
-                          setShowReplyAttachDropzone(prev => !prev);
-                        }}
-                        className="px-2.5 py-1 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 font-extrabold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 active:scale-95"
-                        title="Attach any file (Drag & Drop or Browse from Folder)"
-                      >
-                        <Paperclip className="w-3 h-3 text-emerald-400" />
-                        <span>📎 Attach</span>
-                      </button>
-
-                      {/* AI Thread Summary Button */}
-                      <button
-                        type="button"
-                        onClick={handleAnalyzeThreadIntent}
-                        disabled={isAnalyzingThread}
-                        className="px-2.5 py-1 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-200 font-bold flex items-center gap-1 cursor-pointer transition disabled:opacity-50 whitespace-nowrap shrink-0 active:scale-95"
-                        title="AI Thread Summary & Recommended Action"
-                      >
-                        <BrainCircuit className={`w-3 h-3 text-purple-300 ${isAnalyzingThread ? 'animate-spin' : ''}`} />
-                        <span>{isAnalyzingThread ? 'Analyzing...' : '🧠 AI Summary'}</span>
-                      </button>
-
-                      {/* CRM Lead Card Toggle or Save to CRM */}
-                      {matchedCrmLead ? (
-                        <button
-                          type="button"
-                          onClick={() => setShowLeadCrmCard(prev => !prev)}
-                          className={`px-2.5 py-1 rounded-xl border font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 active:scale-95 ${
-                            showLeadCrmCard
-                              ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
-                              : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
-                          }`}
-                          title="View & Edit Lead CRM Profile and Notes"
-                        >
-                          <User className="w-3 h-3 text-cyan-400" />
-                          <span>👤 CRM Info</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={handleSaveCurrentSenderToLeads}
-                          className="px-2.5 py-1 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 active:scale-95"
-                          title="Save this contact to your Leads Directory"
-                        >
-                          <UserPlus className="w-3 h-3 text-emerald-400" />
-                          <span>+ Save Lead</span>
-                        </button>
-                      )}
-
-                      {/* Label Trigger Button */}
-                      {!currentThread.isTrash && (
-                        <button
-                          type="button"
-                          onClick={() => setShowLabelMenu(prev => !prev)}
-                          className={`px-2.5 py-1 rounded-xl border font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 active:scale-95 ${
-                            showLabelMenu
-                              ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
-                              : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
-                          }`}
-                          title="Assign Label"
-                        >
-                          <Tag className="w-3 h-3 text-cyan-400" />
-                          <span>🏷️ Label</span>
-                        </button>
-                      )}
-
-                      <span className="h-4 w-px bg-slate-800 shrink-0 mx-0.5" />
-
-                      {/* Direction Filters */}
-                      <button
-                        type="button"
-                        onClick={() => setMessageDirectionFilter('all')}
-                        className={`px-2.5 py-1 rounded-xl font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
-                          messageDirectionFilter === 'all'
-                            ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                            : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-                        }`}
-                      >
-                        All ({allMsgs.length || 1})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setMessageDirectionFilter('lead_only')}
-                        className={`px-2.5 py-1 rounded-xl font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
-                          messageDirectionFilter === 'lead_only'
-                            ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-500/50'
-                            : 'bg-slate-900 text-emerald-400/90 hover:text-emerald-300 border border-slate-800'
-                        }`}
-                      >
-                        <span>📥 Replies ({leadRepliesCount})</span>
-                      </button>
-                      {sentMsgsCount > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setMessageDirectionFilter('user_only')}
-                          className={`px-2.5 py-1 rounded-xl font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
-                            messageDirectionFilter === 'user_only'
-                              ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
-                              : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-                          }`}
-                        >
-                          📤 Sent ({sentMsgsCount})
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => setLargeReadingText(prev => !prev)}
-                        className={`px-2.5 py-1 rounded-xl font-bold border transition cursor-pointer whitespace-nowrap shrink-0 ${
-                          largeReadingText
-                            ? 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
-                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                        }`}
-                      >
-                        {largeReadingText ? '🔍 Large Text' : '🔍 Normal Text'}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setIsComposerMinimized(prev => !prev)}
-                        className={`px-2.5 py-1 rounded-xl font-bold border transition cursor-pointer whitespace-nowrap shrink-0 ${
-                          isComposerMinimized
-                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                            : 'bg-slate-900 text-slate-300 border-slate-800 hover:text-white'
-                        }`}
-                      >
-                        {isComposerMinimized ? '⬆️ Show Reply' : '⬇️ Hide Reply'}
-                      </button>
-                    </div>
-                  );
-                })()}
-
-                {/* Mobile-Safe Label Assignment Panel */}
-                {showLabelMenu && !currentThread.isTrash && (
-                  <div className="p-2.5 bg-slate-950 border border-cyan-500/40 rounded-2xl shadow-xl space-y-2 animate-in fade-in">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-black text-cyan-300 uppercase tracking-wider">
-                        🏷️ Tap to Assign or Remove Label
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowLabelMenu(false)}
-                        className="p-1 text-slate-400 hover:text-white cursor-pointer"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {labelPresets.map(preset => {
-                        const hasLabel = currentThread.labels.includes(preset.name);
-                        return (
-                          <button
-                            key={preset.name}
-                            type="button"
-                            onClick={() => {
-                              if (hasLabel) removeThreadLabel(currentThread.id, preset.name);
-                              else addThreadLabel(currentThread.id, preset.name);
-                            }}
-                            className={`px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition ${
-                              hasLabel
-                                ? 'bg-cyan-500/25 border border-cyan-400 text-white'
-                                : 'bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800'
-                            }`}
-                          >
-                            <span className={`w-2 h-2 rounded-full border ${preset.color}`} />
-                            <span>{preset.name}</span>
-                            {hasLabel && <Check className="w-3 h-3 text-emerald-400" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="flex items-center gap-1.5 pt-1">
-                      <input
-                        type="text"
-                        value={customLabelInput}
-                        onChange={(e) => setCustomLabelInput(e.target.value)}
-                        placeholder="Create custom label..."
-                        className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 min-w-0"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (customLabelInput.trim()) {
-                            addThreadLabel(currentThread.id, customLabelInput.trim());
-                            setCustomLabelInput('');
-                            setShowLabelMenu(false);
-                          }
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-cyan-600 text-white text-xs font-bold cursor-pointer shrink-0"
-                      >
-                        + Add
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Collapsible Lead CRM Context & Quick Notes Panel */}
-                {showLeadCrmCard && matchedCrmLead && (
-                  <div className="p-2.5 rounded-xl bg-slate-900/95 border border-cyan-500/30 space-y-2 animate-in fade-in">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-3 flex-wrap text-xs">
-                        <span className="font-bold text-cyan-300 flex items-center gap-1">
-                          <Building className="w-3.5 h-3.5" />
-                          {matchedCrmLead.company} ({matchedCrmLead.title || 'Executive'})
-                        </span>
-                        {matchedCrmLead.website && (
-                          <a
-                            href={matchedCrmLead.website.startsWith('http') ? matchedCrmLead.website : `https://${matchedCrmLead.website}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-slate-300 hover:text-cyan-400 flex items-center gap-1 underline"
-                          >
-                            <ExternalLink className="w-3 h-3" />
-                            <span>Website</span>
-                          </a>
-                        )}
-                        {matchedCrmLead.phone && (
-                          <span className="text-slate-400 flex items-center gap-1 font-mono">
-                            <Phone className="w-3 h-3" />
-                            {matchedCrmLead.phone}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase">CRM Stage:</span>
-                        <select
-                          value={matchedCrmLead.status}
-                          onChange={(e) => updateLead(matchedCrmLead.id, { status: e.target.value as LeadStatus })}
-                          className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs font-bold text-emerald-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
-                        >
-                          <option value="new">New Lead</option>
-                          <option value="contacted">Contacted</option>
-                          <option value="opened">Opened</option>
-                          <option value="replied">Replied</option>
-                          <option value="converted">Converted / Won</option>
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => setShowLeadCrmCard(false)}
-                          className="text-slate-500 hover:text-white p-1 cursor-pointer"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <StickyNote className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                      <input
-                        type="text"
-                        value={leadNoteDraft}
-                        onChange={(e) => setLeadNoteDraft(e.target.value)}
-                        placeholder="Add private CRM notes about this lead..."
-                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleSaveLeadNote}
-                        className="px-2.5 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold cursor-pointer shrink-0"
-                      >
-                        Save Note
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Collapsible AI Thread Summary & Deal Intelligence Banner */}
-                {threadAiSummary && threadAiSummary.threadId === currentThread.id && (
-                  <div className="p-2.5 rounded-xl bg-gradient-to-r from-purple-950/60 via-slate-900 to-indigo-950/60 border border-purple-500/40 space-y-1.5 animate-in fade-in">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <div className="flex items-center gap-2">
-                        <BrainCircuit className="w-3.5 h-3.5 text-purple-300" />
-                        <span className="text-xs font-black text-purple-200">{threadAiSummary.intent}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsComposerMinimized(false);
-                            setReplyText(threadAiSummary.suggestedReply);
-                            replyTextareaRef.current?.focus();
-                          }}
-                          className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-bold cursor-pointer"
-                        >
-                          ✨ Use Suggested Reply
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setThreadAiSummary(null)}
-                          className="text-slate-400 hover:text-white p-1 cursor-pointer"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                    <p className="text-xs text-slate-200 leading-relaxed">{threadAiSummary.summary}</p>
-                  </div>
-                )}
               </div>
 
               {/* Scrollable Messages Stream - Maximum Vertical Space for Reading */}
@@ -2453,35 +2142,176 @@ export const SmartInbox: React.FC = () => {
                 })()}
               </div>
 
-              {/* Bottom Reply & AI Draft Box (Mobile-Friendly Non-Wrapping Send Bar + Scrollable Tools) */}
-              {isComposerMinimized ? (
-                <div className="px-2.5 sm:px-3 py-2 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-1.5 sm:gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsComposerMinimized(false);
-                      setTimeout(() => replyTextareaRef.current?.focus(), 50);
-                    }}
-                    className="flex-1 text-left px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-200 hover:text-white transition cursor-pointer flex items-center justify-between min-w-0 active:scale-98"
-                  >
-                    <span className="truncate">✍️ Write a reply to {currentThread.leadName}...</span>
-                    <span className="text-cyan-400 font-extrabold shrink-0 ml-2">Reply ⬆️</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsComposerMinimized(false);
-                      setShowReplyAttachDropzone(true);
-                    }}
-                    className="px-2.5 sm:px-3 py-2 rounded-xl bg-emerald-600/25 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-200 text-xs font-extrabold flex items-center gap-1 shrink-0 cursor-pointer transition active:scale-95"
-                    title="Attach file (Drag & Drop or Browse from Folder)"
-                  >
-                    <Paperclip className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>📎 Attach File</span>
-                  </button>
-                </div>
-              ) : (
+              {/* Unified Bottom Reply Composer & All-in-One Action Bar */}
               <div className="px-2.5 sm:px-3 py-2 bg-slate-950/95 border-t border-slate-800 space-y-1.5 shrink-0">
+                {/* Collapsible Label Assignment Panel */}
+                {showLabelMenu && !currentThread.isTrash && (
+                  <div className="p-2.5 bg-slate-900/95 border border-cyan-500/40 rounded-2xl shadow-xl space-y-2 animate-in fade-in">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-black text-cyan-300 uppercase tracking-wider">
+                        🏷️ Assign or Remove Label
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowLabelMenu(false)}
+                        className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {labelPresets.map(preset => {
+                        const hasLabel = currentThread.labels.includes(preset.name);
+                        return (
+                          <button
+                            key={preset.name}
+                            type="button"
+                            onClick={() => {
+                              if (hasLabel) removeThreadLabel(currentThread.id, preset.name);
+                              else addThreadLabel(currentThread.id, preset.name);
+                            }}
+                            className={`px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition ${
+                              hasLabel
+                                ? 'bg-cyan-500/25 border border-cyan-400 text-white'
+                                : 'bg-slate-950 border border-slate-800 text-slate-300 hover:bg-slate-800'
+                            }`}
+                          >
+                            <span className={`w-2 h-2 rounded-full border ${preset.color}`} />
+                            <span>{preset.name}</span>
+                            {hasLabel && <Check className="w-3 h-3 text-emerald-400" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center gap-1.5 pt-1">
+                      <input
+                        type="text"
+                        value={customLabelInput}
+                        onChange={(e) => setCustomLabelInput(e.target.value)}
+                        placeholder="Create custom label..."
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 min-w-0"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (customLabelInput.trim()) {
+                            addThreadLabel(currentThread.id, customLabelInput.trim());
+                            setCustomLabelInput('');
+                            setShowLabelMenu(false);
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-cyan-600 text-white text-xs font-bold cursor-pointer shrink-0"
+                      >
+                        + Add
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Collapsible Lead CRM Context & Quick Notes Panel */}
+                {showLeadCrmCard && matchedCrmLead && (
+                  <div className="p-2.5 rounded-xl bg-slate-900/95 border border-cyan-500/30 space-y-2 animate-in fade-in">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-3 flex-wrap text-xs">
+                        <span className="font-bold text-cyan-300 flex items-center gap-1">
+                          <Building className="w-3.5 h-3.5" />
+                          {matchedCrmLead.company} ({matchedCrmLead.title || 'Executive'})
+                        </span>
+                        {matchedCrmLead.website && (
+                          <a
+                            href={matchedCrmLead.website.startsWith('http') ? matchedCrmLead.website : `https://${matchedCrmLead.website}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-slate-300 hover:text-cyan-400 flex items-center gap-1 underline"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span>Website</span>
+                          </a>
+                        )}
+                        {matchedCrmLead.phone && (
+                          <span className="text-slate-400 flex items-center gap-1 font-mono">
+                            <Phone className="w-3 h-3" />
+                            {matchedCrmLead.phone}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Stage:</span>
+                        <select
+                          value={matchedCrmLead.status}
+                          onChange={(e) => updateLead(matchedCrmLead.id, { status: e.target.value as LeadStatus })}
+                          className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs font-bold text-emerald-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                        >
+                          <option value="new">New Lead</option>
+                          <option value="contacted">Contacted</option>
+                          <option value="opened">Opened</option>
+                          <option value="replied">Replied</option>
+                          <option value="converted">Converted / Won</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => setShowLeadCrmCard(false)}
+                          className="text-slate-500 hover:text-white p-1 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <StickyNote className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <input
+                        type="text"
+                        value={leadNoteDraft}
+                        onChange={(e) => setLeadNoteDraft(e.target.value)}
+                        placeholder="Add private CRM notes about this lead..."
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSaveLeadNote}
+                        className="px-2.5 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold cursor-pointer shrink-0"
+                      >
+                        Save Note
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Collapsible AI Thread Summary & Deal Intelligence Banner */}
+                {threadAiSummary && threadAiSummary.threadId === currentThread.id && (
+                  <div className="p-2.5 rounded-xl bg-gradient-to-r from-purple-950/60 via-slate-900 to-indigo-950/60 border border-purple-500/40 space-y-1.5 animate-in fade-in">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <BrainCircuit className="w-3.5 h-3.5 text-purple-300" />
+                        <span className="text-xs font-black text-purple-200">{threadAiSummary.intent}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsComposerMinimized(false);
+                            setReplyText(threadAiSummary.suggestedReply);
+                            replyTextareaRef.current?.focus();
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-bold cursor-pointer"
+                        >
+                          ✨ Use Suggested Reply
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setThreadAiSummary(null)}
+                          className="text-slate-400 hover:text-white p-1 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-slate-200 leading-relaxed">{threadAiSummary.summary}</p>
+                  </div>
+                )}
+
                 {/* Toggleable AI Draft Options Panel */}
                 {isAiCopilotExpanded && (
                   <div className="p-2.5 bg-gradient-to-r from-purple-950/40 via-slate-900/95 to-indigo-950/40 rounded-xl border border-purple-700/50 space-y-2 animate-in fade-in">
@@ -2502,7 +2332,10 @@ export const SmartInbox: React.FC = () => {
                             key={btn.id}
                             type="button"
                             disabled={isGeneratingAiReply}
-                            onClick={() => handleAiDraft(btn.id as any)}
+                            onClick={() => {
+                              setIsComposerMinimized(false);
+                              handleAiDraft(btn.id as any);
+                            }}
                             className="px-2.5 py-1 rounded-lg bg-purple-950/70 hover:bg-purple-900 text-purple-200 border border-purple-700/60 text-[11px] font-bold whitespace-nowrap transition cursor-pointer disabled:opacity-50 shrink-0 active:scale-95"
                           >
                             {btn.label}
@@ -2540,6 +2373,7 @@ export const SmartInbox: React.FC = () => {
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
+                            setIsComposerMinimized(false);
                             handleAiDraft('custom');
                           }
                         }}
@@ -2549,7 +2383,10 @@ export const SmartInbox: React.FC = () => {
                       <button
                         type="button"
                         disabled={isGeneratingAiReply || !customReplyPrompt.trim()}
-                        onClick={() => handleAiDraft('custom')}
+                        onClick={() => {
+                          setIsComposerMinimized(false);
+                          handleAiDraft('custom');
+                        }}
                         className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1 transition cursor-pointer disabled:opacity-40 shrink-0"
                       >
                         {isGeneratingAiReply ? (
@@ -2683,64 +2520,79 @@ export const SmartInbox: React.FC = () => {
                     </div>
                   )}
 
-                  <textarea
-                    ref={replyTextareaRef}
-                    rows={2}
-                    value={replyText}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setShowReplyAttachDropzone(true);
-                      setIsDraggingReplyFiles(true);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      setIsDraggingReplyFiles(false);
-                      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-                        handleAttachFiles(e.dataTransfer.files, 'reply');
-                      }
-                    }}
-                    onFocus={() => {
-                      if (
-                        (currentThread.unreadCount || 0) > 0 ||
-                        (Array.isArray(currentThread.messages) &&
-                          currentThread.messages.some(msg => msg.sender === 'lead' && msg.isRead === false))
-                      ) {
-                        markThreadRead(currentThread.id);
-                      }
-                    }}
-                    onChange={(e) => setReplyText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && (replyText.trim() || replyAttachments.length > 0)) {
-                        handleSendReply(e as any);
-                      }
-                    }}
-                    placeholder={`Reply to ${currentThread.leadName} (${currentThread.leadEmail})...`}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner resize-y"
-                  />
+                  {/* Reply Textarea (Hidden when user minimizes composer for full-screen reading) */}
+                  {!isComposerMinimized && (
+                    <textarea
+                      ref={replyTextareaRef}
+                      rows={2}
+                      value={replyText}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setShowReplyAttachDropzone(true);
+                        setIsDraggingReplyFiles(true);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setIsDraggingReplyFiles(false);
+                        if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+                          handleAttachFiles(e.dataTransfer.files, 'reply');
+                        }
+                      }}
+                      onFocus={() => {
+                        if (
+                          (currentThread.unreadCount || 0) > 0 ||
+                          (Array.isArray(currentThread.messages) &&
+                            currentThread.messages.some(msg => msg.sender === 'lead' && msg.isRead === false))
+                        ) {
+                          markThreadRead(currentThread.id);
+                        }
+                      }}
+                      onChange={(e) => setReplyText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && (replyText.trim() || replyAttachments.length > 0)) {
+                          handleSendReply(e as any);
+                        }
+                      }}
+                      placeholder={`Reply to ${currentThread.leadName} (${currentThread.leadEmail})...`}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner resize-y"
+                    />
+                  )}
 
-                  {/* Single Clean Mobile + Desktop Action Bar: Scrollable Tools on Left + Fixed Send Button on Right */}
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 flex-1 min-w-0">
-                      {/* Attach Any File Button (Opens Drag & Drop + Browse from Folder) */}
+                  {/* ONE UNIFIED BOTTOM LINE: All Inbox & Reply Options Merged into a Single User-Friendly Strip */}
+                  <div className="flex items-center justify-between gap-1.5 pt-0.5">
+                    <div className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar py-0.5 flex-1 min-w-0">
+                      {/* 1. Attach File (Drag & Drop + Browse from Folder) */}
                       <button
                         type="button"
-                        onClick={() => setShowReplyAttachDropzone(prev => !prev)}
+                        onClick={() => {
+                          setIsComposerMinimized(false);
+                          setShowReplyAttachDropzone(prev => !prev);
+                        }}
                         disabled={isUploadingAttachment}
                         className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-extrabold flex items-center gap-1 cursor-pointer transition shadow-sm shrink-0 active:scale-95 ${
-                          showReplyAttachDropzone
+                          showReplyAttachDropzone || replyAttachments.length > 0
                             ? 'bg-emerald-500 text-slate-950 border-emerald-400'
                             : 'bg-emerald-950/70 hover:bg-emerald-900 text-emerald-200 border-emerald-500/40'
                         }`}
                         title="Attach any file (Drag & Drop or Select from Folder)"
                       >
                         <Paperclip className="w-3.5 h-3.5" />
-                        <span>{isUploadingAttachment ? 'Attaching...' : '📎 Attach File'}</span>
+                        <span>
+                          {isUploadingAttachment
+                            ? 'Attaching...'
+                            : replyAttachments.length > 0
+                            ? `Attach File (${replyAttachments.length})`
+                            : 'Attach File'}
+                        </span>
                       </button>
 
-                      {/* 1-Click Toggle Button for AI Draft Options */}
+                      {/* 2. AI Draft Options Toggle */}
                       <button
                         type="button"
-                        onClick={() => setIsAiCopilotExpanded(prev => !prev)}
+                        onClick={() => {
+                          setIsComposerMinimized(false);
+                          setIsAiCopilotExpanded(prev => !prev);
+                        }}
                         className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-extrabold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95 ${
                           isAiCopilotExpanded
                             ? 'bg-purple-600 text-white border-purple-400 shadow-sm shadow-purple-500/30'
@@ -2749,7 +2601,106 @@ export const SmartInbox: React.FC = () => {
                         title="Toggle AI Draft Presets & Custom AI Reply Generator"
                       >
                         <Sparkles className="w-3.5 h-3.5 text-purple-300" />
-                        <span>✨ AI Draft {isAiCopilotExpanded ? '▾' : '▸'}</span>
+                        <span>AI Draft {isAiCopilotExpanded ? '▾' : '▸'}</span>
+                      </button>
+
+                      {/* 3. AI Summary */}
+                      <button
+                        type="button"
+                        onClick={handleAnalyzeThreadIntent}
+                        disabled={isAnalyzingThread}
+                        className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 cursor-pointer transition disabled:opacity-50 shrink-0 active:scale-95 ${
+                          threadAiSummary && threadAiSummary.threadId === currentThread.id
+                            ? 'bg-indigo-600 text-white border-indigo-400'
+                            : 'bg-indigo-950/60 hover:bg-indigo-900/80 border-indigo-500/40 text-indigo-200'
+                        }`}
+                        title="AI Thread Summary & Recommended Action"
+                      >
+                        <BrainCircuit className={`w-3.5 h-3.5 ${isAnalyzingThread ? 'animate-spin' : ''}`} />
+                        <span>{isAnalyzingThread ? 'Analyzing...' : 'AI Summary'}</span>
+                      </button>
+
+                      {/* 4. CRM Info / Save Lead */}
+                      {matchedCrmLead ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowLeadCrmCard(prev => !prev)}
+                          className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95 ${
+                            showLeadCrmCard
+                              ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200'
+                              : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
+                          }`}
+                          title="View & Edit Lead CRM Profile and Notes"
+                        >
+                          <User className="w-3 h-3 text-cyan-400" />
+                          <span>CRM Info</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleSaveCurrentSenderToLeads}
+                          className="px-2.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95"
+                          title="Save this contact to your Leads Directory"
+                        >
+                          <UserPlus className="w-3 h-3 text-emerald-400" />
+                          <span>+ Save Lead</span>
+                        </button>
+                      )}
+
+                      {/* 5. Label Assignment */}
+                      {!currentThread.isTrash && (
+                        <button
+                          type="button"
+                          onClick={() => setShowLabelMenu(prev => !prev)}
+                          className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95 ${
+                            showLabelMenu
+                              ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200'
+                              : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
+                          }`}
+                          title="Assign or Remove Label"
+                        >
+                          <Tag className="w-3 h-3 text-cyan-400" />
+                          <span>Label</span>
+                        </button>
+                      )}
+
+                      {/* 6. Instant Template Selector */}
+                      <div className="flex items-center gap-1 bg-slate-900 hover:bg-slate-800/90 border border-slate-800 rounded-xl px-2 py-1 shrink-0 transition">
+                        <FileText className="w-3 h-3 text-cyan-400 shrink-0" />
+                        <select
+                          onChange={(e) => {
+                            if (e.target.value) {
+                              setIsComposerMinimized(false);
+                              handleInsertTemplate(e.target.value, false);
+                              e.target.value = "";
+                            }
+                          }}
+                          defaultValue=""
+                          className="bg-transparent text-slate-200 text-[11px] font-bold cursor-pointer focus:outline-none max-w-[98px] sm:max-w-[125px] truncate"
+                          title="Insert saved email template"
+                        >
+                          <option value="" disabled className="bg-slate-900 text-slate-400">
+                            Template ({activeEmailTemplates.length})
+                          </option>
+                          {activeEmailTemplates.map(t => (
+                            <option key={t.id} value={t.id} className="bg-slate-900 text-slate-100">
+                              {t.isCustom ? '⭐ ' : '📋 '} {t.title}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* 7. Quick Insert Slot */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsComposerMinimized(false);
+                          handleInsertQuickSnippet('calendar');
+                        }}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-[11px] font-bold cursor-pointer transition shrink-0 active:scale-95"
+                        title="Insert a proposed meeting slot"
+                      >
+                        📅 +Slot
                       </button>
 
                       {/* Quick AI Polish button when text is typed */}
@@ -2762,52 +2713,19 @@ export const SmartInbox: React.FC = () => {
                           title="Polish grammar, tone, and eliminate spam triggers"
                         >
                           <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                          <span>✨ Polish</span>
+                          <span>Polish</span>
                         </button>
                       )}
 
-                      {/* Instant Template Selector */}
-                      <div className="flex items-center gap-1 bg-slate-950/80 border border-slate-800 rounded-xl px-2.5 py-1 shrink-0">
-                        <FileText className="w-3 h-3 text-cyan-400 shrink-0" />
-                        <select
-                          onChange={(e) => {
-                            if (e.target.value) {
-                              handleInsertTemplate(e.target.value, false);
-                              e.target.value = "";
-                            }
-                          }}
-                          defaultValue=""
-                          className="bg-transparent text-slate-200 text-[11px] font-bold cursor-pointer focus:outline-none max-w-[115px] sm:max-w-[150px] truncate"
-                        >
-                          <option value="" disabled className="bg-slate-900 text-slate-400">
-                            ⚡ Template ({activeEmailTemplates.length})
-                          </option>
-                          {activeEmailTemplates.map(t => (
-                            <option key={t.id} value={t.id} className="bg-slate-900 text-slate-100">
-                              {t.isCustom ? '⭐ ' : '📋 '} {t.title}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Quick Insert Slot Snippet */}
-                      <button
-                        type="button"
-                        onClick={() => handleInsertQuickSnippet('calendar')}
-                        className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-[11px] font-bold cursor-pointer transition shrink-0 active:scale-95"
-                        title="Insert a proposed meeting slot"
-                      >
-                        📅 +Slot
-                      </button>
-
-                      {/* Matched SMTP Account Selector */}
+                      {/* 8. Matched SMTP Account Selector */}
                       {activeSmtpAccounts.length > 0 && (
-                        <div className="flex items-center gap-1 bg-slate-950/80 border border-slate-800 rounded-xl px-2.5 py-1 shrink-0">
+                        <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-xl px-2 py-1 shrink-0">
                           <span className="text-[9px] font-bold text-emerald-400 uppercase">From:</span>
                           <select
                             value={replySmtpId}
                             onChange={(e) => setReplySmtpId(e.target.value)}
-                            className="bg-transparent text-slate-200 text-[11px] font-bold cursor-pointer focus:outline-none max-w-[110px] sm:max-w-[140px] truncate"
+                            className="bg-transparent text-slate-200 text-[11px] font-bold cursor-pointer focus:outline-none max-w-[95px] sm:max-w-[120px] truncate"
+                            title="Select sender SMTP account"
                           >
                             {activeSmtpAccounts.map(acc => (
                               <option key={acc.id} value={acc.id} className="bg-slate-900 text-slate-100">
@@ -2818,19 +2736,54 @@ export const SmartInbox: React.FC = () => {
                         </div>
                       )}
 
+                      {/* 9. Compact Message Filter Selector (All / Replies / Sent) */}
+                      <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-xl px-2 py-1 shrink-0">
+                        <select
+                          value={messageDirectionFilter}
+                          onChange={(e) => setMessageDirectionFilter(e.target.value as any)}
+                          className="bg-transparent text-slate-300 text-[11px] font-bold cursor-pointer focus:outline-none"
+                          title="Filter conversation messages"
+                        >
+                          <option value="all" className="bg-slate-900 text-slate-100">
+                            💬 All ({Array.isArray(currentThread.messages) ? currentThread.messages.length : 1})
+                          </option>
+                          <option value="lead_only" className="bg-slate-900 text-emerald-300">
+                            📥 Replies ({Array.isArray(currentThread.messages) ? currentThread.messages.filter(m => m.sender === 'lead').length : 0})
+                          </option>
+                          <option value="user_only" className="bg-slate-900 text-blue-300">
+                            📤 Sent ({Array.isArray(currentThread.messages) ? currentThread.messages.filter(m => m.sender === 'user').length : 0})
+                          </option>
+                        </select>
+                      </div>
+
+                      {/* 10. Text Size Toggle */}
                       <button
                         type="button"
-                        onClick={() => setIsComposerMinimized(true)}
-                        className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-[11px] font-bold cursor-pointer transition shrink-0"
-                        title="Minimize reply box for full screen reading"
+                        onClick={() => setLargeReadingText(prev => !prev)}
+                        className={`px-2 py-1.5 rounded-xl text-[11px] font-bold border transition cursor-pointer shrink-0 ${
+                          largeReadingText
+                            ? 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                        title="Toggle reading text size"
                       >
-                        ⬇️ Hide
+                        {largeReadingText ? '🔍 Large' : '🔍 Aa'}
+                      </button>
+
+                      {/* 11. Toggle Reply Box Minimize / Expand */}
+                      <button
+                        type="button"
+                        onClick={() => setIsComposerMinimized(prev => !prev)}
+                        className="px-2 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-[11px] font-bold cursor-pointer transition shrink-0"
+                        title={isComposerMinimized ? 'Show reply box' : 'Hide reply box for full screen reading'}
+                      >
+                        {isComposerMinimized ? '⬆️ Box' : '⬇️ Box'}
                       </button>
                     </div>
 
                     {/* Fixed Right Send Reply Controls (Always Visible & Easy to Tap on Mobile) */}
                     <div className="flex items-center gap-1.5 shrink-0">
-                      {replyText.trim() && (
+                      {!isComposerMinimized && replyText.trim() && (
                         <button
                           type="button"
                           onClick={() => setReplyText('')}
@@ -2839,19 +2792,32 @@ export const SmartInbox: React.FC = () => {
                           Clear
                         </button>
                       )}
-                      <button
-                        type="submit"
-                        className="px-3.5 sm:px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-blue-500/25 transition cursor-pointer active:scale-95"
-                        title="Send Reply"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                        <span>Send Reply</span>
-                      </button>
+                      {isComposerMinimized ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsComposerMinimized(false);
+                            setTimeout(() => replyTextareaRef.current?.focus(), 50);
+                          }}
+                          className="px-3.5 sm:px-4 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-blue-500/25 transition cursor-pointer active:scale-95"
+                        >
+                          <Reply className="w-3.5 h-3.5" />
+                          <span>Reply</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="submit"
+                          className="px-3.5 sm:px-4 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-blue-500/25 transition cursor-pointer active:scale-95"
+                          title="Send Reply"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>Send Reply</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </form>
               </div>
-              )}
             </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-8 text-center space-y-4">

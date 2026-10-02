@@ -6085,11 +6085,9 @@ async function startServer() {
       res.setHeader("Content-Type", contentType);
       res.setHeader("ETag", asset.etag);
       res.setHeader("Vary", "Accept-Encoding");
-      const hasVersionQuery = Boolean(req.query && req.query.v);
-      res.setHeader(
-        "Cache-Control",
-        hasVersionQuery ? "public, max-age=31536000, immutable" : "public, max-age=300, stale-while-revalidate=86400"
-      );
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       if (req.headers["if-none-match"] === asset.etag) {
         return res.status(304).end();
       }
@@ -6111,7 +6109,7 @@ async function startServer() {
       return res.sendFile(filePath);
     }
   };
-  app.get(["/prebuilt/bundle.js", "/prebuilt/app.js"], (req, res) => {
+  app.get(["/prebuilt/bundle.js", "/prebuilt/app.js", "/prebuilt/bundle-:ver.js", "/prebuilt/app-:ver.js"], (req, res) => {
     return sendMemoryCachedAsset(
       req,
       res,
@@ -6119,7 +6117,7 @@ async function startServer() {
       "application/javascript; charset=utf-8"
     );
   });
-  app.get(["/prebuilt/bundle.css", "/prebuilt/app.css"], (req, res) => {
+  app.get(["/prebuilt/bundle.css", "/prebuilt/app.css", "/prebuilt/bundle-:ver.css", "/prebuilt/app-:ver.css"], (req, res) => {
     return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, "text/css; charset=utf-8");
   });
   app.get("/prebuilt/firebase-runtime.js", (req, res) => {
@@ -6135,7 +6133,7 @@ async function startServer() {
     res.setHeader("Cache-Control", "no-cache");
     return res.status(200).end("export {};\n");
   });
-  app.use("/prebuilt", import_express.default.static(prebuiltCandidate, { etag: true, maxAge: "1y" }));
+  app.use("/prebuilt", import_express.default.static(prebuiltCandidate, { etag: true, maxAge: 0 }));
   if (import_fs.default.existsSync(publicCandidate)) {
     app.use(import_express.default.static(publicCandidate, { index: false, etag: true, maxAge: "1d" }));
   }
@@ -6154,7 +6152,7 @@ async function startServer() {
       const v = getDynamicAssetVersion();
       if (!cachedHtmlRaw || !cachedHtmlGzip || cachedHtmlVersion !== v) {
         let html = import_fs.default.readFileSync(htmlPath, "utf8");
-        html = html.replace(/\/prebuilt\/(bundle|app)\.css(\?v=[^"']*)?/g, `/prebuilt/bundle.css?v=${v}`).replace(/\/prebuilt\/(bundle|app)\.js(\?v=[^"']*)?/g, `/prebuilt/bundle.js?v=${v}`);
+        html = html.replace(/\/prebuilt\/(bundle|app)(-[a-zA-Z0-9_]+)?\.css(\?v=[^"']*)?/g, `/prebuilt/bundle-${v}.css?v=${v}`).replace(/\/prebuilt\/(bundle|app)(-[a-zA-Z0-9_]+)?\.js(\?v=[^"']*)?/g, `/prebuilt/bundle-${v}.js?v=${v}`);
         cachedHtmlVersion = v;
         cachedHtmlRaw = Buffer.from(html, "utf8");
         cachedHtmlGzip = import_zlib.default.gzipSync(cachedHtmlRaw, { level: 6 });
