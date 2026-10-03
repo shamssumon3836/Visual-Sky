@@ -101,8 +101,16 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
 
       const parsed = await safeParseResponse(res, 'SMTP transmission failed');
       const data = parsed.data || {};
+      const isDelivered = Boolean(
+        (parsed.ok || res.ok) &&
+        (data.success === true ||
+          data.status === 'sent' ||
+          Boolean(data.messageId) ||
+          (Array.isArray(data.accepted) && data.accepted.length > 0)) &&
+        !data.error
+      );
 
-      if (parsed.ok && data.success) {
+      if (isDelivered) {
         setSentEmails(prev => prev.map(m => m.id === mail.id ? { ...m, status: 'sent', errorMessage: undefined } : m));
         setSelectedMail(prev => prev && prev.id === mail.id ? { ...prev, status: 'sent', errorMessage: undefined } : prev);
         addNotification({
@@ -111,7 +119,17 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
           type: 'reply'
         });
       } else {
-        const errText = data.error || 'Server rejected transmission';
+        const errText =
+          (typeof data.error === 'string' && data.error.trim()) ||
+          (data.error && typeof data.error?.message === 'string' && data.error.message.trim()) ||
+          (data.error && typeof data.error?.error === 'string' && data.error.error.trim()) ||
+          (typeof data.errorMessage === 'string' && data.errorMessage.trim()) ||
+          (typeof data.message === 'string' && data.message.trim()) ||
+          (typeof data.msg === 'string' && data.msg.trim()) ||
+          (typeof data.reason === 'string' && data.reason.trim()) ||
+          (typeof data.details === 'string' && data.details.trim()) ||
+          (data.code && typeof data.code === 'string' ? `SMTP Error (${data.code})` : '') ||
+          (res.status && res.status !== 200 ? `HTTP Error ${res.status}` : 'Server rejected transmission');
         setSentEmails(prev => prev.map(m => m.id === mail.id ? { ...m, errorMessage: errText } : m));
         setSelectedMail(prev => prev && prev.id === mail.id ? { ...prev, errorMessage: errText } : prev);
         addNotification({

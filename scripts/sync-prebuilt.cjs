@@ -248,6 +248,13 @@ try {
       fs.copyFileSync(path.join(prebuiltDir, 'app.css'), path.join(distPrebuiltDir, 'bundle.css'));
     }
   }
+  const publicSwPath = path.join(__dirname, '..', 'public', 'sw.js');
+  if (fs.existsSync(publicSwPath)) {
+    fs.copyFileSync(publicSwPath, path.join(prebuiltDir, 'sw.js'));
+    if (fs.existsSync(distDir)) {
+      fs.copyFileSync(publicSwPath, path.join(distDir, 'sw.js'));
+    }
+  }
 } catch {}
 console.log('[sync-prebuilt] Wrote clean index.html, prebuilt/index.html & dist/index.html with instant UI shell');
 

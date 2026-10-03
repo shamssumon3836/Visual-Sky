@@ -1157,15 +1157,35 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         })
       });
       const parsed = await safeParseResponse(res, 'Test email dispatch failed');
-      if (parsed.ok && parsed.data?.success) {
+      const data = parsed.data || {};
+      const isDelivered = Boolean(
+        (parsed.ok || res.ok) &&
+        (data.success === true ||
+          data.status === 'sent' ||
+          Boolean(data.messageId) ||
+          (Array.isArray(data.accepted) && data.accepted.length > 0)) &&
+        !data.error
+      );
+      if (isDelivered) {
         setTestEmailResult({
           ok: true,
           message: `✓ Test email (Step ${stepToTest.stepNumber || safeIdx + 1}) sent to ${cleanTarget} via ${smtp.name} (${fromAddr})!`
         });
       } else {
+        const errorMsg =
+          (typeof data.error === 'string' && data.error.trim()) ||
+          (data.error && typeof data.error?.message === 'string' && data.error.message.trim()) ||
+          (data.error && typeof data.error?.error === 'string' && data.error.error.trim()) ||
+          (typeof data.errorMessage === 'string' && data.errorMessage.trim()) ||
+          (typeof data.message === 'string' && data.message.trim()) ||
+          (typeof data.msg === 'string' && data.msg.trim()) ||
+          (typeof data.reason === 'string' && data.reason.trim()) ||
+          (typeof data.details === 'string' && data.details.trim()) ||
+          (data.code && typeof data.code === 'string' ? `SMTP Error (${data.code})` : '') ||
+          (res.status && res.status !== 200 ? `HTTP Error ${res.status}` : 'SMTP handshake or authentication failed. Check credentials.');
         setTestEmailResult({
           ok: false,
-          message: `✗ SMTP Error: ${parsed.data?.error || `HTTP ${res.status}`}`
+          message: `✗ SMTP Error: ${errorMsg}`
         });
       }
     } catch (err: any) {
@@ -1585,11 +1605,40 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         });
         const parsed = await safeParseResponse(res, 'SMTP relay connection failed');
         const data = parsed.data || {};
-        if (parsed.ok && data.success) {
+        const hasExplicitErr = Boolean(
+          data.error ||
+          data.errorMessage ||
+          data.code === 'EAUTH' ||
+          data.code === 'ETIMEDOUT' ||
+          data.success === false ||
+          data.status === 'failed'
+        );
+        const isDelivered = Boolean(
+          (parsed.ok || res.ok) &&
+          (data.success === true ||
+            data.status === 'sent' ||
+            Boolean(data.messageId) ||
+            (Array.isArray(data.accepted) && data.accepted.length > 0)) &&
+          !hasExplicitErr
+        );
+
+        if (isDelivered) {
           isSentSuccess = true;
         } else {
           isSentSuccess = false;
-          sendErrorMessage = data.error || `HTTP error ${res.status}`;
+          sendErrorMessage =
+            (typeof data.error === 'string' && data.error.trim()) ||
+            (data.error && typeof data.error?.message === 'string' && data.error.message.trim()) ||
+            (data.error && typeof data.error?.error === 'string' && data.error.error.trim()) ||
+            (typeof data.errorMessage === 'string' && data.errorMessage.trim()) ||
+            (typeof data.message === 'string' && data.message.trim()) ||
+            (typeof data.msg === 'string' && data.msg.trim()) ||
+            (typeof data.reason === 'string' && data.reason.trim()) ||
+            (typeof data.details === 'string' && data.details.trim()) ||
+            (data.code && typeof data.code === 'string' ? `SMTP Error (${data.code})` : '') ||
+            (res.status && res.status !== 200
+              ? `HTTP Error ${res.status}`
+              : 'SMTP delivery failed: check relay credentials or provider settings.');
         }
       } catch (err: any) {
         isSentSuccess = false;
