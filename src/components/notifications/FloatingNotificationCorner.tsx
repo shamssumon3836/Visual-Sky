@@ -206,34 +206,6 @@ export const FloatingNotificationCorner: React.FC = () => {
       };
     }
 
-    if (notif.type === 'smtp') {
-      return {
-        initials: '⚙️',
-        avatarGrad: 'from-amber-600 via-orange-600 to-yellow-500',
-        badgeBg: 'bg-amber-500 border-[#0b111e]',
-        badgeIcon: <ShieldAlert className="w-3 h-3 text-black" />,
-        pillText: 'SMTP NOTICE • CREDENTIALS / RELAY',
-        pillClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
-        cardBorder: 'border-amber-500/60 shadow-[0_20px_50px_rgba(245,158,11,0.22)]',
-        glowBar: 'from-amber-500 via-orange-500 to-yellow-400',
-        actionLabel: 'Open SMTP Settings'
-      };
-    }
-
-    if (notif.type === 'campaign' || notif.type === 'lead' || notif.type === 'system') {
-      return {
-        initials: '🚀',
-        avatarGrad: 'from-cyan-600 via-blue-600 to-indigo-600',
-        badgeBg: 'bg-cyan-500 border-[#0b111e]',
-        badgeIcon: <MessageCircle className="w-3 h-3 text-black" />,
-        pillText: 'OUTREACH • SYSTEM DISPATCH',
-        pillClass: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
-        cardBorder: 'border-cyan-500/50 shadow-[0_20px_50px_rgba(6,182,212,0.22)]',
-        glowBar: 'from-cyan-400 via-blue-500 to-indigo-500',
-        actionLabel: 'View Details'
-      };
-    }
-
     // 'bounce' (Blocked / Bounced)
     return {
       initials: '!',

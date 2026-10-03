@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Component, ReactNode } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { LandingPage } from './components/landing/LandingPage';
 import { Navbar } from './components/layout/Navbar';
@@ -436,22 +436,12 @@ const MainContent: React.FC = () => {
   );
 };
 
-interface RootErrorBoundaryProps {
-  children: ReactNode;
-}
-
-interface RootErrorBoundaryState {
-  hasError: boolean;
-}
-
-class RootErrorBoundary extends (React.Component as any) {
-  state: RootErrorBoundaryState = { hasError: false };
-  props: RootErrorBoundaryProps;
-  setState: any;
-
-  constructor(props: RootErrorBoundaryProps) {
+class RootErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
     super(props);
-    this.props = props;
     this.state = { hasError: false };
   }
 

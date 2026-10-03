@@ -136,27 +136,20 @@ export const MAPS_CATEGORIES = [
   { id: 'accounting_cpa', label: 'CPA & Accounting Firms', icon: '📊' },
   { id: 'marketing_agencies', label: 'Marketing & Web Agencies', icon: '🚀' },
   { id: 'gyms_fitness', label: 'Gyms, Fitness & CrossFit', icon: '🏋️' },
-  { id: 'auto_repair', label: 'Auto Care & Motorcycle Garages', icon: '🚗' },
+  { id: 'auto_repair', label: 'Auto Care & Dealerships', icon: '🚗' },
   { id: 'med_spas', label: 'Medical Spas & Aesthetics', icon: '✨' },
-  { id: 'solar_energy', label: 'Solar Panel & Clean Tech Contractors', icon: '☀️' },
-  { id: 'coffee_roasters', label: 'Specialty Coffee Roasters & Cafes', icon: '☕' },
-  { id: 'yacht_marine', label: 'Yacht Charter & Marine Services', icon: '🛥️' },
-  { id: 'pet_vet', label: 'Veterinary Clinics & Pet Care', icon: '🐾' },
-  { id: 'groceries_organic', label: 'Ethnic & Organic Grocery Stores', icon: '🛒' },
   { id: 'restaurants_catering', label: 'Restaurants & Catering', icon: '🍽️' }
 ];
 
 export const QUICK_CITIES = [
-  'Austin, TX',
   'New York, NY',
-  'Miami, FL',
-  'London, UK',
   'San Francisco, CA',
-  'Dhaka, Bangladesh',
-  'Dubai, UAE',
-  'Toronto, Canada',
-  'Dallas, TX',
+  'Austin, TX',
+  'Miami, FL',
   'Chicago, IL',
   'Los Angeles, CA',
-  'Sydney, Australia'
+  'London, UK',
+  'Toronto, Canada',
+  'Sydney, Australia',
+  'Dubai, UAE'
 ];
