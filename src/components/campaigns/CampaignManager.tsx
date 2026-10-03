@@ -1175,11 +1175,14 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         const errorMsg =
           (typeof data.error === 'string' && data.error.trim()) ||
           (data.error && typeof data.error?.message === 'string' && data.error.message.trim()) ||
+          (data.error && typeof data.error?.error === 'string' && data.error.error.trim()) ||
+          (typeof data.errorMessage === 'string' && data.errorMessage.trim()) ||
           (typeof data.message === 'string' && data.message.trim()) ||
           (typeof data.msg === 'string' && data.msg.trim()) ||
           (typeof data.reason === 'string' && data.reason.trim()) ||
           (typeof data.details === 'string' && data.details.trim()) ||
-          (res.status && res.status !== 200 ? `HTTP ${res.status}` : 'SMTP handshake or authentication failed. Check credentials.');
+          (data.code && typeof data.code === 'string' ? `SMTP Error (${data.code})` : '') ||
+          (res.status && res.status !== 200 ? `HTTP Error ${res.status}` : 'SMTP handshake or authentication failed. Check credentials.');
         setTestEmailResult({
           ok: false,
           message: `✗ SMTP Error: ${errorMsg}`
@@ -1602,13 +1605,21 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         });
         const parsed = await safeParseResponse(res, 'SMTP relay connection failed');
         const data = parsed.data || {};
+        const hasExplicitErr = Boolean(
+          data.error ||
+          data.errorMessage ||
+          data.code === 'EAUTH' ||
+          data.code === 'ETIMEDOUT' ||
+          data.success === false ||
+          data.status === 'failed'
+        );
         const isDelivered = Boolean(
           (parsed.ok || res.ok) &&
           (data.success === true ||
             data.status === 'sent' ||
             Boolean(data.messageId) ||
             (Array.isArray(data.accepted) && data.accepted.length > 0)) &&
-          !data.error
+          !hasExplicitErr
         );
 
         if (isDelivered) {
@@ -1618,12 +1629,15 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
           sendErrorMessage =
             (typeof data.error === 'string' && data.error.trim()) ||
             (data.error && typeof data.error?.message === 'string' && data.error.message.trim()) ||
+            (data.error && typeof data.error?.error === 'string' && data.error.error.trim()) ||
+            (typeof data.errorMessage === 'string' && data.errorMessage.trim()) ||
             (typeof data.message === 'string' && data.message.trim()) ||
             (typeof data.msg === 'string' && data.msg.trim()) ||
             (typeof data.reason === 'string' && data.reason.trim()) ||
             (typeof data.details === 'string' && data.details.trim()) ||
+            (data.code && typeof data.code === 'string' ? `SMTP Error (${data.code})` : '') ||
             (res.status && res.status !== 200
-              ? `HTTP error ${res.status}`
+              ? `HTTP Error ${res.status}`
               : 'SMTP delivery failed: check relay credentials or provider settings.');
         }
       } catch (err: any) {

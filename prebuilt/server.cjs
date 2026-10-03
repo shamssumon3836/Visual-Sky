@@ -3555,10 +3555,10 @@ app.post("/api/leads/generate", async (req, res) => {
   res.setHeader("Content-Type", "application/json");
   try {
     const {
-      mode: mode2 = "standard",
+      mode = "standard",
       seedDomain = "",
       niche = "SaaS Founders",
-      location: location2 = "United States",
+      location = "United States",
       batchSize = 10,
       leadType = "Founders & CEOs",
       customPrompt = "",
@@ -3574,23 +3574,23 @@ app.post("/api/leads/generate", async (req, res) => {
       minRating = "4.0"
     } = req.body || {};
     const count = Math.min(Math.max(Number(batchSize) || 10, 1), 50);
-    const targetRole2 = customRole.trim() || leadType || (mode2 === "google_maps" ? "Business Owner / Principal" : "Founder & CEO");
-    const targetNiche2 = mapsCategory ? `${mapsCategory} ${customPrompt ? `(${customPrompt})` : ""}`.trim() : mode2 === "lookalike" && seedDomain ? `Lookalikes & Competitors of ${seedDomain}` : niche;
+    const targetRole = customRole.trim() || leadType || (mode === "google_maps" ? "Business Owner / Principal" : "Founder & CEO");
+    const targetNiche = mapsCategory ? `${mapsCategory} ${customPrompt ? `(${customPrompt})` : ""}`.trim() : mode === "lookalike" && seedDomain ? `Lookalikes & Competitors of ${seedDomain}` : niche;
     const socialsList = Array.isArray(selectedSocials) && selectedSocials.length > 0 ? selectedSocials : ["linkedin", "twitter"];
-    const directoriesList = Array.isArray(selectedDirectories) && selectedDirectories.length > 0 ? selectedDirectories : mode2 === "google_maps" ? ["google_maps", "google_search", "yelp"] : ["google_search", "google_maps", "crunchbase"];
+    const directoriesList = Array.isArray(selectedDirectories) && selectedDirectories.length > 0 ? selectedDirectories : mode === "google_maps" ? ["google_maps", "google_search", "yelp"] : ["google_search", "google_maps", "crunchbase"];
     if (getGeminiClient()) {
       try {
-        const isMapsMode = mode2 === "google_maps";
-        const isLookalikeMode = mode2 === "lookalike";
+        const isMapsMode = mode === "google_maps";
+        const isLookalikeMode = mode === "lookalike";
         const prompt = `You are a world-class B2B Lead Intelligence Engine and Deep Lead Researcher for VisualSky.
 Generate a list of exactly ${count} highly realistic, active, and verified leads for:
 - Operation Mode: "${isMapsMode ? "Google Maps Verified Local Businesses & Places" : isLookalikeMode ? `Competitor & Lookalike Companies similar to "${seedDomain}"` : "Targeted B2B Decision Makers"}"
-- Target Industry / Niche: "${targetNiche2}"
-- Target Location / Geo: "${location2}" ${isMapsMode ? `(Search Radius: ${mapsRadius}, Min Rating: ${minRating}+ stars)` : ""}
-- Target Decision Maker Role: "${targetRole2}"
-${isLookalikeMode ? `- Benchmark Seed Domain: "${seedDomain}". Uncover companies with similar offerings, customer profiles, and business models, then extract decision makers matching "${targetRole2}".` : ""}
-- Target Social Media Tags & Sector Focus: "${socialNicheTags || targetNiche2}"
-- Target Directory Tags & Industry Focus: "${dirNicheTags || targetNiche2}"
+- Target Industry / Niche: "${targetNiche}"
+- Target Location / Geo: "${location}" ${isMapsMode ? `(Search Radius: ${mapsRadius}, Min Rating: ${minRating}+ stars)` : ""}
+- Target Decision Maker Role: "${targetRole}"
+${isLookalikeMode ? `- Benchmark Seed Domain: "${seedDomain}". Uncover companies with similar offerings, customer profiles, and business models, then extract decision makers matching "${targetRole}".` : ""}
+- Target Social Media Tags & Sector Focus: "${socialNicheTags || targetNiche}"
+- Target Directory Tags & Industry Focus: "${dirNicheTags || targetNiche}"
 - Required Social Platforms: ${socialsList.join(", ")}
 - Targeted Business Directories & Maps: ${directoriesList.join(", ")}
 ${customPrompt ? `- Additional Custom Instructions: "${customPrompt}"` : ""}
@@ -3599,7 +3599,7 @@ STRICT ANTI-DUMMY RULES (CRITICAL FOR LIVE VERIFICATION):
 1. NO FAKE PLACEHOLDERS: NEVER output '555-0000', '000-0000', '123-4567', 'example.com', 'domain.com', 'email@domain.com', 'Full Name', or 'Company Name'.
 2. AUTHENTIC EXECUTIVE NAMES: Provide genuine, full human names (e.g. Dr. Sarah Chen, Marcus Sterling, Elena Alvarez, David Reynolds, Tariq Rahman).
 3. MATCHING DOMAIN & EMAIL: Every lead MUST have an active company domain URL (e.g. 'https://austindentalarts.com'). Every email MUST use the company's real domain (e.g. 'sarah.chen@austindentalarts.com' or 'contact@austindentalarts.com').
-4. REAL LOCAL PHONE NUMBERS: Provide working, realistic phone numbers formatted with the ACTUAL area code of the target location "${location2}" (e.g. Austin -> +1 (512) 472-8391; New York -> +1 (212) 684-2194; San Francisco -> +1 (415) 892-3401; Miami -> +1 (305) 674-1290; Chicago -> +1 (312) 782-9014; London -> +44 20 7946 0812; Toronto -> +1 (416) 978-2041; Dhaka -> +880 1712-493821; Dubai -> +971 4 382 9140; Sydney -> +61 2 9234 8192; etc.).
+4. REAL LOCAL PHONE NUMBERS: Provide working, realistic phone numbers formatted with the ACTUAL area code of the target location "${location}" (e.g. Austin -> +1 (512) 472-8391; New York -> +1 (212) 684-2194; San Francisco -> +1 (415) 892-3401; Miami -> +1 (305) 674-1290; Chicago -> +1 (312) 782-9014; London -> +44 20 7946 0812; Toronto -> +1 (416) 978-2041; Dhaka -> +880 1712-493821; Dubai -> +971 4 382 9140; Sydney -> +61 2 9234 8192; etc.).
 5. ONLY include social media profiles for the selected platforms: [${socialsList.join(", ")}].
 6. Set source as "${isMapsMode ? "Google Maps Places & Verified Geotag" : `${directoriesList.slice(0, 2).map((d) => d.replace("_", " ").toUpperCase()).join(" + ")} & ${socialsList.slice(0, 2).map((s) => s.toUpperCase()).join("/")}`}".
 7. Provide an accurate lead quality score (93-99%), company size (e.g. "15-50 employees"), and a tailored personalized icebreaker note based on their company.
@@ -3608,13 +3608,13 @@ Respond ONLY with a valid JSON array of objects with the following schema:
 [
   {
     "name": "Dr. Sarah Chen",
-    "title": "${targetRole2}",
+    "title": "${targetRole}",
     "company": "Apex Growth Partners",
     "email": "sarah.chen@apexgrowth.com",
     "phone": "+1 (512) 489-3214",
     "website": "https://apexgrowth.com",
-    "niche": "${targetNiche2}",
-    "location": "${location2}",
+    "niche": "${targetNiche}",
+    "location": "${location}",
     "source": "${isMapsMode ? "Google Maps Places" : "Google Maps & LinkedIn"}",
     "companySize": "20-50 employees",
     "leadScore": 96,
@@ -3644,7 +3644,7 @@ Respond ONLY with a valid JSON array of objects with the following schema:
     }
     const sampleFirst = ["Alex", "Sarah", "Marcus", "Elena", "David", "Chloe", "Liam", "Zubair", "Sophia", "James", "Maya", "Lucas", "Nadia", "Daniel", "Olivia", "Ethan", "Isabella", "Tariq"];
     const sampleLast = ["Vance", "Chen", "Sterling", "Novak", "Miller", "Dubois", "Reynolds", "Rahman", "Alvarez", "Wright", "Kim", "Patel", "Jensen", "Foster", "Bennett", "Morales", "Sinclair"];
-    const locLower = (location2 || "").toLowerCase();
+    const locLower = (location || "").toLowerCase();
     let cityAreaCode = "+1 (415) 892-";
     if (locLower.includes("austin") || locLower.includes("texas") || locLower.includes("tx")) cityAreaCode = "+1 (512) 472-";
     else if (locLower.includes("dallas")) cityAreaCode = "+1 (214) 739-";
@@ -3660,8 +3660,8 @@ Respond ONLY with a valid JSON array of objects with the following schema:
     else if (locLower.includes("sydney") || locLower.includes("australia")) cityAreaCode = "+61 2 9234 ";
     else if (locLower.includes("singapore")) cityAreaCode = "+65 6789 ";
     else if (locLower.includes("berlin") || locLower.includes("germany")) cityAreaCode = "+49 30 2312 ";
-    const cleanNicheSlug = targetNiche2.replace(/[^a-zA-Z0-9 ]/g, "").trim().split(" ").slice(0, 2).join(" ") || "Enterprise";
-    const cleanCitySlug = location2.split(",")[0].replace(/[^a-zA-Z0-9 ]/g, "").trim() || "Metro";
+    const cleanNicheSlug = targetNiche.replace(/[^a-zA-Z0-9 ]/g, "").trim().split(" ").slice(0, 2).join(" ") || "Enterprise";
+    const cleanCitySlug = location.split(",")[0].replace(/[^a-zA-Z0-9 ]/g, "").trim() || "Metro";
     const generated = [];
     for (let i = 0; i < count; i++) {
       const fn = sampleFirst[i % sampleFirst.length];
@@ -3690,17 +3690,17 @@ Respond ONLY with a valid JSON array of objects with the following schema:
       }
       generated.push({
         name: cleanName,
-        title: targetRole2,
+        title: targetRole,
         company: compName,
         email,
         phone: phoneNum,
         website: `https://${compDomain}`,
-        niche: targetNiche2,
-        location: location2 || "United States",
-        source: mode2 === "google_maps" ? "Google Maps Places & Verified Geotag" : `${socialsList.slice(0, 2).map((s) => s.toUpperCase()).join(" & ")} / AI Miner`,
+        niche: targetNiche,
+        location: location || "United States",
+        source: mode === "google_maps" ? "Google Maps Places & Verified Geotag" : `${socialsList.slice(0, 2).map((s) => s.toUpperCase()).join(" & ")} / AI Miner`,
         companySize: `${10 + i * 8}-${30 + i * 15} employees`,
         leadScore: Math.floor(93 + Math.random() * 6),
-        icebreaker: `Noticed ${compName}'s prime local reputation and active client satisfaction in ${location2}.`,
+        icebreaker: `Noticed ${compName}'s prime local reputation and active client satisfaction in ${location}.`,
         socials
       });
     }
@@ -3712,9 +3712,10 @@ Respond ONLY with a valid JSON array of objects with the following schema:
     });
   } catch (err) {
     console.error("Lead gen route error:", err);
+    const { niche: reqNiche = "B2B Enterprise", location: reqLoc = "Metro", customRole: reqRole = "Founder & CEO", mode: reqMode = "standard" } = req.body || {};
     const count = 10;
-    const cleanNicheSlug = (targetNiche || "B2B Enterprise").replace(/[^a-zA-Z0-9 ]/g, "").trim().split(" ").slice(0, 2).join(" ") || "Solutions";
-    const cleanCitySlug = (location || "Metro").split(",")[0].replace(/[^a-zA-Z0-9 ]/g, "").trim() || "National";
+    const cleanNicheSlug = String(reqNiche || "B2B Enterprise").replace(/[^a-zA-Z0-9 ]/g, "").trim().split(" ").slice(0, 2).join(" ") || "Solutions";
+    const cleanCitySlug = String(reqLoc || "Metro").split(",")[0].replace(/[^a-zA-Z0-9 ]/g, "").trim() || "National";
     const sampleNames = [
       ["Dr. Sarah", "Chen"],
       ["Marcus", "Reynolds"],
@@ -3733,17 +3734,17 @@ Respond ONLY with a valid JSON array of objects with the following schema:
       const domain = `${comp.toLowerCase().replace(/[^a-z0-9]/g, "")}.com`;
       return {
         name: `${fn} ${ln}`,
-        title: targetRole || "Founder & CEO",
+        title: reqRole || "Founder & CEO",
         company: comp,
         email: `${fn.toLowerCase().replace(/[^a-z]/g, "")}.${ln.toLowerCase()}@${domain}`,
         phone: `+1 (512) 489-${1e3 + i * 317}`,
         website: `https://${domain}`,
-        niche: targetNiche || "B2B Services",
-        location: location || "United States",
-        source: mode === "google_maps" ? "Google Maps Places & Verified Geotag" : "Google Maps & LinkedIn AI Miner",
+        niche: reqNiche || "B2B Services",
+        location: String(reqLoc || "United States"),
+        source: reqMode === "google_maps" ? "Google Maps Places & Verified Geotag" : "Google Maps & LinkedIn AI Miner",
         companySize: "15-50 employees",
         leadScore: 95 + i % 4,
-        icebreaker: `Noticed ${comp}'s standout traction and strong client satisfaction in ${location || "the market"}.`,
+        icebreaker: `Noticed ${comp}'s standout traction and strong client satisfaction in ${reqLoc || "the market"}.`,
         socials: { linkedin: `https://linkedin.com/in/${fn.toLowerCase()}${ln.toLowerCase()}` }
       };
     });
@@ -4746,12 +4747,14 @@ app.post("/api/smtp/send", async (req, res) => {
       }
     }
     if (activeSmtp && !activeSmtp.password && !activeSmtp.apiKey) {
-      if (process.env.SMTP_PASS && (!activeSmtp.host || activeSmtp.host === process.env.SMTP_HOST || activeSmtp.username === process.env.SMTP_USER || activeSmtp.provider === "domain_webmail" || activeSmtp.provider === "custom")) {
+      if (process.env.SMTP_PASS && process.env.SMTP_HOST && process.env.SMTP_USER) {
+        activeSmtp.host = process.env.SMTP_HOST;
+        activeSmtp.port = Number(process.env.SMTP_PORT) || 465;
+        activeSmtp.encryption = process.env.SMTP_SECURE === "true" ? "SSL" : "TLS";
+        activeSmtp.username = process.env.SMTP_USER;
         activeSmtp.password = process.env.SMTP_PASS;
-        if (!activeSmtp.host) activeSmtp.host = process.env.SMTP_HOST;
-        if (!activeSmtp.port) activeSmtp.port = Number(process.env.SMTP_PORT) || 465;
-        if (!activeSmtp.username) activeSmtp.username = process.env.SMTP_USER;
         if (!activeSmtp.fromEmail) activeSmtp.fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
+        if (!activeSmtp.fromName) activeSmtp.fromName = process.env.SMTP_FROM_NAME || "Visual Sky Outreach";
       }
     }
     if (!activeSmtp || !activeSmtp.host && !activeSmtp.apiKey && !activeSmtp.password) {
@@ -4787,8 +4790,8 @@ app.post("/api/smtp/send", async (req, res) => {
     const isWeek1Warmup = (() => {
       if (req.body.week1TextOnly === true) return true;
       if (!activeSmtp) return false;
-      const mode2 = activeSmtp.warmupMode || (activeSmtp.warmupStatus === "warming" ? "ramp_15" : "full");
-      if (mode2 !== "ramp_15") return false;
+      const mode = activeSmtp.warmupMode || (activeSmtp.warmupStatus === "warming" ? "ramp_15" : "full");
+      if (mode !== "ramp_15") return false;
       if (activeSmtp.warmupCurrentDay && Number(activeSmtp.warmupCurrentDay) <= 7) return true;
       const startStr = activeSmtp.warmupStartDate;
       if (!startStr) return true;
@@ -5132,6 +5135,58 @@ ${textItems.join("\n")}`;
       });
     } catch (sendErr) {
       console.error("SMTP transmission failure on live send:", sendErr?.message);
+      if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS && (activeSmtp.host !== process.env.SMTP_HOST || activeSmtp.username !== process.env.SMTP_USER)) {
+        try {
+          const fallbackPort = Number(process.env.SMTP_PORT) || 465;
+          const fallbackSecure = process.env.SMTP_SECURE === "true" || fallbackPort === 465;
+          const fallbackSenderEmail = process.env.SMTP_FROM || process.env.SMTP_USER || "founder@visualsky.pro";
+          const fallbackTransporter = import_nodemailer.default.createTransport({
+            host: process.env.SMTP_HOST,
+            port: fallbackPort,
+            secure: fallbackSecure,
+            auth: {
+              user: process.env.SMTP_USER,
+              pass: process.env.SMTP_PASS
+            },
+            connectionTimeout: 1e4,
+            greetingTimeout: 8e3,
+            socketTimeout: 14e3,
+            tls: { rejectUnauthorized: false }
+          });
+          const fallbackMailOptions = {
+            ...mailOptions,
+            from: `"${senderDisplayName}" <${fallbackSenderEmail}>`,
+            envelope: {
+              from: fallbackSenderEmail,
+              to: cleanRecipientEmail
+            }
+          };
+          const fallbackSendPromise = fallbackTransporter.sendMail(fallbackMailOptions);
+          const fallbackTimeout = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error("Fallback timeout")), 1e4);
+          });
+          const fbInfo = await Promise.race([fallbackSendPromise, fallbackTimeout]);
+          try {
+            fallbackTransporter.close();
+          } catch {
+          }
+          if (fbInfo && (fbInfo.messageId || Array.isArray(fbInfo.accepted) && fbInfo.accepted.length > 0)) {
+            console.log(`[Auto-Fallback Success] Email to ${cleanRecipientEmail} routed via platform relay (${process.env.SMTP_HOST}) after ${activeSmtp.host} auth failure.`);
+            return res.json({
+              success: true,
+              messageId: fbInfo.messageId || customMessageId,
+              status: "sent",
+              trackingPixelId: pixelId,
+              deliveredAt: (/* @__PURE__ */ new Date()).toISOString(),
+              accepted: fbInfo.accepted || [cleanRecipientEmail],
+              relay: `${process.env.SMTP_HOST}:${fallbackPort} (Platform Relay Fallback)`,
+              note: `Dispatched via verified platform relay because ${activeSmtp.host} authentication failed.`
+            });
+          }
+        } catch (fbErr) {
+          console.warn("[Auto-Fallback Error] Fallback relay also failed:", fbErr?.message);
+        }
+      }
       let friendlyError = sendErr?.message || "Transmission rejected by remote SMTP server";
       if (sendErr?.code === "EAUTH" || friendlyError.includes("535") || friendlyError.toLowerCase().includes("auth")) {
         friendlyError = `Authentication failed: Remote SMTP server rejected username "${activeSmtp.username}" or password. Please check your credentials.`;

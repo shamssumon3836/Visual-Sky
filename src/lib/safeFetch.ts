@@ -153,13 +153,21 @@ export async function safeParseResponse<T = any>(
         resolvedError = parsedObj.reason.trim();
       } else if (typeof parsedObj.details === 'string' && parsedObj.details.trim()) {
         resolvedError = parsedObj.details.trim();
+      } else if (parsedObj.error && typeof parsedObj.error?.error === 'string' && parsedObj.error.error.trim()) {
+        resolvedError = parsedObj.error.error.trim();
+      } else if (typeof parsedObj.code === 'string' && parsedObj.code.trim()) {
+        resolvedError = `SMTP Error (${parsedObj.code.trim()})`;
       } else if (!ok) {
         resolvedError = `${fallbackErrorMessage} (HTTP ${status})`;
+      } else {
+        resolvedError = fallbackErrorMessage;
       }
     }
 
+    const finalOk = Boolean(ok && isSuccess && !resolvedError);
+
     return {
-      ok: ok && (isSuccess || !resolvedError),
+      ok: finalOk,
       status,
       data: {
         ...parsedObj,

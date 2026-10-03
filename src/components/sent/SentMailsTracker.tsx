@@ -122,8 +122,14 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
         const errText =
           (typeof data.error === 'string' && data.error.trim()) ||
           (data.error && typeof data.error?.message === 'string' && data.error.message.trim()) ||
+          (data.error && typeof data.error?.error === 'string' && data.error.error.trim()) ||
+          (typeof data.errorMessage === 'string' && data.errorMessage.trim()) ||
           (typeof data.message === 'string' && data.message.trim()) ||
-          (res.status && res.status !== 200 ? `HTTP error ${res.status}` : 'Server rejected transmission');
+          (typeof data.msg === 'string' && data.msg.trim()) ||
+          (typeof data.reason === 'string' && data.reason.trim()) ||
+          (typeof data.details === 'string' && data.details.trim()) ||
+          (data.code && typeof data.code === 'string' ? `SMTP Error (${data.code})` : '') ||
+          (res.status && res.status !== 200 ? `HTTP Error ${res.status}` : 'Server rejected transmission');
         setSentEmails(prev => prev.map(m => m.id === mail.id ? { ...m, errorMessage: errText } : m));
         setSelectedMail(prev => prev && prev.id === mail.id ? { ...prev, errorMessage: errText } : prev);
         addNotification({
