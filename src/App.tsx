@@ -225,7 +225,7 @@ const MainContent: React.FC = () => {
       case 'leads':
         return <LeadDirectory onOpenSendMail={(lead) => handleOpenSendMail(lead)} />;
       case 'generator':
-        return <AILeadGenerator onOpenSendMail={(lead) => handleOpenSendMail(lead)} />;
+        return <AILeadGenerator />;
       case 'inbox':
         return <SmartInbox />;
       case 'sent':

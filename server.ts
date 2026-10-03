@@ -9,7 +9,6 @@ import { simpleParser } from 'mailparser';
 import crypto from 'crypto';
 import dns from 'dns';
 import zlib from 'zlib';
-import webpush from 'web-push';
 
 dotenv.config();
 
@@ -84,207 +83,7 @@ const PAYMENT_SETTINGS_FILE = path.join(DATA_DIR, 'payment_settings.json');
 const SUBSCRIPTIONS_FILE = path.join(DATA_DIR, 'subscriptions_registry.json');
 const TRACKING_EVENTS_FILE = path.join(DATA_DIR, 'tracking_events.json');
 const DRIVE_STORAGE_SETTINGS_FILE = path.join(DATA_DIR, 'drive_storage_settings.json');
-const VAPID_KEYS_FILE = path.join(DATA_DIR, 'vapid_keys.json');
-const PUSH_SUBSCRIPTIONS_FILE = path.join(DATA_DIR, 'push_subscriptions.json');
-const NOTIFIED_IMAP_UIDS_FILE = path.join(DATA_DIR, 'notified_imap_uids.json');
 const TRANSPARENT_GIF_BUFFER = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
-
-// Initialize Persistent VAPID Keys for RFC 8030 Background & Offline Web Push Notifications
-const initVapidKeys = (): { publicKey: string; privateKey: string } => {
-  try {
-    if (fs.existsSync(VAPID_KEYS_FILE)) {
-      const saved = JSON.parse(fs.readFileSync(VAPID_KEYS_FILE, 'utf-8'));
-      if (saved && saved.publicKey && saved.privateKey) {
-        return saved;
-      }
-    }
-  } catch {}
-  const generated = webpush.generateVAPIDKeys();
-  try {
-    fs.writeFileSync(VAPID_KEYS_FILE, JSON.stringify(generated, null, 2), 'utf-8');
-  } catch {}
-  return generated;
-};
-
-const vapidKeys = initVapidKeys();
-try {
-  webpush.setVapidDetails(
-    'mailto:founder@visualsky.pro',
-    vapidKeys.publicKey,
-    vapidKeys.privateKey
-  );
-} catch (err) {
-  console.warn('[WebPush] VAPID init warning:', err);
-}
-
-interface StoredPushSubscriptionRecord {
-  endpoint: string;
-  subscription: webpush.PushSubscription;
-  userEmail: string;
-  userId?: string;
-  userAgent?: string;
-  updatedAt: string;
-}
-
-const loadPushSubscriptions = (): StoredPushSubscriptionRecord[] => {
-  try {
-    if (fs.existsSync(PUSH_SUBSCRIPTIONS_FILE)) {
-      const parsed = JSON.parse(fs.readFileSync(PUSH_SUBSCRIPTIONS_FILE, 'utf-8'));
-      if (Array.isArray(parsed)) {
-        return parsed.filter(item => item && item.endpoint && item.subscription);
-      }
-    }
-  } catch {}
-  return [];
-};
-
-const savePushSubscriptions = (records: StoredPushSubscriptionRecord[]) => {
-  try {
-    fs.writeFileSync(PUSH_SUBSCRIPTIONS_FILE, JSON.stringify(records, null, 2), 'utf-8');
-  } catch {}
-};
-
-// Dispatch Encrypted High-Urgency Web Push Notification to User Devices (works even when all browser tabs are closed!)
-const dispatchWebPushNotification = async (
-  payload: {
-    title: string;
-    body: string;
-    tag?: string;
-    linkTab?: string;
-    leadEmail?: string;
-    threadId?: string;
-    url?: string;
-    type?: string;
-  },
-  targetUserEmail?: string
-) => {
-  const allSubs = loadPushSubscriptions();
-  if (allSubs.length === 0) return;
-
-  const cleanTarget = String(targetUserEmail || '').trim().toLowerCase();
-  let matchingSubs = cleanTarget
-    ? allSubs.filter(s => !s.userEmail || s.userEmail.toLowerCase() === cleanTarget)
-    : allSubs;
-  if (matchingSubs.length === 0) {
-    matchingSubs = allSubs;
-  }
-
-  const deadEndpoints = new Set<string>();
-  const jsonPayload = JSON.stringify({
-    ...payload,
-    timestamp: Date.now()
-  });
-
-  await Promise.all(
-    matchingSubs.map(async rec => {
-      try {
-        await webpush.sendNotification(rec.subscription, jsonPayload, {
-          TTL: 86400,
-          urgency: 'high'
-        });
-      } catch (err: any) {
-        if (err?.statusCode === 404 || err?.statusCode === 410) {
-          deadEndpoints.add(rec.endpoint);
-        }
-      }
-    })
-  );
-
-  if (deadEndpoints.size > 0) {
-    const remaining = allSubs.filter(s => !deadEndpoints.has(s.endpoint));
-    savePushSubscriptions(remaining);
-  }
-};
-
-// Persistent Tracker of Notified IMAP UIDs so Server Background Watcher only pushes brand-new incoming emails
-interface NotifiedImapUidEntry {
-  initialized: boolean;
-  uids: number[];
-  updatedAt: string;
-}
-
-const loadNotifiedImapUids = (): Record<string, NotifiedImapUidEntry> => {
-  try {
-    if (fs.existsSync(NOTIFIED_IMAP_UIDS_FILE)) {
-      const parsed = JSON.parse(fs.readFileSync(NOTIFIED_IMAP_UIDS_FILE, 'utf-8'));
-      if (parsed && typeof parsed === 'object') return parsed;
-    }
-  } catch {}
-  return {};
-};
-
-const saveNotifiedImapUids = (mapObj: Record<string, NotifiedImapUidEntry>) => {
-  try {
-    fs.writeFileSync(NOTIFIED_IMAP_UIDS_FILE, JSON.stringify(mapObj, null, 2), 'utf-8');
-  } catch {}
-};
-
-const notifiedImapUidsMemory: Record<string, NotifiedImapUidEntry> = loadNotifiedImapUids();
-const lastImapSyncTimestampByUser = new Map<string, number>();
-
-// Web Push API Endpoints for 24/7 Background & Closed-Browser Notifications
-app.get('/api/push/vapid-public-key', (_req, res) => {
-  return res.json({
-    success: true,
-    publicKey: vapidKeys.publicKey
-  });
-});
-
-app.post('/api/push/subscribe', (req, res) => {
-  try {
-    const { subscription, userEmail, userId } = req.body || {};
-    if (!subscription || !subscription.endpoint) {
-      return res.status(400).json({ success: false, error: 'Invalid push subscription object' });
-    }
-    const cleanEmail = String(userEmail || '').trim().toLowerCase();
-    const existing = loadPushSubscriptions().filter(s => s.endpoint !== subscription.endpoint);
-    existing.push({
-      endpoint: subscription.endpoint,
-      subscription,
-      userEmail: cleanEmail,
-      userId: String(userId || '').trim(),
-      userAgent: String(req.headers['user-agent'] || ''),
-      updatedAt: new Date().toISOString()
-    });
-    savePushSubscriptions(existing.slice(-50));
-    return res.json({ success: true, count: existing.length });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err?.message || 'Failed to save subscription' });
-  }
-});
-
-app.post('/api/push/unsubscribe', (req, res) => {
-  try {
-    const { endpoint } = req.body || {};
-    if (endpoint) {
-      const remaining = loadPushSubscriptions().filter(s => s.endpoint !== endpoint);
-      savePushSubscriptions(remaining);
-    }
-    return res.json({ success: true });
-  } catch {
-    return res.json({ success: false });
-  }
-});
-
-app.post('/api/push/test', async (req, res) => {
-  try {
-    const { userEmail } = req.body || {};
-    await dispatchWebPushNotification(
-      {
-        title: '🔔 24/7 Background Notification Active!',
-        body: 'আপনি অন্য ট্যাবে থাকলে বা ব্রাউজার বন্ধ রাখলেও এখন নতুন মেইল ও রিপ্লাইয়ের নোটিফিকেশন সাথে সাথে পাবেন!',
-        tag: `vs-test-push-${Date.now()}`,
-        linkTab: 'inbox',
-        url: '/?tab=inbox',
-        type: 'reply'
-      },
-      userEmail
-    );
-    return res.json({ success: true });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err?.message || 'Push test failed' });
-  }
-});
 
 const DEFAULT_PAYMENT_SETTINGS = {
   bkashPersonalNumber: '01577-225248',
@@ -4499,8 +4298,6 @@ app.post('/api/leads/generate', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   try {
     const {
-      mode = 'standard',
-      seedDomain = '',
       niche = 'SaaS Founders',
       location = 'United States',
       batchSize = 10,
@@ -4512,46 +4309,38 @@ app.post('/api/leads/generate', async (req, res) => {
       dirNicheTags = '',
       requirePhone = true,
       requireSocials = true,
-      customRole = '',
-      mapsCategory = '',
-      mapsRadius = '15 miles',
-      minRating = '4.0'
+      customRole = ''
     } = req.body || {};
 
     const count = Math.min(Math.max(Number(batchSize) || 10, 1), 50);
-    const targetRole = customRole.trim() || leadType || (mode === 'google_maps' ? 'Business Owner / Principal' : 'Founder & CEO');
-    const targetNiche = mapsCategory ? `${mapsCategory} (${niche})` : (mode === 'lookalike' && seedDomain ? `Lookalikes & Competitors of ${seedDomain}` : niche);
+    const targetRole = customRole.trim() || leadType || 'Founder & CEO';
     const socialsList = Array.isArray(selectedSocials) && selectedSocials.length > 0
       ? selectedSocials
       : ['linkedin', 'twitter'];
     const directoriesList = Array.isArray(selectedDirectories) && selectedDirectories.length > 0
       ? selectedDirectories
-      : (mode === 'google_maps' ? ['google_maps', 'google_search', 'yelp'] : ['google_search', 'google_maps', 'crunchbase']);
+      : ['google_search', 'google_maps', 'crunchbase'];
 
     if (getGeminiClient()) {
       try {
-        const isMapsMode = mode === 'google_maps';
-        const isLookalikeMode = mode === 'lookalike';
         const prompt = `You are a world-class B2B Lead Intelligence Engine and Deep Lead Researcher for VisualSky.
 Generate a list of exactly ${count} highly realistic, active, and verified leads for:
-- Operation Mode: "${isMapsMode ? 'Google Maps Verified Local Businesses & Places' : (isLookalikeMode ? `Competitor & Lookalike Companies similar to "${seedDomain}"` : 'Targeted B2B Decision Makers')}"
-- Target Industry / Niche: "${targetNiche}"
-- Target Location / Geo: "${location}" ${isMapsMode ? `(Search Radius: ${mapsRadius}, Min Rating: ${minRating}+ stars)` : ''}
+- Target Industry / Niche: "${niche}"
+- Target Location / Geo: "${location}"
 - Target Decision Maker Role: "${targetRole}"
-${isLookalikeMode ? `- Benchmark Seed Domain: "${seedDomain}". Uncover companies with similar offerings, customer profiles, and business models, then extract decision makers matching "${targetRole}".` : ''}
-- Target Social Media Tags & Sector Focus: "${socialNicheTags || targetNiche}"
-- Target Directory Tags & Industry Focus: "${dirNicheTags || targetNiche}"
+- Target Social Media Tags & Sector Focus: "${socialNicheTags || niche}"
+- Target Directory Tags & Industry Focus: "${dirNicheTags || niche}"
 - Required Social Platforms: ${socialsList.join(', ')}
 - Targeted Business Directories & Maps: ${directoriesList.join(', ')}
 ${customPrompt ? `- Additional Custom Instructions: "${customPrompt}"` : ''}
 
 CRITICAL RULES:
-1. Provide REAL, authentic-looking company names and working domain structures in the "${targetNiche}" industry. Every lead MUST have a valid, well-formed company website URL (e.g. "https://companydomain.com").
-2. Include realistic executive full names matching the target role "${targetRole}" (e.g. ${isMapsMode ? 'Managing Partner, Medical Director, Owner, Founder' : targetRole}).
-3. Include valid business email addresses (e.g. first.last@company.com or first@company.com or contact@company.com).
-4. Include realistic formatted direct phone numbers matching the target location ${location} (e.g. +1 (415) 890-XXXX or local country format).
+1. Provide REAL, authentic-looking company names and working domain structures (e.g. stripe.com, figma.com, linear.app, loom.com, notion.so, brex.com, webflow.com, miro.com, clickup.com, buffer.com, convertkit.com, segment.com, activecampaign.com, hubspot.com or top active companies in the "${niche}" industry). Do NOT give dead/broken domains. Every lead MUST have a valid, well-formed company website URL (e.g. "https://companydomain.com").
+2. Include realistic executive full names matching the target role "${targetRole}" (e.g. Founder & CEO, ${targetRole}).
+3. Include valid business email addresses (e.g. first.last@company.com or first@company.com).
+4. Include realistic formatted direct phone numbers ${requirePhone ? '(e.g. +1 (415) 890-XXXX or local country format)' : ''}.
 5. ONLY include social media profiles for the selected platforms: [${socialsList.join(', ')}]. Provide realistic URLs or handles for these selected platforms (e.g. linkedin: "https://linkedin.com/in/...", twitter: "https://x.com/...", instagram: "https://instagram.com/...", etc.).
-6. Set source as "${isMapsMode ? 'Google Maps Places & Verified Directory' : `${directoriesList.slice(0, 2).map(d => d.replace('_', ' ').toUpperCase()).join(' + ')} & ${socialsList.slice(0, 2).map(s => s.toUpperCase()).join('/')}`}".
+6. Set source as "${directoriesList.slice(0, 2).map(d => d.replace('_', ' ').toUpperCase()).join(' + ')} & ${socialsList.slice(0, 2).map(s => s.toUpperCase()).join('/')}".
 7. Provide an accurate lead quality score (88-99%), company size (e.g. "11-50 employees", "51-200 employees"), and a tailored personalized icebreaker note based on their company.
 
 Respond ONLY with a valid JSON array of objects with the following schema:
@@ -4563,12 +4352,12 @@ Respond ONLY with a valid JSON array of objects with the following schema:
     "email": "email@domain.com",
     "phone": "+1 (555) 000-0000",
     "website": "https://example.com",
-    "niche": "${targetNiche}",
+    "niche": "${niche}",
     "location": "${location}",
-    "source": "${isMapsMode ? 'Google Maps Places' : 'Google Maps & LinkedIn'}",
+    "source": "Google Maps & LinkedIn",
     "companySize": "20-50 employees",
     "leadScore": 95,
-    "icebreaker": "Loved your recent work in...",
+    "icebreaker": "Loved your recent product update on...",
     "socials": {
       ${socialsList.map(s => `"${s}": "https://${s === 'twitter' ? 'x.com' : s + '.com'}/username"`).join(',\n      ')}
     }
@@ -4697,106 +4486,6 @@ Respond ONLY with a valid JSON array of objects with the following schema:
       usage: { promptTokens: 250, completionTokens: 350, totalTokens: 600 },
       modelUsed: 'gemini-3.8-flash'
     });
-  }
-});
-
-// Endpoint: Live Lead Email & Website Health Ping Verification
-app.post('/api/leads/verify', async (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  try {
-    const { email = '', domain = '', phone = '' } = req.body || {};
-    let emailDomain = '';
-    if (email && email.includes('@')) {
-      emailDomain = email.split('@')[1].trim().toLowerCase();
-    } else if (domain) {
-      emailDomain = domain.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0].trim().toLowerCase();
-    }
-
-    let hasMx = false;
-    let mxHost = '';
-    let responseTimeMs = 50 + Math.floor(Math.random() * 40);
-
-    if (emailDomain) {
-      try {
-        const mxRecords = await dns.promises.resolveMx(emailDomain);
-        if (Array.isArray(mxRecords) && mxRecords.length > 0) {
-          hasMx = true;
-          mxHost = mxRecords[0].exchange || 'active-mx.domain';
-          responseTimeMs = Math.floor(35 + Math.random() * 30);
-        }
-      } catch (dnsErr) {
-        hasMx = !emailDomain.includes('invalid') && !emailDomain.includes('example');
-        mxHost = hasMx ? `mail.${emailDomain}` : 'none';
-      }
-    }
-
-    return res.json({
-      success: true,
-      verified: true,
-      hasMx,
-      mxHost,
-      responseTimeMs,
-      deliverabilityScore: hasMx ? '99% High Deliverability' : '90% Standard',
-      status: 'verified',
-      timestamp: new Date().toISOString()
-    });
-  } catch (err: any) {
-    return res.json({
-      success: true,
-      verified: true,
-      hasMx: true,
-      responseTimeMs: 60,
-      deliverabilityScore: '95% Deliverable'
-    });
-  }
-});
-
-// Endpoint: AI Outreach Icebreaker Studio
-app.post('/api/leads/icebreaker', async (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  try {
-    const { lead = {}, tone = 'roi' } = req.body || {};
-    const { name = 'there', company = 'your company', title = 'Executive', niche = 'your industry', website = '' } = lead;
-    const firstName = name.split(' ')[0] || 'there';
-
-    if (getGeminiClient()) {
-      try {
-        const prompt = `Write a short, high-converting 1-to-2 sentence cold email icebreaker line for:
-Recipient: ${name} (${title} at ${company})
-Industry: ${niche}
-Website: ${website}
-Tone: "${tone}" (${tone === 'roi' ? 'Punchy value proposition, specific metrics and ROI' : tone === 'compliment' ? 'Warm genuine recognition of milestone or growth' : tone === 'painpoint' ? 'Urgent bottleneck in outbound pipeline and direct solution' : tone === 'casual' ? 'Low pressure, relaxed peer-to-peer conversational opening' : 'Bangla and English polite greeting'})
-
-RULES:
-- Exactly 1 to 2 sentences max.
-- Do not include subject lines or signoffs. Just the opening sentence.
-- Sound authentic, human, and zero spam words.`;
-
-        const geminiResult = await callGemini(prompt, { temperature: 0.7 });
-        if (geminiResult && geminiResult.text) {
-          const cleanText = geminiResult.text.replace(/^["']|["']$/g, '').trim();
-          return res.json({ success: true, icebreaker: cleanText });
-        }
-      } catch (err) {}
-    }
-
-    // Dynamic smart fallback
-    let fallback = `Noticed your rapid expansion in ${niche} and impressive client acquisition metrics at ${company}.`;
-    if (tone === 'roi') {
-      fallback = `Hi ${firstName}, saw how quickly ${company} is scaling in ${niche}. We recently helped similar teams drive 3.2x higher reply rates without burning inbox reputation.`;
-    } else if (tone === 'compliment') {
-      fallback = `Congratulations ${firstName} on the standout momentum at ${company}! Your team's execution across ${niche} has been exciting to follow.`;
-    } else if (tone === 'painpoint') {
-      fallback = `Most leaders in ${niche} tell us manual lead prospecting eats up 15+ hours weekly. Noticed ${company}'s growth and wanted to share how we eliminate that friction.`;
-    } else if (tone === 'casual') {
-      fallback = `Hey ${firstName} – loved coming across ${company}'s latest work. Quick question for you regarding your current outbound stack in ${niche}?`;
-    } else if (tone === 'bangla_english') {
-      fallback = `${firstName} bhai/apa, আশা করি ভালো আছেন! ${company}-র রিসেন্ট গ্রোথ দেখে খুব ভালো লাগলো। আপনার সাথে একটি শর্ট আইডিয়া শেয়ার করার ইচ্ছে ছিল।`;
-    }
-
-    return res.json({ success: true, icebreaker: fallback });
-  } catch (err: any) {
-    return res.json({ success: true, icebreaker: 'Noticed your rapid expansion and strong traction in the industry.' });
   }
 });
 
@@ -5421,49 +5110,6 @@ app.get('/api/track/open/:pixelId', (req, res) => {
         const cleaned = getCleanAuthoritativeTrackingEvents(events);
         const trimmed = cleaned.length > 2000 ? cleaned.slice(-2000) : cleaned;
         fs.writeFileSync(TRACKING_EVENTS_FILE, JSON.stringify(trimmed, null, 2), 'utf-8');
-
-        // Immediately dispatch Background / Offline Web Push Notification for this Email Open
-        setImmediate(() => {
-          try {
-            let recipientName = 'A recipient';
-            let recipientEmail = '';
-            let mailSubject = 'your email';
-            let ownerEmail = '';
-
-            if (fs.existsSync(DATA_DIR)) {
-              const wfFiles = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('workspace_') && f.endsWith('.json'));
-              for (const wf of wfFiles) {
-                try {
-                  const parsedWf = JSON.parse(fs.readFileSync(path.join(DATA_DIR, wf), 'utf-8'));
-                  const sentList = Array.isArray(parsedWf?.sentEmails) ? parsedWf.sentEmails : [];
-                  const matchedSent = sentList.find(
-                    (s: any) => s && String(s.trackingPixelId || '').replace(/\.gif$/i, '').trim() === pixelId
-                  );
-                  if (matchedSent) {
-                    recipientName = matchedSent.recipientName || matchedSent.recipientEmail || recipientName;
-                    recipientEmail = matchedSent.recipientEmail || '';
-                    mailSubject = matchedSent.subject || mailSubject;
-                    ownerEmail = parsedWf.email || matchedSent.senderEmail || '';
-                    break;
-                  }
-                } catch {}
-              }
-            }
-
-            dispatchWebPushNotification(
-              {
-                title: `👁️ Mail Opened by ${recipientName}`,
-                body: `${recipientName} opened "${String(mailSubject).slice(0, 65)}"`,
-                tag: `open-${pixelId}-${Math.floor(nowMs / 60000)}`,
-                linkTab: 'sent',
-                leadEmail: recipientEmail,
-                url: '/?tab=sent',
-                type: 'open'
-              },
-              ownerEmail
-            ).catch(() => {});
-          } catch {}
-        });
       }
     }
   } catch (err) {
@@ -7039,7 +6685,6 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
     const cleanHost = String(rawHost).trim().toLowerCase();
     const cleanUser = String(rawUsername).trim();
     const userLower = cleanUser.toLowerCase();
-    lastImapSyncTimestampByUser.set(userLower, Date.now());
     const userDomain = userLower.includes('@') ? userLower.split('@')[1] : '';
     const poolKey = `${cleanHost}::${userLower}`;
 
@@ -7483,70 +7128,6 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
               });
             }
           }
-
-          // Check for brand-new UIDs to dispatch real-time Web Push Notifications (for background tabs & closed browsers)
-          try {
-            const existingUidRecord = notifiedImapUidsMemory[userLower];
-            if (!existingUidRecord || !existingUidRecord.initialized) {
-              notifiedImapUidsMemory[userLower] = {
-                initialized: true,
-                uids: sortedUids.slice(-500),
-                updatedAt: new Date().toISOString()
-              };
-              saveNotifiedImapUids(notifiedImapUidsMemory);
-            } else {
-              const seenSet = new Set<number>(existingUidRecord.uids || []);
-              const brandNewUids = sortedUids.filter(u => !seenSet.has(u));
-              if (brandNewUids.length > 0) {
-                existingUidRecord.uids = Array.from(new Set([...existingUidRecord.uids, ...brandNewUids])).slice(-500);
-                existingUidRecord.updatedAt = new Date().toISOString();
-                saveNotifiedImapUids(notifiedImapUidsMemory);
-
-                for (const newUid of brandNewUids.slice(-3)) {
-                  const newMsg = incomingMessages.find(m => m.uid === newUid);
-                  if (!newMsg) continue;
-                  const senderAddr = String(newMsg.from || '').trim().toLowerCase();
-                  if (!senderAddr || !senderAddr.includes('@') || senderAddr === userLower) continue;
-                  if (senderAddr.startsWith('no-reply@') || senderAddr.startsWith('noreply@')) continue;
-
-                  const subStr = String(newMsg.subject || 'No Subject').trim();
-                  const subLower = subStr.toLowerCase();
-                  if (
-                    subLower.includes('verification code') ||
-                    subLower.includes('password reset') ||
-                    subLower.includes('verify your email')
-                  ) {
-                    continue;
-                  }
-
-                  const cleanUidPart = String(newMsg.uid || newMsg.messageId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
-                  const msgTag = `imap-msg-${userLower}-${cleanUidPart}`;
-                  const isBounce =
-                    senderAddr.startsWith('mailer-daemon@') ||
-                    senderAddr.startsWith('postmaster@') ||
-                    /undeliverable|delivery status notification|mail delivery failed|delivery failure|blocked|rejected/i.test(subStr);
-
-                  const senderDisplay = newMsg.fromName || senderAddr.split('@')[0];
-                  const bodyPreview = String(newMsg.text || newMsg.fullText || '📩 New message received').slice(0, 105);
-
-                  dispatchWebPushNotification(
-                    {
-                      title: isBounce
-                        ? `🚫 Mail Blocked / Bounced`
-                        : `📩 New Mail from ${senderDisplay}`,
-                      body: `${subStr} — ${bodyPreview}`,
-                      tag: msgTag,
-                      linkTab: isBounce ? 'sent' : 'inbox',
-                      leadEmail: senderAddr,
-                      url: isBounce ? '/?tab=sent' : '/?tab=inbox',
-                      type: isBounce ? 'bounce' : 'reply'
-                    },
-                    req.body?.ownerEmail || ''
-                  ).catch(() => {});
-                }
-              }
-            }
-          } catch {}
         }
       } finally {
         try {
@@ -8023,19 +7604,6 @@ async function startServer() {
     return res.status(200).end('export {};\n');
   });
 
-  app.get('/sw.js', (_req, res) => {
-    const swPath = fs.existsSync(path.join(prebuiltCandidate, 'sw.js'))
-      ? path.join(prebuiltCandidate, 'sw.js')
-      : path.join(publicCandidate, 'sw.js');
-    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('Service-Worker-Allowed', '/');
-    if (fs.existsSync(swPath)) {
-      return res.status(200).send(fs.readFileSync(swPath, 'utf8'));
-    }
-    return res.status(404).end();
-  });
-
   app.use('/prebuilt', express.static(prebuiltCandidate, { etag: true, maxAge: 0 }));
   if (fs.existsSync(publicCandidate)) {
     app.use(express.static(publicCandidate, { index: false, etag: true, maxAge: '1d' }));
@@ -8108,81 +7676,6 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`VisualSky AI Cold Outreach Platform running at http://0.0.0.0:${PORT}`);
-
-    // 24/7 Server-Side Background IMAP Push Watcher Daemon
-    // Checks connected IMAP mailboxes even when all user browser tabs are completely closed,
-    // firing RFC 8030 Web Push notifications the moment a new email or reply arrives!
-    let isBgImapRunning = false;
-    const runBackgroundImapPushWatcher = async () => {
-      if (isBgImapRunning) return;
-      isBgImapRunning = true;
-      try {
-        const accountsMap = new Map<string, { host: string; port: number; username: string; password: string; ownerEmail: string }>();
-
-        if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-          const uLower = String(process.env.SMTP_USER).trim().toLowerCase();
-          accountsMap.set(uLower, {
-            host: String(process.env.SMTP_HOST).trim(),
-            port: 993,
-            username: String(process.env.SMTP_USER).trim(),
-            password: String(process.env.SMTP_PASS),
-            ownerEmail: uLower
-          });
-        }
-
-        if (fs.existsSync(DATA_DIR)) {
-          const wfFiles = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('workspace_') && f.endsWith('.json'));
-          for (const wf of wfFiles) {
-            try {
-              const parsedWf = JSON.parse(fs.readFileSync(path.join(DATA_DIR, wf), 'utf-8'));
-              const wfOwner = String(parsedWf?.email || '').trim().toLowerCase();
-              for (const s of parsedWf?.smtpAccounts || []) {
-                if (s && !s.isTrash && s.host && s.username && s.password) {
-                  const uLower = String(s.username).trim().toLowerCase();
-                  if (!accountsMap.has(uLower)) {
-                    accountsMap.set(uLower, {
-                      host: String(s.imapHost || s.host).trim(),
-                      port: Number(s.imapPort) || 993,
-                      username: String(s.username).trim(),
-                      password: String(s.password),
-                      ownerEmail: wfOwner
-                    });
-                  }
-                }
-              }
-            } catch {}
-          }
-        }
-
-        for (const [uLower, acc] of accountsMap.entries()) {
-          const lastSyncMs = lastImapSyncTimestampByUser.get(uLower) || 0;
-          // Only poll from background daemon if no active client tab has synced this mailbox in the last 10 seconds
-          if (Date.now() - lastSyncMs < 10000) continue;
-          try {
-            await fetch(`http://127.0.0.1:${PORT}/api/smtp/imap-sync`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                host: acc.host,
-                port: acc.port,
-                username: acc.username,
-                password: acc.password,
-                ownerEmail: acc.ownerEmail,
-                sinceHours: 72
-              })
-            });
-          } catch {}
-        }
-      } catch {} finally {
-        isBgImapRunning = false;
-      }
-    };
-
-    const bgWatcherInterval = setInterval(runBackgroundImapPushWatcher, 12000);
-    if (typeof (bgWatcherInterval as any).unref === 'function') {
-      (bgWatcherInterval as any).unref();
-    }
-    setTimeout(runBackgroundImapPushWatcher, 5000);
   });
 }
 
