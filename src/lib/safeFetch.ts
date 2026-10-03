@@ -114,10 +114,58 @@ export async function safeParseResponse<T = any>(
   // Attempt JSON parse
   try {
     const parsed = JSON.parse(rawText);
+    const parsedObj = parsed && typeof parsed === 'object' ? parsed : {};
+
+    // Auto-detect success even if key name varies (success / status: 'sent' / messageId / accepted list)
+    const isExplicitlySuccess = parsedObj.success === true || parsedObj.ok === true;
+    const isImplicitlySuccess = Boolean(
+      parsedObj.status === 'sent' ||
+      parsedObj.status === 'ok' ||
+      parsedObj.status === 'success' ||
+      Boolean(parsedObj.messageId) ||
+      (Array.isArray(parsedObj.accepted) && parsedObj.accepted.length > 0)
+    );
+    const hasExplicitError = Boolean(
+      parsedObj.success === false ||
+      parsedObj.status === 'failed' ||
+      parsedObj.error ||
+      parsedObj.errorMessage ||
+      parsedObj.code === 'EAUTH' ||
+      parsedObj.code === 'ETIMEDOUT'
+    );
+
+    const isSuccess = isExplicitlySuccess || (isImplicitlySuccess && !hasExplicitError);
+
+    // Extract error message from any common error field
+    let resolvedError: string | undefined = undefined;
+    if (!isSuccess) {
+      if (typeof parsedObj.error === 'string' && parsedObj.error.trim()) {
+        resolvedError = parsedObj.error.trim();
+      } else if (parsedObj.error && typeof parsedObj.error?.message === 'string') {
+        resolvedError = parsedObj.error.message.trim();
+      } else if (typeof parsedObj.errorMessage === 'string' && parsedObj.errorMessage.trim()) {
+        resolvedError = parsedObj.errorMessage.trim();
+      } else if (typeof parsedObj.message === 'string' && parsedObj.message.trim()) {
+        resolvedError = parsedObj.message.trim();
+      } else if (typeof parsedObj.msg === 'string' && parsedObj.msg.trim()) {
+        resolvedError = parsedObj.msg.trim();
+      } else if (typeof parsedObj.reason === 'string' && parsedObj.reason.trim()) {
+        resolvedError = parsedObj.reason.trim();
+      } else if (typeof parsedObj.details === 'string' && parsedObj.details.trim()) {
+        resolvedError = parsedObj.details.trim();
+      } else if (!ok) {
+        resolvedError = `${fallbackErrorMessage} (HTTP ${status})`;
+      }
+    }
+
     return {
-      ok,
+      ok: ok && (isSuccess || !resolvedError),
       status,
-      data: parsed as T,
+      data: {
+        ...parsedObj,
+        success: isSuccess,
+        error: resolvedError || parsedObj.error
+      } as T,
       rawText,
       isJson: true
     };

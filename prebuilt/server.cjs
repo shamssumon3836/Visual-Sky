@@ -4745,6 +4745,15 @@ app.post("/api/smtp/send", async (req, res) => {
         };
       }
     }
+    if (activeSmtp && !activeSmtp.password && !activeSmtp.apiKey) {
+      if (process.env.SMTP_PASS && (!activeSmtp.host || activeSmtp.host === process.env.SMTP_HOST || activeSmtp.username === process.env.SMTP_USER || activeSmtp.provider === "domain_webmail" || activeSmtp.provider === "custom")) {
+        activeSmtp.password = process.env.SMTP_PASS;
+        if (!activeSmtp.host) activeSmtp.host = process.env.SMTP_HOST;
+        if (!activeSmtp.port) activeSmtp.port = Number(process.env.SMTP_PORT) || 465;
+        if (!activeSmtp.username) activeSmtp.username = process.env.SMTP_USER;
+        if (!activeSmtp.fromEmail) activeSmtp.fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
+      }
+    }
     if (!activeSmtp || !activeSmtp.host && !activeSmtp.apiKey && !activeSmtp.password) {
       return res.status(400).json({
         success: false,
@@ -5103,6 +5112,14 @@ ${textItems.join("\n")}`;
         } else {
           throw firstErr;
         }
+      }
+      if (Array.isArray(info?.rejected) && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
+        return res.status(400).json({
+          success: false,
+          error: `Remote SMTP server rejected recipient ${cleanRecipientEmail}: ${info.response || "Recipient address rejected"}`,
+          status: "failed",
+          rejected: info.rejected
+        });
       }
       return res.json({
         success: true,

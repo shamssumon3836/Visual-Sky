@@ -5125,11 +5125,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const parsed = await safeParseResponse(res, 'SMTP relay connection failed');
       const data = parsed.data || {};
-      if (parsed.ok && data.success) {
+      const isDelivered = Boolean(
+        (parsed.ok || res.ok) &&
+        (data.success === true ||
+          data.status === 'sent' ||
+          Boolean(data.messageId) ||
+          (Array.isArray(data.accepted) && data.accepted.length > 0)) &&
+        !data.error
+      );
+      if (isDelivered) {
         isSuccess = true;
       } else {
         isSuccess = false;
-        errorMessage = data.error || `HTTP ${res.status} error`;
+        errorMessage =
+          (typeof data.error === 'string' && data.error.trim()) ||
+          (data.error && typeof data.error?.message === 'string' && data.error.message.trim()) ||
+          (typeof data.message === 'string' && data.message.trim()) ||
+          (typeof data.msg === 'string' && data.msg.trim()) ||
+          (typeof data.reason === 'string' && data.reason.trim()) ||
+          (typeof data.details === 'string' && data.details.trim()) ||
+          (res.status && res.status !== 200 ? `HTTP ${res.status} error` : 'SMTP relay transmission failed');
       }
     } catch (err: any) {
       isSuccess = false;
