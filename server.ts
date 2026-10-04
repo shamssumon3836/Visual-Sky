@@ -9,7 +9,13 @@ import { simpleParser } from 'mailparser';
 import crypto from 'crypto';
 import dns from 'dns';
 import zlib from 'zlib';
-import webpush from 'web-push';
+
+let webpush: any = null;
+try {
+  webpush = require('web-push');
+} catch (_wpErr) {
+  // Optional dependency in restricted hosting environments
+}
 
 dotenv.config();
 
@@ -99,27 +105,34 @@ const initVapidKeys = (): { publicKey: string; privateKey: string } => {
       }
     }
   } catch {}
-  const generated = webpush.generateVAPIDKeys();
+  if (!webpush) {
+    return { publicKey: '', privateKey: '' };
+  }
   try {
+    const generated = webpush.generateVAPIDKeys();
     fs.writeFileSync(VAPID_KEYS_FILE, JSON.stringify(generated, null, 2), 'utf-8');
-  } catch {}
-  return generated;
+    return generated;
+  } catch {
+    return { publicKey: '', privateKey: '' };
+  }
 };
 
 const vapidKeys = initVapidKeys();
-try {
-  webpush.setVapidDetails(
-    'mailto:founder@visualsky.pro',
-    vapidKeys.publicKey,
-    vapidKeys.privateKey
-  );
-} catch (err) {
-  console.warn('[WebPush] VAPID init warning:', err);
+if (webpush && vapidKeys.publicKey && vapidKeys.privateKey) {
+  try {
+    webpush.setVapidDetails(
+      'mailto:founder@visualsky.pro',
+      vapidKeys.publicKey,
+      vapidKeys.privateKey
+    );
+  } catch (err) {
+    console.warn('[WebPush] VAPID init warning:', err);
+  }
 }
 
 interface StoredPushSubscriptionRecord {
   endpoint: string;
-  subscription: webpush.PushSubscription;
+  subscription: any;
   userEmail: string;
   userId?: string;
   userAgent?: string;
@@ -159,7 +172,7 @@ const dispatchWebPushNotification = async (
   targetUserEmail?: string
 ) => {
   const allSubs = loadPushSubscriptions();
-  if (allSubs.length === 0) return;
+  if (!webpush || allSubs.length === 0) return;
 
   const cleanTarget = String(targetUserEmail || '').trim().toLowerCase();
   let matchingSubs = cleanTarget

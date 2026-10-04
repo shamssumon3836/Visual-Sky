@@ -43,7 +43,11 @@ var import_mailparser = require("mailparser");
 var import_crypto = __toESM(require("crypto"), 1);
 var import_dns = __toESM(require("dns"), 1);
 var import_zlib = __toESM(require("zlib"), 1);
-var import_web_push = __toESM(require("web-push"), 1);
+var webpush = null;
+try {
+  webpush = require("web-push");
+} catch (_wpErr) {
+}
 import_dotenv.default.config();
 process.env.GOMAXPROCS = "1";
 process.env.UV_THREADPOOL_SIZE = "1";
@@ -117,22 +121,28 @@ var initVapidKeys = () => {
     }
   } catch {
   }
-  const generated = import_web_push.default.generateVAPIDKeys();
-  try {
-    import_fs.default.writeFileSync(VAPID_KEYS_FILE, JSON.stringify(generated, null, 2), "utf-8");
-  } catch {
+  if (!webpush) {
+    return { publicKey: "", privateKey: "" };
   }
-  return generated;
+  try {
+    const generated = webpush.generateVAPIDKeys();
+    import_fs.default.writeFileSync(VAPID_KEYS_FILE, JSON.stringify(generated, null, 2), "utf-8");
+    return generated;
+  } catch {
+    return { publicKey: "", privateKey: "" };
+  }
 };
 var vapidKeys = initVapidKeys();
-try {
-  import_web_push.default.setVapidDetails(
-    "mailto:founder@visualsky.pro",
-    vapidKeys.publicKey,
-    vapidKeys.privateKey
-  );
-} catch (err) {
-  console.warn("[WebPush] VAPID init warning:", err);
+if (webpush && vapidKeys.publicKey && vapidKeys.privateKey) {
+  try {
+    webpush.setVapidDetails(
+      "mailto:founder@visualsky.pro",
+      vapidKeys.publicKey,
+      vapidKeys.privateKey
+    );
+  } catch (err) {
+    console.warn("[WebPush] VAPID init warning:", err);
+  }
 }
 var loadPushSubscriptions = () => {
   try {
@@ -154,7 +164,7 @@ var savePushSubscriptions = (records) => {
 };
 var dispatchWebPushNotification = async (payload, targetUserEmail) => {
   const allSubs = loadPushSubscriptions();
-  if (allSubs.length === 0) return;
+  if (!webpush || allSubs.length === 0) return;
   const cleanTarget = String(targetUserEmail || "").trim().toLowerCase();
   let matchingSubs = cleanTarget ? allSubs.filter((s) => !s.userEmail || s.userEmail.toLowerCase() === cleanTarget) : allSubs;
   if (matchingSubs.length === 0) {
@@ -168,7 +178,7 @@ var dispatchWebPushNotification = async (payload, targetUserEmail) => {
   await Promise.all(
     matchingSubs.map(async (rec) => {
       try {
-        await import_web_push.default.sendNotification(rec.subscription, jsonPayload, {
+        await webpush.sendNotification(rec.subscription, jsonPayload, {
           TTL: 86400,
           urgency: "high"
         });
