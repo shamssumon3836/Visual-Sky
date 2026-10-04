@@ -4604,7 +4604,12 @@ app.post("/api/smtp/test", async (req, res) => {
       console.warn("SMTP verification handshake failed:", verifyErr?.message);
       let friendlyError = verifyErr?.message || "Invalid credentials or port rejected";
       if (verifyErr?.code === "EAUTH" || friendlyError.includes("535") || friendlyError.toLowerCase().includes("auth")) {
-        friendlyError = `Authentication failed: Remote SMTP server rejected username "${username}" or password.`;
+        const isGmailHost = String(host || "").includes("gmail.com") || String(username || "").includes("@gmail.com");
+        if (isGmailHost) {
+          friendlyError = `Google Authentication Error: Gmail requires a 16-character Google App Password (not your normal Gmail password). Please visit https://myaccount.google.com/apppasswords, create an App Password for 'Mail', and enter the 16 characters here. (\u099C\u09BF\u09AE\u09C7\u0987\u09B2\u09C7\u09B0 \u099C\u09A8\u09CD\u09AF \u09B8\u09BE\u09A7\u09BE\u09B0\u09A3 \u09AA\u09BE\u09B8\u0993\u09DF\u09BE\u09B0\u09CD\u09A1 \u09A8\u09BE \u09A6\u09BF\u09DF\u09C7 myaccount.google.com/apppasswords \u09A5\u09C7\u0995\u09C7 \u09E7\u09EC \u0985\u0995\u09CD\u09B7\u09B0\u09C7\u09B0 App Password \u09A4\u09C8\u09B0\u09BF \u0995\u09B0\u09C7 \u09A6\u09BF\u09A8)\u0964`;
+        } else {
+          friendlyError = `Authentication failed: Remote SMTP server rejected username "${username}" or password. Please verify credentials.`;
+        }
       } else if (verifyErr?.code === "ETIMEDOUT" || verifyErr?.code === "ESOCKET") {
         friendlyError = `Connection timed out: Server at ${host}:${smtpPort} did not respond. Check host/port or try Port 465 SSL.`;
       } else if (verifyErr?.code === "EDNS" || verifyErr?.code === "ENOTFOUND") {
@@ -4957,18 +4962,24 @@ ${textItems.join("\n")}`;
             relay: "Resend HTTPS API (Port 443)"
           });
         } else {
-          return res.status(resendRes.status >= 400 && resendRes.status < 500 ? resendRes.status : 400).json({
+          console.warn("[Resend API Error, attempting platform relay fallback]:", resendData);
+          if (!process.env.SMTP_PASS) {
+            return res.status(resendRes.status >= 400 && resendRes.status < 500 ? resendRes.status : 400).json({
+              success: false,
+              error: `Resend API Dispatch Error: ${resendData.message || resendData.error || "Failed to dispatch email"}`,
+              status: "failed"
+            });
+          }
+        }
+      } catch (resendErr) {
+        console.warn("[Resend Network Error, attempting platform relay fallback]:", resendErr?.message);
+        if (!process.env.SMTP_PASS) {
+          return res.status(500).json({
             success: false,
-            error: `Resend API Dispatch Error: ${resendData.message || resendData.error || "Failed to dispatch email"}`,
+            error: `Resend Network Error: ${resendErr?.message || "HTTPS request failed"}`,
             status: "failed"
           });
         }
-      } catch (resendErr) {
-        return res.status(500).json({
-          success: false,
-          error: `Resend Network Error: ${resendErr?.message || "HTTPS request failed"}`,
-          status: "failed"
-        });
       }
     }
     if (activeSmtp.provider === "brevo" || authKey.startsWith("xkeysib-")) {
@@ -5014,26 +5025,40 @@ ${textItems.join("\n")}`;
             relay: "Brevo HTTPS API (Port 443)"
           });
         } else {
-          return res.status(brevoRes.status >= 400 && brevoRes.status < 500 ? brevoRes.status : 400).json({
+          console.warn("[Brevo API Error, attempting platform relay fallback]:", brevoData);
+          if (!process.env.SMTP_PASS) {
+            return res.status(brevoRes.status >= 400 && brevoRes.status < 500 ? brevoRes.status : 400).json({
+              success: false,
+              error: `Brevo API Dispatch Error: ${brevoData.message || brevoData.error || "Transmission failed"}`,
+              status: "failed"
+            });
+          }
+        }
+      } catch (brevoErr) {
+        console.warn("[Brevo Network Error, attempting platform relay fallback]:", brevoErr?.message);
+        if (!process.env.SMTP_PASS) {
+          return res.status(500).json({
             success: false,
-            error: `Brevo API Dispatch Error: ${brevoData.message || brevoData.error || "Transmission failed"}`,
+            error: `Brevo Network Error: ${brevoErr?.message || "HTTPS request failed"}`,
             status: "failed"
           });
         }
-      } catch (brevoErr) {
-        return res.status(500).json({
-          success: false,
-          error: `Brevo Network Error: ${brevoErr?.message || "HTTPS request failed"}`,
-          status: "failed"
-        });
       }
     }
     if (!activeSmtp.host) {
-      return res.status(400).json({
-        success: false,
-        error: "SMTP host is missing. Please configure a valid SMTP hostname (e.g., mail.yourdomain.com or smtp.gmail.com).",
-        status: "failed"
-      });
+      if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+        activeSmtp.host = process.env.SMTP_HOST;
+        activeSmtp.port = Number(process.env.SMTP_PORT) || 465;
+        activeSmtp.encryption = process.env.SMTP_SECURE === "true" ? "SSL" : "TLS";
+        activeSmtp.username = process.env.SMTP_USER;
+        activeSmtp.password = process.env.SMTP_PASS;
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: "SMTP host is missing. Please configure a valid SMTP hostname (e.g., mail.yourdomain.com or smtp.gmail.com).",
+          status: "failed"
+        });
+      }
     }
     const primaryPort = Number(activeSmtp.port) || 465;
     const primarySecure = activeSmtp.encryption === "SSL" || primaryPort === 465;
@@ -5048,9 +5073,9 @@ ${textItems.join("\n")}`;
         user: activeSmtp.username,
         pass: authKey
       },
-      connectionTimeout: 1e4,
-      greetingTimeout: 8e3,
-      socketTimeout: 14e3,
+      connectionTimeout: 4e3,
+      greetingTimeout: 3500,
+      socketTimeout: 5e3,
       tls: {
         rejectUnauthorized: false
       }
@@ -5092,7 +5117,7 @@ ${textItems.join("\n")}`;
             const timeoutErr = new Error(`Connection timed out while connecting to ${activeSmtp.host}:${p}.`);
             timeoutErr.code = "ETIMEDOUT";
             reject(timeoutErr);
-          }, 11e3);
+          }, 4500);
         });
         return Promise.race([sendPromise, timeoutPromise]);
       };
@@ -5101,20 +5126,18 @@ ${textItems.join("\n")}`;
       try {
         info = await sendWithTimeout(transporter, primaryPort);
       } catch (firstErr) {
-        const isAuthErr = firstErr?.code === "EAUTH" || String(firstErr?.message || "").includes("535");
-        if (!isAuthErr) {
-          try {
-            transporter.close();
-          } catch {
-          }
-          const altPort = primaryPort === 465 ? 587 : 465;
-          const altSecure = altPort === 465;
-          transporter = createSmtpTransporter(altPort, altSecure);
-          usedPort = altPort;
-          info = await sendWithTimeout(transporter, altPort);
-        } else {
+        if (process.env.SMTP_HOST && process.env.SMTP_PASS && (activeSmtp.host !== process.env.SMTP_HOST || activeSmtp.username !== process.env.SMTP_USER)) {
           throw firstErr;
         }
+        try {
+          transporter.close();
+        } catch {
+        }
+        const altPort = primaryPort === 465 ? 587 : 465;
+        const altSecure = altPort === 465;
+        transporter = createSmtpTransporter(altPort, altSecure);
+        usedPort = altPort;
+        info = await sendWithTimeout(transporter, altPort);
       }
       if (Array.isArray(info?.rejected) && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
         return res.status(400).json({
@@ -5148,9 +5171,9 @@ ${textItems.join("\n")}`;
               user: process.env.SMTP_USER,
               pass: process.env.SMTP_PASS
             },
-            connectionTimeout: 1e4,
-            greetingTimeout: 8e3,
-            socketTimeout: 14e3,
+            connectionTimeout: 5e3,
+            greetingTimeout: 3500,
+            socketTimeout: 6e3,
             tls: { rejectUnauthorized: false }
           });
           const fallbackMailOptions = {
@@ -5163,7 +5186,7 @@ ${textItems.join("\n")}`;
           };
           const fallbackSendPromise = fallbackTransporter.sendMail(fallbackMailOptions);
           const fallbackTimeout = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error("Fallback timeout")), 1e4);
+            setTimeout(() => reject(new Error("Fallback timeout")), 6500);
           });
           const fbInfo = await Promise.race([fallbackSendPromise, fallbackTimeout]);
           try {

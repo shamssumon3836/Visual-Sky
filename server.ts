@@ -5675,7 +5675,12 @@ app.post('/api/smtp/test', async (req, res) => {
       console.warn('SMTP verification handshake failed:', verifyErr?.message);
       let friendlyError = verifyErr?.message || 'Invalid credentials or port rejected';
       if (verifyErr?.code === 'EAUTH' || friendlyError.includes('535') || friendlyError.toLowerCase().includes('auth')) {
-        friendlyError = `Authentication failed: Remote SMTP server rejected username "${username}" or password.`;
+        const isGmailHost = String(host || '').includes('gmail.com') || String(username || '').includes('@gmail.com');
+        if (isGmailHost) {
+          friendlyError = `Google Authentication Error: Gmail requires a 16-character Google App Password (not your normal Gmail password). Please visit https://myaccount.google.com/apppasswords, create an App Password for 'Mail', and enter the 16 characters here. (জিমেইলের জন্য সাধারণ পাসওয়ার্ড না দিয়ে myaccount.google.com/apppasswords থেকে ১৬ অক্ষরের App Password তৈরি করে দিন)।`;
+        } else {
+          friendlyError = `Authentication failed: Remote SMTP server rejected username "${username}" or password. Please verify credentials.`;
+        }
       } else if (verifyErr?.code === 'ETIMEDOUT' || verifyErr?.code === 'ESOCKET') {
         friendlyError = `Connection timed out: Server at ${host}:${smtpPort} did not respond. Check host/port or try Port 465 SSL.`;
       } else if (verifyErr?.code === 'EDNS' || verifyErr?.code === 'ENOTFOUND') {
@@ -6127,18 +6132,24 @@ app.post('/api/smtp/send', async (req, res) => {
             relay: 'Resend HTTPS API (Port 443)'
           });
         } else {
-          return res.status(resendRes.status >= 400 && resendRes.status < 500 ? resendRes.status : 400).json({
+          console.warn('[Resend API Error, attempting platform relay fallback]:', resendData);
+          if (!process.env.SMTP_PASS) {
+            return res.status(resendRes.status >= 400 && resendRes.status < 500 ? resendRes.status : 400).json({
+              success: false,
+              error: `Resend API Dispatch Error: ${resendData.message || resendData.error || 'Failed to dispatch email'}`,
+              status: 'failed'
+            });
+          }
+        }
+      } catch (resendErr: any) {
+        console.warn('[Resend Network Error, attempting platform relay fallback]:', resendErr?.message);
+        if (!process.env.SMTP_PASS) {
+          return res.status(500).json({
             success: false,
-            error: `Resend API Dispatch Error: ${resendData.message || resendData.error || 'Failed to dispatch email'}`,
+            error: `Resend Network Error: ${resendErr?.message || 'HTTPS request failed'}`,
             status: 'failed'
           });
         }
-      } catch (resendErr: any) {
-        return res.status(500).json({
-          success: false,
-          error: `Resend Network Error: ${resendErr?.message || 'HTTPS request failed'}`,
-          status: 'failed'
-        });
       }
     }
 
@@ -6190,28 +6201,42 @@ app.post('/api/smtp/send', async (req, res) => {
             relay: 'Brevo HTTPS API (Port 443)'
           });
         } else {
-          return res.status(brevoRes.status >= 400 && brevoRes.status < 500 ? brevoRes.status : 400).json({
+          console.warn('[Brevo API Error, attempting platform relay fallback]:', brevoData);
+          if (!process.env.SMTP_PASS) {
+            return res.status(brevoRes.status >= 400 && brevoRes.status < 500 ? brevoRes.status : 400).json({
+              success: false,
+              error: `Brevo API Dispatch Error: ${brevoData.message || brevoData.error || 'Transmission failed'}`,
+              status: 'failed'
+            });
+          }
+        }
+      } catch (brevoErr: any) {
+        console.warn('[Brevo Network Error, attempting platform relay fallback]:', brevoErr?.message);
+        if (!process.env.SMTP_PASS) {
+          return res.status(500).json({
             success: false,
-            error: `Brevo API Dispatch Error: ${brevoData.message || brevoData.error || 'Transmission failed'}`,
+            error: `Brevo Network Error: ${brevoErr?.message || 'HTTPS request failed'}`,
             status: 'failed'
           });
         }
-      } catch (brevoErr: any) {
-        return res.status(500).json({
-          success: false,
-          error: `Brevo Network Error: ${brevoErr?.message || 'HTTPS request failed'}`,
-          status: 'failed'
-        });
       }
     }
 
     // 3. Nodemailer SMTP Socket Relay (Port 465 / 587 with automatic fallback & 100% personal 1-to-1 headers)
     if (!activeSmtp.host) {
-      return res.status(400).json({
-        success: false,
-        error: 'SMTP host is missing. Please configure a valid SMTP hostname (e.g., mail.yourdomain.com or smtp.gmail.com).',
-        status: 'failed'
-      });
+      if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+        activeSmtp.host = process.env.SMTP_HOST;
+        activeSmtp.port = Number(process.env.SMTP_PORT) || 465;
+        activeSmtp.encryption = process.env.SMTP_SECURE === 'true' ? 'SSL' : 'TLS';
+        activeSmtp.username = process.env.SMTP_USER;
+        activeSmtp.password = process.env.SMTP_PASS;
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: 'SMTP host is missing. Please configure a valid SMTP hostname (e.g., mail.yourdomain.com or smtp.gmail.com).',
+          status: 'failed'
+        });
+      }
     }
 
     const primaryPort = Number(activeSmtp.port) || 465;
@@ -6228,9 +6253,9 @@ app.post('/api/smtp/send', async (req, res) => {
           user: activeSmtp.username,
           pass: authKey
         },
-        connectionTimeout: 10000,
-        greetingTimeout: 8000,
-        socketTimeout: 14000,
+        connectionTimeout: 4000,
+        greetingTimeout: 3500,
+        socketTimeout: 5000,
         tls: {
           rejectUnauthorized: false
         }
@@ -6278,7 +6303,7 @@ app.post('/api/smtp/send', async (req, res) => {
             const timeoutErr: any = new Error(`Connection timed out while connecting to ${activeSmtp.host}:${p}.`);
             timeoutErr.code = 'ETIMEDOUT';
             reject(timeoutErr);
-          }, 11000);
+          }, 4500);
         });
         return Promise.race([sendPromise, timeoutPromise]);
       };
@@ -6288,20 +6313,18 @@ app.post('/api/smtp/send', async (req, res) => {
       try {
         info = await sendWithTimeout(transporter, primaryPort);
       } catch (firstErr: any) {
-        // Automatic fallback to alternate port (465 <-> 587) if connection/timeout error
-        const isAuthErr = firstErr?.code === 'EAUTH' || String(firstErr?.message || '').includes('535');
-        if (!isAuthErr) {
-          try {
-            transporter.close();
-          } catch {}
-          const altPort = primaryPort === 465 ? 587 : 465;
-          const altSecure = altPort === 465;
-          transporter = createSmtpTransporter(altPort, altSecure);
-          usedPort = altPort;
-          info = await sendWithTimeout(transporter, altPort);
-        } else {
+        // Fast-track: if platform fallback relay is available, go straight to platform relay to avoid timeout cascades!
+        if (process.env.SMTP_HOST && process.env.SMTP_PASS && (activeSmtp.host !== process.env.SMTP_HOST || activeSmtp.username !== process.env.SMTP_USER)) {
           throw firstErr;
         }
+
+        // Otherwise try alternate port once with short timeout
+        try { transporter.close(); } catch {}
+        const altPort = primaryPort === 465 ? 587 : 465;
+        const altSecure = altPort === 465;
+        transporter = createSmtpTransporter(altPort, altSecure);
+        usedPort = altPort;
+        info = await sendWithTimeout(transporter, altPort);
       }
 
       if (Array.isArray(info?.rejected) && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
@@ -6347,9 +6370,9 @@ app.post('/api/smtp/send', async (req, res) => {
               user: process.env.SMTP_USER,
               pass: process.env.SMTP_PASS
             },
-            connectionTimeout: 10000,
-            greetingTimeout: 8000,
-            socketTimeout: 14000,
+            connectionTimeout: 5000,
+            greetingTimeout: 3500,
+            socketTimeout: 6000,
             tls: { rejectUnauthorized: false }
           });
 
@@ -6364,7 +6387,7 @@ app.post('/api/smtp/send', async (req, res) => {
 
           const fallbackSendPromise = fallbackTransporter.sendMail(fallbackMailOptions);
           const fallbackTimeout = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Fallback timeout')), 10000);
+            setTimeout(() => reject(new Error('Fallback timeout')), 6500);
           });
           const fbInfo: any = await Promise.race([fallbackSendPromise, fallbackTimeout]);
           try { fallbackTransporter.close(); } catch {}

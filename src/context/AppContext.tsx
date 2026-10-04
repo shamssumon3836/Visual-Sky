@@ -3098,24 +3098,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return nextThreads;
     });
 
-    // Dispatch live reply email over the exact matched SMTP account in background
-    if (activeSmtp && (activeSmtp.host || activeSmtp.apiKey)) {
-      fetch('/api/smtp/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: thread.leadEmail,
-          toName: thread.leadName,
-          toCompany: thread.leadCompany,
-          from: senderFromEmail,
-          fromName: senderName,
-          subject: replySubject,
-          text: resolvedBody,
-          smtpConfig: activeSmtp,
-          trackingPixelId,
-          attachments: Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined
-        })
+    // Dispatch live reply email over the matched SMTP account or platform relay in background
+    fetch('/api/smtp/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: thread.leadEmail,
+        toName: thread.leadName,
+        toCompany: thread.leadCompany,
+        from: senderFromEmail,
+        fromName: senderName,
+        subject: replySubject,
+        text: resolvedBody,
+        smtpConfig: activeSmtp,
+        trackingPixelId,
+        attachments: Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined
       })
+    })
         .then(res => safeParseResponse(res, 'Reply send failed'))
         .then(async parsed => {
           const data = parsed.data || {};
@@ -3214,23 +3213,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             trackingPixelId
           });
         });
-    } else {
-      addSentEmailLog({
-        campaignName: 'Smart Inbox Reply',
-        recipientName: thread.leadName,
-        recipientEmail: thread.leadEmail,
-        recipientCompany: thread.leadCompany,
-        subject: replySubject,
-        body: resolvedBody,
-        smtpAccountId: activeSmtp?.id,
-        senderEmail: senderFromEmail,
-        smtpAccountName: activeSmtp?.name || 'VisualSky Outbound Relay',
-        smtpHost: 'smtp.relay.visualsky.pro',
-        status: 'sent',
-        openCount: 0,
-        trackingPixelId
-      });
-    }
 
     addNotification({
       title: 'Reply Dispatched 🚀',
@@ -5143,16 +5125,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Direct Outbound Email Sender (100% Primary Inbox + Auto Placeholder Resolution + Outbox & Thread Sync)
   const sendDirectEmail = async (payload: DirectSendMailPayload): Promise<boolean> => {
     const smtp = smtpAccounts.find(s => s.id === payload.senderSmtpId) || smtpAccounts.find(s => !s.isTrash) || smtpAccounts[0];
-
-    if (!smtp || (!smtp.host && !smtp.apiKey) || (!smtp.password && !smtp.apiKey)) {
-      addNotification({
-        title: '❌ Sending Failed: No SMTP Account',
-        message: 'Please connect a valid SMTP account with password in Settings -> SMTP Accounts before sending.',
-        type: 'system',
-        linkTab: 'smtp'
-      });
-      return false;
-    }
 
     const cleanEmail = payload.recipientEmail.trim();
     const matchedLead = leads.find(l => l.email?.toLowerCase() === cleanEmail.toLowerCase());
