@@ -12,7 +12,8 @@ import {
   Globe, 
   Flame, 
   ArrowUpDown, 
-  RefreshCw 
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 
 export type LeadSortOption = 'score' | 'company' | 'speed' | 'newest';
@@ -40,6 +41,8 @@ interface MinedLeadsToolbarProps {
   isAllVisibleSelected: boolean;
   onBulkVerifySelected?: () => void;
   isVerifying?: boolean;
+  onPurgeDeadLeads?: () => void;
+  deadCount?: number;
 }
 
 export const MinedLeadsToolbar: React.FC<MinedLeadsToolbarProps> = ({
@@ -64,7 +67,9 @@ export const MinedLeadsToolbar: React.FC<MinedLeadsToolbarProps> = ({
   onSelectAllVisible,
   isAllVisibleSelected,
   onBulkVerifySelected,
-  isVerifying
+  isVerifying,
+  onPurgeDeadLeads,
+  deadCount = 0
 }) => {
   return (
     <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 shadow-xl space-y-3.5">
@@ -153,6 +158,18 @@ export const MinedLeadsToolbar: React.FC<MinedLeadsToolbarProps> = ({
             <Copy className="w-3.5 h-3.5 text-slate-400" />
             <span>Copy Emails</span>
           </button>
+
+          {onPurgeDeadLeads && deadCount > 0 && (
+            <button
+              type="button"
+              onClick={onPurgeDeadLeads}
+              className="px-2.5 py-1.5 rounded-xl bg-amber-950/60 hover:bg-amber-900 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-sm animate-pulse"
+              title="Remove leads with unreachable websites ('je website golote na jawa jai shegolor mail neya jabe na')"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+              <span>Purge Dead Sites ({deadCount})</span>
+            </button>
+          )}
 
           {selectedCount > 0 && (
             <button

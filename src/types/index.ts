@@ -41,6 +41,8 @@ export interface Lead {
   status: LeadStatus;
   websiteStatus: 'alive' | 'checking' | 'dead';
   responseTimeMs?: number;
+  hasMx?: boolean;
+  phoneVerified?: boolean;
   lastActivityDate: string;
   daysAgo: number; // e.g., 2, 7, 14, 30, 45
   sentCampaigns: string[];
