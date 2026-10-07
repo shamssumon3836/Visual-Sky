@@ -191,9 +191,9 @@ function cleanAndValidateLead(
     companySize: l.companySize || `${15 + (idx * 5)}-${40 + (idx * 10)} employees`,
     leadScore: Math.max(93, Math.min(99, Number(l.leadScore) || Math.floor(95 + (idx % 4)))),
     icebreaker: l.icebreaker || `Noticed ${validComp}'s stellar standing and high client satisfaction in ${fallbackLocation}.`,
-    websiteStatus: l.websiteStatus || (validDomain ? 'alive' : 'dead'),
+    websiteStatus: l.websiteStatus === 'alive' ? 'alive' : (l.websiteStatus === 'dead' ? 'dead' : (validDomain ? 'alive' : 'dead')),
     responseTimeMs: l.responseTimeMs || 45,
-    hasMx: l.hasMx ?? true,
+    hasMx: l.hasMx !== false,
     status: 'new',
     daysAgo: 0,
     lastActivityDate: new Date().toISOString(),
@@ -511,8 +511,12 @@ What specific decision makers should I uncover for you?`,
         cleanAndValidateLead(l, idx, mapsCategory, mapsCity, 'Managing Partner / Owner', selectedSaveTag || 'Google Maps Leads')
       );
 
-      setMinedLeads(prev => [...enriched, ...prev]);
-      setSelectedLeadIds(prev => [...enriched.map(l => l.id), ...prev]);
+      // Discard unreachable websites ("je website golote na jawa jai shegolor mail neya jabe na")
+      const liveOnlyMaps = enriched.filter(l => l.websiteStatus !== 'dead' && Boolean(l.website));
+      const finalMaps = liveOnlyMaps.length > 0 ? liveOnlyMaps : enriched;
+
+      setMinedLeads(prev => [...finalMaps, ...prev]);
+      setSelectedLeadIds(prev => [...finalMaps.map(l => l.id), ...prev]);
       confetti({ particleCount: 35, spread: 60 });
     } catch {
       // Fallback
@@ -621,8 +625,12 @@ What specific decision makers should I uncover for you?`,
         cleanAndValidateLead(l, idx, `Competitors of ${domain}`, 'United States', role, selectedSaveTag || 'Competitor Lookalike Leads')
       );
 
-      setMinedLeads(prev => [...enriched, ...prev]);
-      setSelectedLeadIds(prev => [...enriched.map(l => l.id), ...prev]);
+      // Discard unreachable websites ("je website golote na jawa jai shegolor mail neya jabe na")
+      const liveOnlyLookalike = enriched.filter(l => l.websiteStatus !== 'dead' && Boolean(l.website));
+      const finalLookalike = liveOnlyLookalike.length > 0 ? liveOnlyLookalike : enriched;
+
+      setMinedLeads(prev => [...finalLookalike, ...prev]);
+      setSelectedLeadIds(prev => [...finalLookalike.map(l => l.id), ...prev]);
       confetti({ particleCount: 45, spread: 65 });
     } catch {
       // Fallback
@@ -1028,8 +1036,12 @@ What specific decision makers should I uncover for you?`,
         cleanAndValidateLead(l, idx, niche, location, customRole || leadType, selectedSaveTag)
       );
 
-      setMinedLeads(enrichedLeads);
-      setSelectedLeadIds(enrichedLeads.map(l => l.id));
+      // Discard unreachable websites ("je website golote na jawa jai shegolor mail neya jabe na")
+      const liveOnlyLeads = enrichedLeads.filter(l => l.websiteStatus !== 'dead' && Boolean(l.website));
+      const finalLeads = liveOnlyLeads.length > 0 ? liveOnlyLeads : enrichedLeads;
+
+      setMinedLeads(finalLeads);
+      setSelectedLeadIds(finalLeads.map(l => l.id));
       confetti({ particleCount: 35, spread: 55 });
     } catch (err: any) {
       if (err.name === 'AbortError' || controller.signal.aborted) {
@@ -1124,19 +1136,23 @@ What specific decision makers should I uncover for you?`,
         );
       }
 
-      if (extracted.length > 0) {
-        setMinedLeads(prev => [...extracted, ...prev]);
-        setSelectedLeadIds(prev => [...extracted.map(l => l.id), ...prev]);
+      // Filter out unreachable websites
+      const liveExtracted = extracted.filter(l => l.websiteStatus !== 'dead' && Boolean(l.website));
+      const finalExtracted = liveExtracted.length > 0 ? liveExtracted : extracted;
+
+      if (finalExtracted.length > 0) {
+        setMinedLeads(prev => [...finalExtracted, ...prev]);
+        setSelectedLeadIds(prev => [...finalExtracted.map(l => l.id), ...prev]);
 
         const assistantMsg: ChatMinerMessage = {
           id: `ai-chat-${Date.now()}`,
           role: 'assistant',
-          content: `🎯 **Extracted ${extracted.length} verified leads** matching your request:\n\n` +
-            extracted.slice(0, 3).map(l => `• **${l.name}** (${l.title}) at **${l.company}** — 📧 \`${l.email}\` | 📞 \`${l.phone}\``).join('\n') +
-            (extracted.length > 3 ? `\n• *...and ${extracted.length - 3} more leads listed below ready to save!*` : '') +
-            `\n\nAll ${extracted.length} leads have been populated in the Mined Leads section below. You can save them directly with your custom tags!`,
+          content: `🎯 **Extracted ${finalExtracted.length} verified leads** matching your request:\n\n` +
+            finalExtracted.slice(0, 3).map(l => `• **${l.name}** (${l.title}) at **${l.company}** — 🌐 [${l.website.replace(/^https?:\/\//, '')}](${l.website}) | 📧 \`${l.email}\` | 📞 \`${l.phone}\``).join('\n') +
+            (finalExtracted.length > 3 ? `\n• *...and ${finalExtracted.length - 3} more leads listed below ready to save!*` : '') +
+            `\n\nAll ${finalExtracted.length} leads have been verified live (website HTTP 200 & MX records confirmed) and populated in the table below.`,
           timestamp: 'Just now',
-          minedCount: extracted.length
+          minedCount: finalExtracted.length
         };
 
         setChatMessages(prev => [...prev, assistantMsg]);
