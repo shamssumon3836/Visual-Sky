@@ -4590,16 +4590,87 @@ async function verifyWebsiteReachable(rawUrl: string): Promise<WebsiteCheckResul
       signal: AbortSignal.timeout(4500)
     });
 
-    const isAlive = res.status >= 200 && res.status < 400;
+    let isAlive = res.status >= 200 && res.status < 400;
+    let reason = isAlive ? undefined : `HTTP status ${res.status}`;
+    const destinationUrl = res.url || cleanUrl;
+
+    // A. Detect redirect to domain registrar, parking, or marketplace platform (GoDaddy, Sedo, Dan, etc.)
+    if (isAlive) {
+      try {
+        const destHost = new URL(destinationUrl).hostname.toLowerCase();
+        const parkingRegistrars = [
+          'godaddy.com', 'godaddysites.com', 'afternic.com', 'dan.com', 'sedo.com',
+          'sedoparking.com', 'hugedomains.com', 'bodis.com', 'parkingcrew.net',
+          'parkingcrew.com', 'domainmarket.com', 'squadhelp.com', 'atom.com',
+          'undeveloped.com', 'domainagents.com', 'cashparking.com', 'buydomains.com',
+          'uniregistry.com', 'dynadot.com', 'namecheap.com'
+        ];
+        if (parkingRegistrars.some(p => destHost.includes(p))) {
+          isAlive = false;
+          reason = `EXPIRED_OR_PARKED_DOMAIN (Redirected to registrar ${destHost})`;
+        }
+      } catch {}
+    }
+
+    // B. Detect expired domain / parking page content markers in the HTML response
+    if (isAlive) {
+      try {
+        const textChunk = await res.text();
+        const lowerHtml = textChunk.slice(0, 15000).toLowerCase();
+        
+        const expiredIndicators = [
+          'domain has expired',
+          'domain is expired',
+          'domain expired',
+          'renew your domain',
+          'renew this domain',
+          'renew now',
+          'buy this domain',
+          'this domain is for sale',
+          'domain name is for sale',
+          'domain is available for sale',
+          'inquire about this domain',
+          'parked free, courtesy of',
+          'domain is parked',
+          'domain parked',
+          'parked domain',
+          'sedo domain parking',
+          'sedoparking',
+          'hugedomains',
+          'dan.com',
+          'afternic',
+          'pending renewal or deletion',
+          'cashparking',
+          'parkingcrew',
+          'domain name may be for sale',
+          'website is parked',
+          'this web page is parked'
+        ];
+
+        const hasGoDaddyParking = lowerHtml.includes('godaddy') && (
+          lowerHtml.includes('park') ||
+          lowerHtml.includes('domain') ||
+          lowerHtml.includes('renew') ||
+          lowerHtml.includes('sale') ||
+          lowerHtml.includes('courtesy') ||
+          lowerHtml.includes('buy')
+        );
+
+        if (hasGoDaddyParking || expiredIndicators.some(ind => lowerHtml.includes(ind))) {
+          isAlive = false;
+          reason = 'EXPIRED_OR_PARKED_DOMAIN';
+        }
+      } catch {}
+    }
 
     const finalResult: WebsiteCheckResult = {
       isAlive,
       status: res.status,
-      normalizedUrl: res.url || cleanUrl,
-      sslValid: (res.url || cleanUrl).startsWith('https://'),
+      normalizedUrl: destinationUrl,
+      sslValid: destinationUrl.startsWith('https://'),
       responseTimeMs: Math.max(10, Date.now() - startTime),
       server: res.headers.get('server') || 'Active Web Server',
-      reason: isAlive ? undefined : `HTTP status ${res.status}`
+      reason
     };
     websiteCheckCache.set(cleanUrl, { result: finalResult, timestamp: Date.now() });
     return finalResult;
@@ -4614,15 +4685,35 @@ async function verifyWebsiteReachable(rawUrl: string): Promise<WebsiteCheckResul
           redirect: 'follow',
           signal: AbortSignal.timeout(3000)
         });
-        const isAlive = fallbackRes.status >= 200 && fallbackRes.status < 400;
+        let isAlive = fallbackRes.status >= 200 && fallbackRes.status < 400;
+        let reason = isAlive ? undefined : `HTTP status ${fallbackRes.status}`;
+        const destFallback = fallbackRes.url || httpUrl;
+
+        if (isAlive) {
+          try {
+            const destHost = new URL(destFallback).hostname.toLowerCase();
+            const parkingRegistrars = [
+              'godaddy.com', 'godaddysites.com', 'afternic.com', 'dan.com', 'sedo.com',
+              'sedoparking.com', 'hugedomains.com', 'bodis.com', 'parkingcrew.net',
+              'parkingcrew.com', 'domainmarket.com', 'squadhelp.com', 'atom.com',
+              'undeveloped.com', 'domainagents.com', 'cashparking.com', 'buydomains.com',
+              'namecheap.com'
+            ];
+            if (parkingRegistrars.some(p => destHost.includes(p))) {
+              isAlive = false;
+              reason = `EXPIRED_OR_PARKED_DOMAIN (Redirected to ${destHost})`;
+            }
+          } catch {}
+        }
+
         const res: WebsiteCheckResult = {
           isAlive,
           status: fallbackRes.status,
-          normalizedUrl: fallbackRes.url || httpUrl,
+          normalizedUrl: destFallback,
           sslValid: false,
           responseTimeMs: Math.max(10, Date.now() - startTime),
           server: fallbackRes.headers.get('server') || 'Active Web Server',
-          reason: isAlive ? undefined : `HTTP status ${fallbackRes.status}`
+          reason
         };
         websiteCheckCache.set(cleanUrl, { result: res, timestamp: Date.now() });
         return res;
@@ -4821,7 +4912,7 @@ app.post('/api/leads/generate', async (req, res) => {
       minRating = '4.0'
     } = req.body || {};
 
-    const count = Math.min(Math.max(Number(batchSize) || 10, 1), 50);
+    const count = Math.min(Math.max(Number(batchSize) || 10, 1), 250);
     const targetRole = customRole.trim() || leadType || (mode === 'google_maps' ? 'Business Owner / Principal' : 'Founder & CEO');
     const targetNiche = mapsCategory ? `${mapsCategory} ${customPrompt ? `(${customPrompt})` : ''}`.trim() : (mode === 'lookalike' && seedDomain ? `Lookalikes & Competitors of ${seedDomain}` : niche);
     const socialsList = Array.isArray(selectedSocials) && selectedSocials.length > 0
@@ -4839,7 +4930,7 @@ app.post('/api/leads/generate', async (req, res) => {
       try {
         const isMapsMode = mode === 'google_maps';
         const isLookalikeMode = mode === 'lookalike';
-        const candidatesToRequest = Math.min(Math.max(count + 8, Math.ceil(count * 1.6)), 40);
+        const candidatesToRequest = Math.min(Math.max(count + 3, Math.ceil(count * 1.25)), 25);
 
         const prompt = `You are an elite B2B Lead Intelligence Engine for VisualSky.
 MANDATORY REAL-WORLD DIRECTIVE:
@@ -5040,7 +5131,7 @@ Respond ONLY with a valid JSON array of objects with schema:
   } catch (err: any) {
     console.error('Lead gen error:', err?.message);
     // Fallback: return vault leads that are verified alive with MX records
-    const fallbackLimit = Math.min(Math.max(Number(req.body?.batchSize) || 10, 1), 50);
+    const fallbackLimit = Math.min(Math.max(Number(req.body?.batchSize) || 10, 1), 250);
     const fallbackLeads: any[] = [];
     for (const v of REAL_VERIFIED_BUSINESS_VAULT) {
       if (fallbackLeads.length >= fallbackLimit) break;

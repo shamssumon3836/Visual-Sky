@@ -263,18 +263,38 @@ export const GoogleMapsMinerPanel: React.FC<GoogleMapsMinerPanelProps> = ({
               <option value="all">Any Rating</option>
             </select>
           </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-bold text-slate-300 block">Prospects</label>
-            <select
-              value={batchSize}
-              onChange={(e) => setBatchSize(Number(e.target.value))}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-emerald-500 cursor-pointer font-bold text-emerald-400"
-            >
-              <option value={10}>10 Places</option>
-              <option value={15}>15 Places</option>
-              <option value={25}>25 Places</option>
-              <option value={50}>50 Places</option>
-            </select>
+          <div className="space-y-1.5 sm:col-span-2 md:col-span-1">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-300">Custom Prospects</label>
+              <span className="text-[10px] text-emerald-400 font-mono font-bold">{batchSize} Places</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <input
+                type="number"
+                min={1}
+                max={250}
+                value={batchSize}
+                onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1))}
+                placeholder="e.g. 50"
+                className="w-20 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-100 font-mono font-bold text-emerald-400 focus:outline-none focus:border-emerald-500"
+              />
+              <div className="flex items-center gap-1 flex-1 overflow-x-auto">
+                {[10, 25, 50, 75, 100].map((num) => (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => setBatchSize(num)}
+                    className={`px-2 py-1.5 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                      batchSize === num
+                        ? 'bg-emerald-500 text-black shadow-xs font-black'
+                        : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {num}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </div>

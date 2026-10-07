@@ -1642,7 +1642,7 @@ What specific decision makers should I uncover for you?`,
             </div>
 
             {/* Decision Maker Role & Batch Size */}
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-bold text-slate-300 block mb-1.5">Target Role</label>
                 <input
@@ -1654,18 +1654,37 @@ What specific decision makers should I uncover for you?`,
                 />
               </div>
               <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1.5">Batch Count</label>
-                <select
-                  value={batchSize}
-                  onChange={(e) => setBatchSize(Number(e.target.value))}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-purple-500 cursor-pointer"
-                >
-                  <option value={5}>5 Leads</option>
-                  <option value={10}>10 Leads</option>
-                  <option value={15}>15 Leads</option>
-                  <option value={25}>25 Leads</option>
-                  <option value={50}>50 Leads</option>
-                </select>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-slate-300">Custom Prospects Count</label>
+                  <span className="text-[10px] text-purple-400 font-mono font-bold">{batchSize} Prospects</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={250}
+                    value={batchSize}
+                    onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1))}
+                    placeholder="e.g. 50"
+                    className="w-20 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs font-mono font-bold text-purple-300 focus:outline-none focus:border-purple-500"
+                  />
+                  <div className="flex items-center gap-1 flex-1 overflow-x-auto">
+                    {[10, 25, 50, 75, 100].map((num) => (
+                      <button
+                        key={num}
+                        type="button"
+                        onClick={() => setBatchSize(num)}
+                        className={`px-2 py-1.5 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                          batchSize === num
+                            ? 'bg-purple-600 text-white font-black'
+                            : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        {num}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           </div>

@@ -133,25 +133,38 @@ export const DomainProspectorPanel: React.FC<DomainProspectorPanelProps> = ({
             </div>
           </div>
 
-          {/* Batch Size Slider */}
+          {/* Batch Size Input & Presets */}
           <div className="space-y-1.5">
             <div className="flex justify-between items-center text-xs font-bold text-slate-300">
-              <span>Prospects to Mine</span>
+              <span>Custom Prospects to Mine</span>
               <span className="text-indigo-400 font-mono font-black">{batchSize} Leads</span>
             </div>
-            <input
-              type="range"
-              min="5"
-              max="25"
-              step="5"
-              value={batchSize}
-              onChange={(e) => setBatchSize(Number(e.target.value))}
-              className="w-full accent-indigo-500 cursor-pointer mt-2"
-            />
-            <div className="flex justify-between text-[10px] text-slate-500">
-              <span>5</span>
-              <span>15</span>
-              <span>25</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={250}
+                value={batchSize}
+                onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1))}
+                placeholder="e.g. 50"
+                className="w-20 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs font-mono font-bold text-indigo-300 focus:outline-none focus:border-indigo-500"
+              />
+              <div className="flex items-center gap-1 flex-1 overflow-x-auto">
+                {[10, 25, 50, 75, 100].map((num) => (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => setBatchSize(num)}
+                    className={`px-2 py-1.5 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                      batchSize === num
+                        ? 'bg-indigo-600 text-white font-black'
+                        : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {num}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
