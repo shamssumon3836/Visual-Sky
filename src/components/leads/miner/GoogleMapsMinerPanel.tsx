@@ -295,14 +295,13 @@ export const GoogleMapsMinerPanel: React.FC<GoogleMapsMinerPanelProps> = ({
                 <input
                   type="number"
                   min={1}
-                  max={250}
                   value={inputVal}
                   onChange={(e) => {
                     const val = e.target.value;
                     setInputVal(val);
                     const n = parseInt(val, 10);
                     if (!isNaN(n) && n > 0) {
-                      setBatchSize(Math.min(n, 250));
+                      setBatchSize(n);
                     }
                   }}
                   onBlur={() => {
@@ -313,13 +312,13 @@ export const GoogleMapsMinerPanel: React.FC<GoogleMapsMinerPanelProps> = ({
                       setInputVal(String(batchSize));
                     }
                   }}
-                  placeholder="e.g. 50"
-                  className="w-14 bg-transparent text-center text-xs font-mono font-black text-emerald-300 focus:outline-none"
+                  placeholder="সংখ্যা লিখুন"
+                  className="w-20 bg-transparent text-center text-xs font-mono font-black text-emerald-300 focus:outline-none"
                 />
                 <button
                   type="button"
                   onClick={() => {
-                    const next = Math.min(250, batchSize + 5);
+                    const next = batchSize + 5;
                     setBatchSize(next);
                   }}
                   className="px-2 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-bold transition cursor-pointer"
@@ -330,7 +329,7 @@ export const GoogleMapsMinerPanel: React.FC<GoogleMapsMinerPanelProps> = ({
               </div>
 
               <div className="flex items-center gap-1 flex-1 overflow-x-auto py-0.5">
-                {[5, 10, 20, 25, 50, 75, 100, 150, 200].map((num) => (
+                {[5, 10, 25, 50, 100, 150, 250, 500, 1000].map((num) => (
                   <button
                     key={num}
                     type="button"

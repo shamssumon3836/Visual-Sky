@@ -1094,7 +1094,7 @@ What specific decision makers should I uncover for you?`,
       // Detect if user wrote a specific number in their prompt (e.g. "Find 25 dentists", "Give me 50 SaaS companies")
       const queryNumMatch = query.match(/\b([1-9][0-9]?|1[0-9]{2}|2[0-5][0])\b/);
       const targetChatCount = queryNumMatch ? parseInt(queryNumMatch[1], 10) : chatBatchSize;
-      const effectiveBatchSize = Math.min(Math.max(targetChatCount || chatBatchSize || 10, 1), 250);
+      const effectiveBatchSize = Math.max(targetChatCount || chatBatchSize || 10, 1);
 
       try {
         const res = await fetch('/api/leads/generate', {
@@ -1451,12 +1451,11 @@ What specific decision makers should I uncover for you?`,
               <input
                 type="number"
                 min={1}
-                max={250}
                 value={chatBatchSizeInput}
                 onChange={(e) => {
                   setChatBatchSizeInput(e.target.value);
                   const n = parseInt(e.target.value, 10);
-                  if (!isNaN(n) && n > 0) setChatBatchSize(Math.min(n, 250));
+                  if (!isNaN(n) && n > 0) setChatBatchSize(n);
                 }}
                 onBlur={() => {
                   if (!chatBatchSize || chatBatchSize < 1) {
@@ -1466,10 +1465,11 @@ What specific decision makers should I uncover for you?`,
                     setChatBatchSizeInput(String(chatBatchSize));
                   }
                 }}
-                className="w-16 bg-slate-900 border border-slate-700 rounded-xl px-2 py-1 text-xs text-center font-mono font-bold text-cyan-300 focus:outline-none focus:border-cyan-400"
+                placeholder="সংখ্যা লিখুন"
+                className="w-20 bg-slate-900 border border-slate-700 rounded-xl px-2 py-1 text-xs text-center font-mono font-bold text-cyan-300 focus:outline-none focus:border-cyan-400"
               />
               <div className="flex items-center gap-1">
-                {[5, 10, 20, 25, 50, 75, 100].map(num => (
+                {[5, 10, 25, 50, 100, 250, 500].map(num => (
                   <button
                     key={num}
                     type="button"
@@ -1741,14 +1741,13 @@ What specific decision makers should I uncover for you?`,
                     <input
                       type="number"
                       min={1}
-                      max={250}
                       value={batchSizeInput}
                       onChange={(e) => {
                         const val = e.target.value;
                         setBatchSizeInput(val);
                         const n = parseInt(val, 10);
                         if (!isNaN(n) && n > 0) {
-                          setBatchSize(Math.min(n, 250));
+                          setBatchSize(n);
                         }
                       }}
                       onBlur={() => {
@@ -1759,13 +1758,13 @@ What specific decision makers should I uncover for you?`,
                           setBatchSizeInput(String(batchSize));
                         }
                       }}
-                      placeholder="e.g. 50"
-                      className="w-16 bg-transparent text-center text-xs font-mono font-black text-purple-200 focus:outline-none"
+                      placeholder="সংখ্যা লিখুন"
+                      className="w-20 bg-transparent text-center text-xs font-mono font-black text-purple-200 focus:outline-none"
                     />
                     <button
                       type="button"
                       onClick={() => {
-                        const next = Math.min(250, batchSize + 5);
+                        const next = batchSize + 5;
                         setBatchSize(next);
                         setBatchSizeInput(String(next));
                       }}
@@ -1777,7 +1776,7 @@ What specific decision makers should I uncover for you?`,
                   </div>
 
                   <div className="flex items-center gap-1 flex-1 overflow-x-auto py-0.5">
-                    {[5, 10, 20, 25, 50, 75, 100, 150, 200].map((num) => (
+                    {[5, 10, 25, 50, 100, 150, 250, 500, 1000].map((num) => (
                       <button
                         key={num}
                         type="button"
