@@ -295,6 +295,9 @@ export const AILeadGenerator: React.FC<AILeadGeneratorProps> = ({ onOpenSendMail
   const [niche, setNiche] = useState<string>('B2B SaaS & Tech Founders');
   const [location, setLocation] = useState<string>('San Francisco & New York, USA');
   const [batchSize, setBatchSize] = useState<number>(10);
+  const [batchSizeInput, setBatchSizeInput] = useState<string>('10');
+  const [chatBatchSize, setChatBatchSize] = useState<number>(10);
+  const [chatBatchSizeInput, setChatBatchSizeInput] = useState<string>('10');
   const [leadType, setLeadType] = useState<string>('Founder & CEO');
   const [customRole, setCustomRole] = useState<string>('');
   const [customPrompt, setCustomPrompt] = useState<string>('Find decision makers with active company websites, direct mobile phone numbers, and verified profiles.');
@@ -1088,6 +1091,11 @@ What specific decision makers should I uncover for you?`,
     try {
       let extracted: Lead[] = [];
 
+      // Detect if user wrote a specific number in their prompt (e.g. "Find 25 dentists", "Give me 50 SaaS companies")
+      const queryNumMatch = query.match(/\b([1-9][0-9]?|1[0-9]{2}|2[0-5][0])\b/);
+      const targetChatCount = queryNumMatch ? parseInt(queryNumMatch[1], 10) : chatBatchSize;
+      const effectiveBatchSize = Math.min(Math.max(targetChatCount || chatBatchSize || 10, 1), 250);
+
       try {
         const res = await fetch('/api/leads/generate', {
           method: 'POST',
@@ -1096,7 +1104,7 @@ What specific decision makers should I uncover for you?`,
           body: JSON.stringify({
             niche: query.slice(0, 50),
             location: 'Auto-detected from query',
-            batchSize: 8,
+            batchSize: effectiveBatchSize,
             customPrompt: `The user requested in conversational chat: "${query}". Extract realistic verified decision makers matching this exact prompt. Include valid direct phone numbers and websites.`,
             selectedSocials,
             selectedDirectories,
@@ -1432,6 +1440,56 @@ What specific decision makers should I uncover for you?`,
             </div>
           </div>
 
+          {/* Custom Prospects Volume Selector for Chat */}
+          <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-950/70 rounded-2xl border border-slate-800 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-slate-300">🎯 Custom Prospects to Mine:</span>
+              <span className="text-cyan-400 font-mono font-black">{chatBatchSize} Leads</span>
+              <span className="text-[10px] text-slate-400 font-medium">কাস্টম সংখ্যা টাইপ করুন</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <input
+                type="number"
+                min={1}
+                max={250}
+                value={chatBatchSizeInput}
+                onChange={(e) => {
+                  setChatBatchSizeInput(e.target.value);
+                  const n = parseInt(e.target.value, 10);
+                  if (!isNaN(n) && n > 0) setChatBatchSize(Math.min(n, 250));
+                }}
+                onBlur={() => {
+                  if (!chatBatchSize || chatBatchSize < 1) {
+                    setChatBatchSize(10);
+                    setChatBatchSizeInput('10');
+                  } else {
+                    setChatBatchSizeInput(String(chatBatchSize));
+                  }
+                }}
+                className="w-16 bg-slate-900 border border-slate-700 rounded-xl px-2 py-1 text-xs text-center font-mono font-bold text-cyan-300 focus:outline-none focus:border-cyan-400"
+              />
+              <div className="flex items-center gap-1">
+                {[5, 10, 20, 25, 50, 75, 100].map(num => (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => {
+                      setChatBatchSize(num);
+                      setChatBatchSizeInput(String(num));
+                    }}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition ${
+                      chatBatchSize === num
+                        ? 'bg-cyan-500 text-black font-black'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    {num}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
           {/* Chat Input */}
           <form
             onSubmit={(e) => {
@@ -1642,48 +1700,106 @@ What specific decision makers should I uncover for you?`,
             </div>
 
             {/* Decision Maker Role & Batch Size */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1.5">Target Role</label>
+                <label className="text-xs font-bold text-slate-300 block mb-1.5">Target Decision Maker Role</label>
                 <input
                   type="text"
                   value={customRole}
                   onChange={(e) => setCustomRole(e.target.value)}
-                  placeholder="Founder, CEO, VP"
+                  placeholder="Founder, CEO, VP of Sales, Managing Director"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-purple-500"
                 />
               </div>
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-bold text-slate-300">Custom Prospects Count</label>
-                  <span className="text-[10px] text-purple-400 font-mono font-bold">{batchSize} Prospects</span>
+
+              {/* Dedicated Custom Prospects Volume Control */}
+              <div className="p-3 bg-purple-950/20 border border-purple-500/30 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <label className="text-xs font-black text-purple-200">Custom Prospects Count</label>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-extrabold border border-purple-500/30">
+                      ইচ্ছেমতো সংখ্যা লিখুন
+                    </span>
+                  </div>
+                  <span className="text-xs text-purple-300 font-mono font-black">{batchSize} Prospects</span>
                 </div>
+
                 <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    max={250}
-                    value={batchSize}
-                    onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1))}
-                    placeholder="e.g. 50"
-                    className="w-20 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs font-mono font-bold text-purple-300 focus:outline-none focus:border-purple-500"
-                  />
-                  <div className="flex items-center gap-1 flex-1 overflow-x-auto">
-                    {[10, 25, 50, 75, 100].map((num) => (
+                  <div className="flex items-center bg-slate-950 border border-slate-700 rounded-xl overflow-hidden shadow-inner">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = Math.max(1, batchSize - 5);
+                        setBatchSize(next);
+                        setBatchSizeInput(String(next));
+                      }}
+                      className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-bold transition cursor-pointer"
+                      title="Decrease by 5"
+                    >
+                      -5
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      max={250}
+                      value={batchSizeInput}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setBatchSizeInput(val);
+                        const n = parseInt(val, 10);
+                        if (!isNaN(n) && n > 0) {
+                          setBatchSize(Math.min(n, 250));
+                        }
+                      }}
+                      onBlur={() => {
+                        if (!batchSize || batchSize < 1) {
+                          setBatchSize(10);
+                          setBatchSizeInput('10');
+                        } else {
+                          setBatchSizeInput(String(batchSize));
+                        }
+                      }}
+                      placeholder="e.g. 50"
+                      className="w-16 bg-transparent text-center text-xs font-mono font-black text-purple-200 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = Math.min(250, batchSize + 5);
+                        setBatchSize(next);
+                        setBatchSizeInput(String(next));
+                      }}
+                      className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-bold transition cursor-pointer"
+                      title="Increase by 5"
+                    >
+                      +5
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1 flex-1 overflow-x-auto py-0.5">
+                    {[5, 10, 20, 25, 50, 75, 100, 150, 200].map((num) => (
                       <button
                         key={num}
                         type="button"
-                        onClick={() => setBatchSize(num)}
-                        className={`px-2 py-1.5 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                        onClick={() => {
+                          setBatchSize(num);
+                          setBatchSizeInput(String(num));
+                        }}
+                        className={`px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer shrink-0 ${
                           batchSize === num
-                            ? 'bg-purple-600 text-white font-black'
-                            : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                            ? 'bg-purple-600 text-white font-black shadow-md shadow-purple-600/30 ring-1 ring-purple-400'
+                            : 'bg-slate-950 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
                         }`}
                       >
                         {num}
                       </button>
                     ))}
                   </div>
+                </div>
+
+                <div className="text-[10px] text-slate-400 flex items-center justify-between">
+                  <span>💡 টাইপ করুন যেকোনো সংখ্যা (1 - 250) — সিস্টেম ঠিক সেই পরিমাণ ভেরিফাইড লিড দিবে</span>
+                  <span className="font-mono text-emerald-400 font-bold">100% Live Sites Only</span>
                 </div>
               </div>
             </div>
