@@ -1699,108 +1699,166 @@ What specific decision makers should I uncover for you?`,
               </div>
             </div>
 
-            {/* Decision Maker Role & Batch Size */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1.5">Target Decision Maker Role</label>
-                <input
-                  type="text"
-                  value={customRole}
-                  onChange={(e) => setCustomRole(e.target.value)}
-                  placeholder="Founder, CEO, VP of Sales, Managing Director"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-purple-500"
-                />
+            {/* Decision Maker Role Selection */}
+            <div>
+              <label className="text-xs font-bold text-slate-300 block mb-1.5">Target Decision Maker Role</label>
+              <input
+                type="text"
+                value={customRole}
+                onChange={(e) => setCustomRole(e.target.value)}
+                placeholder="Founder, CEO, VP of Sales, Managing Director"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-purple-500"
+              />
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {['Founder & CEO', 'Managing Director', 'VP of Sales', 'Chief Technology Officer'].map((r, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setCustomRole(r)}
+                    className="text-[10px] px-2 py-0.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-md text-slate-400 hover:text-slate-200 transition cursor-pointer"
+                  >
+                    {r}
+                  </button>
+                ))}
               </div>
+            </div>
+          </div>
 
-              {/* Dedicated Custom Prospects Volume Control */}
-              <div className="p-3 bg-purple-950/20 border border-purple-500/30 rounded-2xl space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <label className="text-xs font-black text-purple-200">Custom Prospects Count</label>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-extrabold border border-purple-500/30">
-                      ইচ্ছেমতো সংখ্যা লিখুন
+          {/* DEDICATED FULL-WIDTH PROSPECTS TO MINE CONTROL CARD */}
+          <div className="p-5 bg-gradient-to-r from-purple-950/40 via-slate-900/90 to-indigo-950/40 border-2 border-purple-500/40 rounded-3xl space-y-3.5 shadow-2xl">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-purple-300 text-xl shadow-inner">
+                  🎯
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-black text-white">Prospects to Mine (লিড সংখ্যা)</span>
+                    <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-extrabold border border-emerald-500/30">
+                      কোনো লিমিট নেই (No Limit)
                     </span>
                   </div>
-                  <span className="text-xs text-purple-300 font-mono font-black">{batchSize} Prospects</span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center bg-slate-950 border border-slate-700 rounded-xl overflow-hidden shadow-inner">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const next = Math.max(1, batchSize - 5);
-                        setBatchSize(next);
-                        setBatchSizeInput(String(next));
-                      }}
-                      className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-bold transition cursor-pointer"
-                      title="Decrease by 5"
-                    >
-                      -5
-                    </button>
-                    <input
-                      type="number"
-                      min={1}
-                      value={batchSizeInput}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setBatchSizeInput(val);
-                        const n = parseInt(val, 10);
-                        if (!isNaN(n) && n > 0) {
-                          setBatchSize(n);
-                        }
-                      }}
-                      onBlur={() => {
-                        if (!batchSize || batchSize < 1) {
-                          setBatchSize(10);
-                          setBatchSizeInput('10');
-                        } else {
-                          setBatchSizeInput(String(batchSize));
-                        }
-                      }}
-                      placeholder="সংখ্যা লিখুন"
-                      className="w-20 bg-transparent text-center text-xs font-mono font-black text-purple-200 focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const next = batchSize + 5;
-                        setBatchSize(next);
-                        setBatchSizeInput(String(next));
-                      }}
-                      className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-bold transition cursor-pointer"
-                      title="Increase by 5"
-                    >
-                      +5
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-1 flex-1 overflow-x-auto py-0.5">
-                    {[5, 10, 25, 50, 100, 150, 250, 500, 1000].map((num) => (
-                      <button
-                        key={num}
-                        type="button"
-                        onClick={() => {
-                          setBatchSize(num);
-                          setBatchSizeInput(String(num));
-                        }}
-                        className={`px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer shrink-0 ${
-                          batchSize === num
-                            ? 'bg-purple-600 text-white font-black shadow-md shadow-purple-600/30 ring-1 ring-purple-400'
-                            : 'bg-slate-950 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
-                        }`}
-                      >
-                        {num}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="text-[10px] text-slate-400 flex items-center justify-between">
-                  <span>💡 টাইপ করুন যেকোনো সংখ্যা (1 - 250) — সিস্টেম ঠিক সেই পরিমাণ ভেরিফাইড লিড দিবে</span>
-                  <span className="font-mono text-emerald-400 font-bold">100% Live Sites Only</span>
+                  <p className="text-xs text-slate-400">
+                    ইনপুট বক্সে আপনার ইচ্ছামতো যেকোনো সংখ্যা টাইপ করুন অথবা নিচের প্রিসেট বাটনগুলো ক্লিক করুন
+                  </p>
                 </div>
               </div>
+
+              <div className="flex items-center gap-2 bg-slate-950 px-4 py-2 rounded-2xl border border-purple-500/40 shadow-inner">
+                <span className="text-xs text-slate-400 font-medium">নির্বাচিত সংখ্যা:</span>
+                <span className="text-base text-purple-300 font-mono font-black">{batchSize} Prospects</span>
+              </div>
+            </div>
+
+            {/* Stepper + Input Box + Quick Presets */}
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              {/* Stepper & Numeric Input */}
+              <div className="flex items-center bg-slate-950 border-2 border-purple-500/60 rounded-2xl overflow-hidden shadow-lg shadow-purple-950/50">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = Math.max(1, batchSize - 10);
+                    setBatchSize(next);
+                    setBatchSizeInput(String(next));
+                  }}
+                  className="px-3 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-r border-slate-800"
+                  title="Decrease by 10"
+                >
+                  -10
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = Math.max(1, batchSize - 5);
+                    setBatchSize(next);
+                    setBatchSizeInput(String(next));
+                  }}
+                  className="px-3 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-r border-slate-800"
+                  title="Decrease by 5"
+                >
+                  -5
+                </button>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={batchSizeInput}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/[^0-9]/g, '');
+                    setBatchSizeInput(val);
+                    if (val !== '') {
+                      const n = parseInt(val, 10);
+                      if (!isNaN(n) && n > 0) {
+                        setBatchSize(n);
+                      }
+                    }
+                  }}
+                  onBlur={() => {
+                    const n = parseInt(batchSizeInput, 10);
+                    if (isNaN(n) || n < 1) {
+                      setBatchSize(10);
+                      setBatchSizeInput('10');
+                    } else {
+                      setBatchSize(n);
+                      setBatchSizeInput(String(n));
+                    }
+                  }}
+                  placeholder="সংখ্যা"
+                  className="w-24 bg-transparent text-center text-base font-mono font-black text-purple-200 focus:outline-none px-2 py-2"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = batchSize + 5;
+                    setBatchSize(next);
+                    setBatchSizeInput(String(next));
+                  }}
+                  className="px-3 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-l border-slate-800"
+                  title="Increase by 5"
+                >
+                  +5
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = batchSize + 10;
+                    setBatchSize(next);
+                    setBatchSizeInput(String(next));
+                  }}
+                  className="px-3 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-l border-slate-800"
+                  title="Increase by 10"
+                >
+                  +10
+                </button>
+              </div>
+
+              {/* 1-Click Preset Buttons */}
+              <div className="flex flex-wrap items-center gap-1.5 flex-1">
+                {[5, 10, 20, 25, 50, 75, 100, 150, 200, 300, 500, 1000].map((num) => (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => {
+                      setBatchSize(num);
+                      setBatchSizeInput(String(num));
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                      batchSize === num
+                        ? 'bg-purple-600 text-white font-black shadow-lg shadow-purple-600/40 ring-2 ring-purple-300 scale-105'
+                        : 'bg-slate-950 border border-slate-800 text-slate-300 hover:text-white hover:border-purple-500/50 hover:bg-slate-900'
+                    }`}
+                  >
+                    {num}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="text-[11px] text-slate-400 flex items-center justify-between pt-1 border-t border-slate-800/80">
+              <span className="flex items-center gap-1">
+                <span>💡</span>
+                <span>যেকোনো সংখ্যা টাইপ করুন — সিস্টেম রিয়েল-টাইমে ভেরিফাই করে ঠিক সেই পরিমাণ লাইভ লিড ডেলিভার করবে</span>
+              </span>
+              <span className="font-mono text-emerald-400 font-bold">100% Live Sites & MX Verified</span>
             </div>
           </div>
 

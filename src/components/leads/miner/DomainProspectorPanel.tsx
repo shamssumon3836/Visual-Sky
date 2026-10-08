@@ -138,79 +138,124 @@ export const DomainProspectorPanel: React.FC<DomainProspectorPanelProps> = ({
             </div>
           </div>
 
-          {/* Batch Size Input & Presets */}
-          <div className="space-y-1.5 p-2.5 bg-indigo-950/20 border border-indigo-500/30 rounded-2xl">
-            <div className="flex justify-between items-center text-xs font-bold text-slate-300">
-              <div className="flex items-center gap-1.5">
-                <span className="font-black text-indigo-200">Custom Prospects to Mine</span>
-                <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-indigo-500/20 text-indigo-300 font-extrabold border border-indigo-500/30">
-                  ইচ্ছেমতো সংখ্যা লিখুন
-                </span>
+          {/* DEDICATED FULL-WIDTH PROSPECTS TO MINE CONTROL CARD */}
+          <div className="p-4 bg-gradient-to-r from-indigo-950/40 via-slate-900/90 to-violet-950/40 border-2 border-indigo-500/40 rounded-3xl space-y-3 shadow-xl">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-300 text-lg shadow-inner">
+                  🎯
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-black text-white">Prospects to Mine (লিড সংখ্যা)</span>
+                    <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-extrabold border border-emerald-500/30">
+                      কোনো লিমিট নেই (No Limit)
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    ইনপুট বক্সে আপনার ইচ্ছামতো যেকোনো সংখ্যা লিখুন অথবা নিচের প্রিসেট বাটনগুলো ক্লিক করুন
+                  </p>
+                </div>
               </div>
-              <span className="text-indigo-400 font-mono font-black">{batchSize} Leads</span>
+
+              <div className="flex items-center gap-2 bg-slate-950 px-3.5 py-1.5 rounded-2xl border border-indigo-500/40 shadow-inner">
+                <span className="text-xs text-slate-400 font-medium">নির্বাচিত সংখ্যা:</span>
+                <span className="text-base text-indigo-300 font-mono font-black">{batchSize} Leads</span>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="flex items-center bg-slate-950 border border-slate-700 rounded-xl overflow-hidden shadow-inner shrink-0">
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <div className="flex items-center bg-slate-950 border-2 border-indigo-500/60 rounded-2xl overflow-hidden shadow-lg shadow-indigo-950/50">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = Math.max(1, batchSize - 10);
+                    setBatchSize(next);
+                    setInputVal(String(next));
+                  }}
+                  className="px-3 py-2 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-r border-slate-800"
+                  title="Decrease by 10"
+                >
+                  -10
+                </button>
                 <button
                   type="button"
                   onClick={() => {
                     const next = Math.max(1, batchSize - 5);
                     setBatchSize(next);
+                    setInputVal(String(next));
                   }}
-                  className="px-2 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-bold transition cursor-pointer"
+                  className="px-3 py-2 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-r border-slate-800"
                   title="Decrease by 5"
                 >
                   -5
                 </button>
                 <input
-                  type="number"
-                  min={1}
+                  type="text"
+                  inputMode="numeric"
                   value={inputVal}
                   onChange={(e) => {
-                    const val = e.target.value;
+                    const val = e.target.value.replace(/[^0-9]/g, '');
                     setInputVal(val);
-                    const n = parseInt(val, 10);
-                    if (!isNaN(n) && n > 0) {
-                      setBatchSize(n);
+                    if (val !== '') {
+                      const n = parseInt(val, 10);
+                      if (!isNaN(n) && n > 0) {
+                        setBatchSize(n);
+                      }
                     }
                   }}
                   onBlur={() => {
-                    if (!batchSize || batchSize < 1) {
+                    const n = parseInt(inputVal, 10);
+                    if (isNaN(n) || n < 1) {
                       setBatchSize(10);
                       setInputVal('10');
                     } else {
-                      setInputVal(String(batchSize));
+                      setBatchSize(n);
+                      setInputVal(String(n));
                     }
                   }}
                   placeholder="সংখ্যা লিখুন"
-                  className="w-20 bg-transparent text-center text-xs font-mono font-black text-indigo-300 focus:outline-none"
+                  className="w-24 bg-transparent text-center text-base font-mono font-black text-indigo-300 focus:outline-none px-2 py-2"
                 />
                 <button
                   type="button"
                   onClick={() => {
                     const next = batchSize + 5;
                     setBatchSize(next);
+                    setInputVal(String(next));
                   }}
-                  className="px-2 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-bold transition cursor-pointer"
+                  className="px-3 py-2 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-l border-slate-800"
                   title="Increase by 5"
                 >
                   +5
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = batchSize + 10;
+                    setBatchSize(next);
+                    setInputVal(String(next));
+                  }}
+                  className="px-3 py-2 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-l border-slate-800"
+                  title="Increase by 10"
+                >
+                  +10
+                </button>
               </div>
 
-              <div className="flex items-center gap-1 flex-1 overflow-x-auto py-0.5">
-                {[5, 10, 25, 50, 100, 150, 250, 500, 1000].map((num) => (
+              <div className="flex flex-wrap items-center gap-1.5 flex-1">
+                {[5, 10, 20, 25, 50, 75, 100, 150, 200, 300, 500, 1000].map((num) => (
                   <button
                     key={num}
                     type="button"
                     onClick={() => {
                       setBatchSize(num);
+                      setInputVal(String(num));
                     }}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer shrink-0 ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
                       batchSize === num
-                        ? 'bg-indigo-600 text-white font-black shadow-md shadow-indigo-600/30'
-                        : 'bg-slate-950 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
+                        ? 'bg-indigo-600 text-white font-black shadow-lg shadow-indigo-600/30 scale-105'
+                        : 'bg-slate-950 border border-slate-800 text-slate-300 hover:text-white hover:border-indigo-500/50 hover:bg-slate-900'
                     }`}
                   >
                     {num}
@@ -219,8 +264,9 @@ export const DomainProspectorPanel: React.FC<DomainProspectorPanelProps> = ({
               </div>
             </div>
 
-            <div className="text-[9px] text-slate-400">
-              💡 টাইপ করুন যেকোনো সংখ্যা — ঠিক সেই পরিমাণ ভেরিফাইড লুকঅ্যালাইক লিড পাওয়া যাবে
+            <div className="text-[11px] text-slate-400 flex items-center justify-between pt-1 border-t border-slate-800/80">
+              <span>💡 যেকোনো সংখ্যা টাইপ করুন — সিস্টেম ঠিক সেই পরিমাণ ভেরিফাইড লুকঅ্যালাইক লিড বের করবে</span>
+              <span className="font-mono text-emerald-400 font-bold">100% Live Sites & MX Verified</span>
             </div>
           </div>
         </div>
