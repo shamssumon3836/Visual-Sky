@@ -1091,8 +1091,10 @@ What specific decision makers should I uncover for you?`,
     try {
       let extracted: Lead[] = [];
 
-      // Detect if user wrote a specific number in their prompt (e.g. "Find 25 dentists", "Give me 50 SaaS companies")
-      const queryNumMatch = query.match(/\b([1-9][0-9]?|1[0-9]{2}|2[0-5][0])\b/);
+      // Detect if user wrote a specific number in their prompt (English or Bengali digits: e.g. 50, ৫০, 100, ১০০)
+      const bengaliToEng = (str: string) => str.replace(/[০-৯]/g, d => '০১২৩৪৫৬৭৮৯'.indexOf(d).toString());
+      const normalizedQuery = bengaliToEng(query);
+      const queryNumMatch = normalizedQuery.match(/\b([1-9][0-9]{0,3})\b/);
       const targetChatCount = queryNumMatch ? parseInt(queryNumMatch[1], 10) : chatBatchSize;
       const effectiveBatchSize = Math.max(targetChatCount || chatBatchSize || 10, 1);
 
@@ -1102,10 +1104,10 @@ What specific decision makers should I uncover for you?`,
           signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            niche: query.slice(0, 50),
+            niche: query.trim(),
             location: 'Auto-detected from query',
             batchSize: effectiveBatchSize,
-            customPrompt: `The user requested in conversational chat: "${query}". Extract realistic verified decision makers matching this exact prompt. Include valid direct phone numbers and websites.`,
+            customPrompt: `The user requested in conversational chat: "${query}". Extract realistic verified decision makers matching this exact prompt. Include valid direct phone numbers and websites. If requested in Bengali or natural language, determine the exact business niche and location. Provide exactly ${effectiveBatchSize} leads.`,
             selectedSocials,
             selectedDirectories,
             requirePhone: true
@@ -1117,11 +1119,11 @@ What specific decision makers should I uncover for you?`,
           const data = safeParseApiResponse(rawText);
 
           if (data && data.leads && Array.isArray(data.leads) && data.leads.length > 0) {
-            const usedTokens = data.usage?.totalTokens || 280;
+            const usedTokens = data.usage?.totalTokens || (effectiveBatchSize * 45);
             deductAiTokens(usedTokens);
 
             extracted = data.leads.map((l: any, idx: number) =>
-              cleanAndValidateLead(l, idx, query.slice(0, 30), 'United States', 'Decision Maker', selectedSaveTag || 'Conversational AI Miner')
+              cleanAndValidateLead(l, idx, l.niche || 'Targeted Niche', l.location || 'United States', l.title || 'Decision Maker', selectedSaveTag || 'Conversational AI Miner')
             );
           }
         }
@@ -1131,9 +1133,9 @@ What specific decision makers should I uncover for you?`,
 
       // If backend API returned HTML or empty, synthesize high quality matching prospects
       if (extracted.length === 0) {
-        deductAiTokens(210);
+        deductAiTokens(effectiveBatchSize * 30);
         extracted = synthesizeClientLeads(
-          6,
+          effectiveBatchSize,
           query.slice(0, 40) || 'B2B Target',
           'United States',
           'Decision Maker',
@@ -1752,8 +1754,8 @@ What specific decision makers should I uncover for you?`,
 
             {/* Stepper + Input Box + Quick Presets */}
             <div className="flex flex-wrap items-center gap-3 pt-1">
-              {/* Stepper & Numeric Input */}
-              <div className="flex items-center bg-slate-950 border-2 border-purple-500/60 rounded-2xl overflow-hidden shadow-lg shadow-purple-950/50">
+              {/* Stepper & Prominent Numeric Input Box */}
+              <div className="flex items-center bg-slate-900 border-2 border-purple-400 rounded-2xl overflow-hidden shadow-xl shadow-purple-950/60 ring-2 ring-purple-500/30">
                 <button
                   type="button"
                   onClick={() => {
@@ -1761,8 +1763,8 @@ What specific decision makers should I uncover for you?`,
                     setBatchSize(next);
                     setBatchSizeInput(String(next));
                   }}
-                  className="px-3 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-r border-slate-800"
-                  title="Decrease by 10"
+                  className="px-3 py-2.5 text-slate-300 hover:text-white hover:bg-purple-900/60 text-xs font-black transition cursor-pointer border-r border-purple-500/40 select-none"
+                  title="Decrease by 10 (-10)"
                 >
                   -10
                 </button>
@@ -1773,38 +1775,41 @@ What specific decision makers should I uncover for you?`,
                     setBatchSize(next);
                     setBatchSizeInput(String(next));
                   }}
-                  className="px-3 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-r border-slate-800"
-                  title="Decrease by 5"
+                  className="px-3 py-2.5 text-slate-300 hover:text-white hover:bg-purple-900/60 text-xs font-black transition cursor-pointer border-r border-purple-500/40 select-none"
+                  title="Decrease by 5 (-5)"
                 >
                   -5
                 </button>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={batchSizeInput}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/[^0-9]/g, '');
-                    setBatchSizeInput(val);
-                    if (val !== '') {
-                      const n = parseInt(val, 10);
-                      if (!isNaN(n) && n > 0) {
-                        setBatchSize(n);
+                <div className="relative flex items-center bg-slate-950 px-2 py-1">
+                  <input
+                    type="number"
+                    min={1}
+                    value={batchSizeInput}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/[^0-9]/g, '');
+                      setBatchSizeInput(val);
+                      if (val !== '') {
+                        const n = parseInt(val, 10);
+                        if (!isNaN(n) && n > 0) {
+                          setBatchSize(n);
+                        }
                       }
-                    }
-                  }}
-                  onBlur={() => {
-                    const n = parseInt(batchSizeInput, 10);
-                    if (isNaN(n) || n < 1) {
-                      setBatchSize(10);
-                      setBatchSizeInput('10');
-                    } else {
-                      setBatchSize(n);
-                      setBatchSizeInput(String(n));
-                    }
-                  }}
-                  placeholder="সংখ্যা"
-                  className="w-24 bg-transparent text-center text-base font-mono font-black text-purple-200 focus:outline-none px-2 py-2"
-                />
+                    }}
+                    onBlur={() => {
+                      const n = parseInt(batchSizeInput, 10);
+                      if (isNaN(n) || n < 1) {
+                        setBatchSize(10);
+                        setBatchSizeInput('10');
+                      } else {
+                        setBatchSize(n);
+                        setBatchSizeInput(String(n));
+                      }
+                    }}
+                    placeholder="সংখ্যা লিখুন"
+                    className="w-28 bg-transparent text-center text-lg font-mono font-black text-amber-300 focus:outline-none focus:ring-1 focus:ring-amber-400 rounded-lg px-2 py-1"
+                    title="এখানে আপনার ইচ্ছামতো যেকোনো সংখ্যা সরাসরি টাইপ করুন"
+                  />
+                </div>
                 <button
                   type="button"
                   onClick={() => {
@@ -1812,8 +1817,8 @@ What specific decision makers should I uncover for you?`,
                     setBatchSize(next);
                     setBatchSizeInput(String(next));
                   }}
-                  className="px-3 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-l border-slate-800"
-                  title="Increase by 5"
+                  className="px-3 py-2.5 text-slate-300 hover:text-white hover:bg-purple-900/60 text-xs font-black transition cursor-pointer border-l border-purple-500/40 select-none"
+                  title="Increase by 5 (+5)"
                 >
                   +5
                 </button>
@@ -1824,8 +1829,8 @@ What specific decision makers should I uncover for you?`,
                     setBatchSize(next);
                     setBatchSizeInput(String(next));
                   }}
-                  className="px-3 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-l border-slate-800"
-                  title="Increase by 10"
+                  className="px-3 py-2.5 text-slate-300 hover:text-white hover:bg-purple-900/60 text-xs font-black transition cursor-pointer border-l border-purple-500/40 select-none"
+                  title="Increase by 10 (+10)"
                 >
                   +10
                 </button>
