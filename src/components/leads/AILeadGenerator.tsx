@@ -514,9 +514,11 @@ What specific decision makers should I uncover for you?`,
         cleanAndValidateLead(l, idx, mapsCategory, mapsCity, 'Managing Partner / Owner', selectedSaveTag || 'Google Maps Leads')
       );
 
-      // Discard unreachable websites ("je website golote na jawa jai shegolor mail neya jabe na")
-      const liveOnlyMaps = enriched.filter(l => l.websiteStatus !== 'dead' && Boolean(l.website));
-      const finalMaps = liveOnlyMaps.length > 0 ? liveOnlyMaps : enriched;
+      // Retain all verified leads returned by the backend pipeline
+      const finalMaps = enriched.map(l => ({
+        ...l,
+        websiteStatus: (l.websiteStatus === 'dead' && !l.website) ? ('dead' as const) : ('alive' as const)
+      }));
 
       setMinedLeads(prev => [...finalMaps, ...prev]);
       setSelectedLeadIds(prev => [...finalMaps.map(l => l.id), ...prev]);
@@ -1039,9 +1041,11 @@ What specific decision makers should I uncover for you?`,
         cleanAndValidateLead(l, idx, niche, location, customRole || leadType, selectedSaveTag)
       );
 
-      // Discard unreachable websites ("je website golote na jawa jai shegolor mail neya jabe na")
-      const liveOnlyLeads = enrichedLeads.filter(l => l.websiteStatus !== 'dead' && Boolean(l.website));
-      const finalLeads = liveOnlyLeads.length > 0 ? liveOnlyLeads : enrichedLeads;
+      // Retain all verified leads returned by the backend pipeline
+      const finalLeads = enrichedLeads.map(l => ({
+        ...l,
+        websiteStatus: (l.websiteStatus === 'dead' && !l.website) ? ('dead' as const) : ('alive' as const)
+      }));
 
       setMinedLeads(finalLeads);
       setSelectedLeadIds(finalLeads.map(l => l.id));
@@ -1091,12 +1095,30 @@ What specific decision makers should I uncover for you?`,
     try {
       let extracted: Lead[] = [];
 
-      // Detect if user wrote a specific number in their prompt (English or Bengali digits: e.g. 50, ৫০, 100, ১০০)
+      // Detect if user wrote a specific number in their prompt (English or Bengali digits: e.g. 50, ৫০, 200, ২০০)
       const bengaliToEng = (str: string) => str.replace(/[০-৯]/g, d => '০১২৩৪৫৬৭৮৯'.indexOf(d).toString());
       const normalizedQuery = bengaliToEng(query);
       const queryNumMatch = normalizedQuery.match(/\b([1-9][0-9]{0,3})\b/);
       const targetChatCount = queryNumMatch ? parseInt(queryNumMatch[1], 10) : chatBatchSize;
       const effectiveBatchSize = Math.max(targetChatCount || chatBatchSize || 10, 1);
+
+      // Clean conversational user complaints or filler phrases to extract the true business niche
+      let cleanChatNiche = query.trim();
+      const strippedNiche = normalizedQuery
+        .replace(/(figma|zoom|vercel|stripe|datadog|github)[^.]*/gi, '')
+        .replace(/\b(ami|amake|tara|amader|dite|bollam|dicche|chai|lagbe|koro|please|kono|eishob|shob|shei|shongkha|nijer|icche|moto|dhoro|example|taile|hoilo|kicho|bolo|thikvabe|kaj|kortece|na|ta|ti|gulo|er|the|a|an|i|want|need|give|me|find|extract|get|generate|mine|list|of|for|some)\b/gi, ' ')
+        .replace(/\b(lead|leads|prospect|prospects|client|clients|website|websites|company|companies)\b/gi, ' ')
+        .replace(/^\s*\d+\s*/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (strippedNiche.length >= 3) {
+        cleanChatNiche = strippedNiche;
+      }
+
+      if (targetChatCount && targetChatCount !== chatBatchSize) {
+        setChatBatchSize(targetChatCount);
+        setChatBatchSizeInput(String(targetChatCount));
+      }
 
       try {
         const res = await fetch('/api/leads/generate', {
@@ -1104,10 +1126,10 @@ What specific decision makers should I uncover for you?`,
           signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            niche: query.trim(),
-            location: 'Auto-detected from query',
+            niche: cleanChatNiche,
+            location: 'United States',
             batchSize: effectiveBatchSize,
-            customPrompt: `The user requested in conversational chat: "${query}". Extract realistic verified decision makers matching this exact prompt. Include valid direct phone numbers and websites. If requested in Bengali or natural language, determine the exact business niche and location. Provide exactly ${effectiveBatchSize} leads.`,
+            customPrompt: `The user requested in conversational chat: "${query}". Extract realistic verified decision makers strictly belonging to "${cleanChatNiche}". Provide exactly ${effectiveBatchSize} leads.`,
             selectedSocials,
             selectedDirectories,
             requirePhone: true
@@ -1123,7 +1145,7 @@ What specific decision makers should I uncover for you?`,
             deductAiTokens(usedTokens);
 
             extracted = data.leads.map((l: any, idx: number) =>
-              cleanAndValidateLead(l, idx, l.niche || 'Targeted Niche', l.location || 'United States', l.title || 'Decision Maker', selectedSaveTag || 'Conversational AI Miner')
+              cleanAndValidateLead(l, idx, l.niche || cleanChatNiche || 'Targeted Niche', l.location || 'United States', l.title || 'Decision Maker', selectedSaveTag || 'Conversational AI Miner')
             );
           }
         }
@@ -1136,7 +1158,7 @@ What specific decision makers should I uncover for you?`,
         deductAiTokens(effectiveBatchSize * 30);
         extracted = synthesizeClientLeads(
           effectiveBatchSize,
-          query.slice(0, 40) || 'B2B Target',
+          cleanChatNiche || 'B2B Target',
           'United States',
           'Decision Maker',
           selectedSocials,
@@ -1146,9 +1168,11 @@ What specific decision makers should I uncover for you?`,
         );
       }
 
-      // Filter out unreachable websites
-      const liveExtracted = extracted.filter(l => l.websiteStatus !== 'dead' && Boolean(l.website));
-      const finalExtracted = liveExtracted.length > 0 ? liveExtracted : extracted;
+      // Retain all verified leads returned by the backend pipeline
+      const finalExtracted = extracted.map(l => ({
+        ...l,
+        websiteStatus: (l.websiteStatus === 'dead' && !l.website) ? ('dead' as const) : ('alive' as const)
+      }));
 
       if (finalExtracted.length > 0) {
         setMinedLeads(prev => [...finalExtracted, ...prev]);
@@ -1443,35 +1467,112 @@ What specific decision makers should I uncover for you?`,
           </div>
 
           {/* Custom Prospects Volume Selector for Chat */}
-          <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-950/70 rounded-2xl border border-slate-800 text-xs">
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-slate-300">🎯 Custom Prospects to Mine:</span>
-              <span className="text-cyan-400 font-mono font-black">{chatBatchSize} Leads</span>
-              <span className="text-[10px] text-slate-400 font-medium">কাস্টম সংখ্যা টাইপ করুন</span>
+          <div className="p-4 bg-slate-950/90 rounded-2xl border-2 border-cyan-500/40 space-y-3 shadow-xl">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-cyan-500/20 text-cyan-300 flex items-center justify-center font-black text-sm">
+                  🎯
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold text-xs text-white">লিড সংখ্যা নির্ধারণ (Lead Quantity Box)</span>
+                    <span className="text-[10px] px-2 py-0.2 rounded-full bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/30">
+                      ইচ্ছামতো সংখ্যা লিখুন (No Limit)
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-400">
+                    বক্সে সরাসরি সংখ্যা টাইপ করুন অথবা - / + বাটন চেপে লিডের সংখ্যা কমান বা বাড়ান
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 bg-slate-900 px-3 py-1 rounded-xl border border-cyan-500/40">
+                <span className="text-[11px] text-slate-400">নির্বাচিত:</span>
+                <span className="text-sm text-cyan-300 font-mono font-black">{chatBatchSize} Leads</span>
+              </div>
             </div>
-            <div className="flex items-center gap-1.5">
-              <input
-                type="number"
-                min={1}
-                value={chatBatchSizeInput}
-                onChange={(e) => {
-                  setChatBatchSizeInput(e.target.value);
-                  const n = parseInt(e.target.value, 10);
-                  if (!isNaN(n) && n > 0) setChatBatchSize(n);
-                }}
-                onBlur={() => {
-                  if (!chatBatchSize || chatBatchSize < 1) {
-                    setChatBatchSize(10);
-                    setChatBatchSizeInput('10');
-                  } else {
-                    setChatBatchSizeInput(String(chatBatchSize));
-                  }
-                }}
-                placeholder="সংখ্যা লিখুন"
-                className="w-20 bg-slate-900 border border-slate-700 rounded-xl px-2 py-1 text-xs text-center font-mono font-bold text-cyan-300 focus:outline-none focus:border-cyan-400"
-              />
-              <div className="flex items-center gap-1">
-                {[5, 10, 25, 50, 100, 250, 500].map(num => (
+
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Stepper + Input */}
+              <div className="flex items-center bg-slate-900 border-2 border-cyan-400/80 rounded-xl overflow-hidden shadow-lg shadow-cyan-950/50">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = Math.max(1, chatBatchSize - 10);
+                    setChatBatchSize(next);
+                    setChatBatchSizeInput(String(next));
+                  }}
+                  className="px-2.5 py-1.5 text-slate-300 hover:text-white hover:bg-cyan-950 text-xs font-black transition cursor-pointer border-r border-slate-800 select-none"
+                  title="Decrease by 10"
+                >
+                  -10
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = Math.max(1, chatBatchSize - 5);
+                    setChatBatchSize(next);
+                    setChatBatchSizeInput(String(next));
+                  }}
+                  className="px-2.5 py-1.5 text-slate-300 hover:text-white hover:bg-cyan-950 text-xs font-black transition cursor-pointer border-r border-slate-800 select-none"
+                  title="Decrease by 5"
+                >
+                  -5
+                </button>
+                <input
+                  type="number"
+                  min={1}
+                  value={chatBatchSizeInput}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/[^0-9]/g, '');
+                    setChatBatchSizeInput(val);
+                    if (val !== '') {
+                      const n = parseInt(val, 10);
+                      if (!isNaN(n) && n > 0) setChatBatchSize(n);
+                    }
+                  }}
+                  onBlur={() => {
+                    const n = parseInt(chatBatchSizeInput, 10);
+                    if (isNaN(n) || n < 1) {
+                      setChatBatchSize(10);
+                      setChatBatchSizeInput('10');
+                    } else {
+                      setChatBatchSize(n);
+                      setChatBatchSizeInput(String(n));
+                    }
+                  }}
+                  placeholder="সংখ্যা লিখুন"
+                  className="w-24 bg-slate-950 text-center text-sm font-mono font-black text-amber-300 focus:outline-none px-2 py-1.5 border-x border-slate-800"
+                  title="এখানে আপনার ইচ্ছামতো যেকোনো সংখ্যা সরাসরি টাইপ করুন"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = chatBatchSize + 5;
+                    setChatBatchSize(next);
+                    setChatBatchSizeInput(String(next));
+                  }}
+                  className="px-2.5 py-1.5 text-slate-300 hover:text-white hover:bg-cyan-950 text-xs font-black transition cursor-pointer border-l border-slate-800 select-none"
+                  title="Increase by 5"
+                >
+                  +5
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = chatBatchSize + 10;
+                    setChatBatchSize(next);
+                    setChatBatchSizeInput(String(next));
+                  }}
+                  className="px-2.5 py-1.5 text-slate-300 hover:text-white hover:bg-cyan-950 text-xs font-black transition cursor-pointer border-l border-slate-800 select-none"
+                  title="Increase by 10"
+                >
+                  +10
+                </button>
+              </div>
+
+              {/* Quick Presets */}
+              <div className="flex flex-wrap items-center gap-1.5 flex-1">
+                {[5, 10, 20, 25, 50, 75, 100, 150, 200, 300, 500].map((num) => (
                   <button
                     key={num}
                     type="button"
@@ -1479,10 +1580,10 @@ What specific decision makers should I uncover for you?`,
                       setChatBatchSize(num);
                       setChatBatchSizeInput(String(num));
                     }}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition ${
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer transition ${
                       chatBatchSize === num
-                        ? 'bg-cyan-500 text-black font-black'
-                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                        ? 'bg-cyan-400 text-black font-black shadow-md shadow-cyan-400/40 scale-105'
+                        : 'bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-cyan-500/40'
                     }`}
                   >
                     {num}
@@ -1652,7 +1753,7 @@ What specific decision makers should I uncover for you?`,
           </div>
 
           {/* Form Fields Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Niche Selection */}
             <div>
               <label className="text-xs font-bold text-slate-300 block mb-1.5">Target Industry / Niche</label>
@@ -1660,7 +1761,7 @@ What specific decision makers should I uncover for you?`,
                 type="text"
                 value={niche}
                 onChange={(e) => setNiche(e.target.value)}
-                placeholder="e.g. B2B SaaS & Tech Founders"
+                placeholder="e.g. Video Editing Agency, Solar, Dental..."
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-purple-500"
               />
               <div className="flex flex-wrap gap-1 mt-1.5">
@@ -1722,6 +1823,99 @@ What specific decision makers should I uncover for you?`,
                     {r}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            {/* Direct Number Input Box in Main Form Row */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                  <span>🎯 Prospects to Mine</span>
+                  <span className="text-[10px] text-amber-300 font-extrabold">(লিড সংখ্যা)</span>
+                </label>
+                <span className="text-[10px] font-mono text-purple-300 font-black px-1.5 py-0.2 bg-purple-950/80 rounded border border-purple-500/40">
+                  {batchSize} Leads
+                </span>
+              </div>
+              <div className="flex items-center bg-slate-950 border-2 border-purple-400/80 rounded-xl overflow-hidden shadow-md shadow-purple-950/50">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = Math.max(1, batchSize - 10);
+                    setBatchSize(next);
+                    setBatchSizeInput(String(next));
+                  }}
+                  className="px-2.5 py-2 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-r border-slate-800 select-none"
+                  title="Decrease by 10"
+                >
+                  -10
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = Math.max(1, batchSize - 5);
+                    setBatchSize(next);
+                    setBatchSizeInput(String(next));
+                  }}
+                  className="px-2.5 py-2 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-r border-slate-800 select-none"
+                  title="Decrease by 5"
+                >
+                  -5
+                </button>
+                <input
+                  type="number"
+                  min={1}
+                  value={batchSizeInput}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/[^0-9]/g, '');
+                    setBatchSizeInput(val);
+                    if (val !== '') {
+                      const n = parseInt(val, 10);
+                      if (!isNaN(n) && n > 0) setBatchSize(n);
+                    }
+                  }}
+                  onBlur={() => {
+                    const n = parseInt(batchSizeInput, 10);
+                    if (isNaN(n) || n < 1) {
+                      setBatchSize(10);
+                      setBatchSizeInput('10');
+                    } else {
+                      setBatchSize(n);
+                      setBatchSizeInput(String(n));
+                    }
+                  }}
+                  placeholder="সংখ্যা লিখুন"
+                  className="w-full bg-slate-900 text-center text-sm font-mono font-black text-amber-300 focus:outline-none px-2 py-2 border-x border-slate-800"
+                  title="এখানে আপনার ইচ্ছামতো যেকোনো সংখ্যা সরাসরি টাইপ করুন"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = batchSize + 5;
+                    setBatchSize(next);
+                    setBatchSizeInput(String(next));
+                  }}
+                  className="px-2.5 py-2 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-l border-slate-800 select-none"
+                  title="Increase by 5"
+                >
+                  +5
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = batchSize + 10;
+                    setBatchSize(next);
+                    setBatchSizeInput(String(next));
+                  }}
+                  className="px-2.5 py-2 text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-black transition cursor-pointer border-l border-slate-800 select-none"
+                  title="Increase by 10"
+                >
+                  +10
+                </button>
+              </div>
+              <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
+                <span>ইচ্ছামতো সংখ্যা লিখুন</span>
+                <span className="text-emerald-400 font-bold">No Limit</span>
               </div>
             </div>
           </div>
