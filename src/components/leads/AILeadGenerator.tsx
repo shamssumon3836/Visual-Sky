@@ -32,7 +32,9 @@ import {
   Square,
   Eye,
   Download,
-  Copy
+  Copy,
+  Key,
+  Target
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { IndustryBlueprint } from './miner/MiningModes';
@@ -1062,6 +1064,87 @@ export const AILeadGenerator: React.FC<AILeadGeneratorProps> = ({ onOpenSendMail
   const [dirSearch, setDirSearch] = useState<string>('');
   const [dirNicheTags, setDirNicheTags] = useState<string>('Software Companies, Top IT Agencies, Verified Businesses');
 
+  // Apollo.io B2B Intelligence Integration States
+  const [apolloApiKey, setApolloApiKey] = useState<string>(() => {
+    return localStorage.getItem('nexusreach_apollo_api_key') || '';
+  });
+  const [isApolloConnected, setIsApolloConnected] = useState<boolean>(() => {
+    return Boolean(localStorage.getItem('nexusreach_apollo_api_key'));
+  });
+  const [showApolloModal, setShowApolloModal] = useState<boolean>(false);
+  const [apolloInputKey, setApolloInputKey] = useState<string>(() => {
+    return localStorage.getItem('nexusreach_apollo_api_key') || '';
+  });
+  const [isVerifyingApollo, setIsVerifyingApollo] = useState<boolean>(false);
+  const [showKeyText, setShowKeyText] = useState<boolean>(false);
+  const [apolloFeedback, setApolloFeedback] = useState<{ status: 'idle' | 'success' | 'error'; message: string }>({
+    status: 'idle',
+    message: ''
+  });
+
+  // Verify & Save Apollo Key
+  const handleVerifyApolloKey = async () => {
+    if (!apolloInputKey.trim()) {
+      setApolloFeedback({
+        status: 'error',
+        message: 'Please paste your Apollo.io API Key.'
+      });
+      return;
+    }
+
+    setIsVerifyingApollo(true);
+    setApolloFeedback({ status: 'idle', message: '' });
+
+    try {
+      const res = await fetch('/api/apollo/verify-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: apolloInputKey.trim() })
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (data.valid || data.success) {
+        localStorage.setItem('nexusreach_apollo_api_key', apolloInputKey.trim());
+        setApolloApiKey(apolloInputKey.trim());
+        setIsApolloConnected(true);
+        setApolloFeedback({
+          status: 'success',
+          message: data.message || 'Apollo.io API Key verified! Live 275M+ B2B leads connected.'
+        });
+        addNotification({
+          title: 'Apollo.io Connected 🎯',
+          message: 'Live Apollo B2B intelligence is active for lead generation.',
+          type: 'success'
+        });
+      } else {
+        setApolloFeedback({
+          status: 'error',
+          message: data.message || 'Invalid Apollo.io API key. Please check key in Apollo Settings > Integrations.'
+        });
+      }
+    } catch (err: any) {
+      setApolloFeedback({
+        status: 'error',
+        message: err?.message || 'Failed to reach Apollo server. Please try again.'
+      });
+    } finally {
+      setIsVerifyingApollo(false);
+    }
+  };
+
+  const handleDisconnectApollo = () => {
+    localStorage.removeItem('nexusreach_apollo_api_key');
+    setApolloApiKey('');
+    setApolloInputKey('');
+    setIsApolloConnected(false);
+    setApolloFeedback({ status: 'idle', message: '' });
+    addNotification({
+      title: 'Apollo.io Disconnected',
+      message: 'NexusReach AI will continue using built-in DNS-verified intelligence.',
+      type: 'info'
+    });
+  };
+
   // View Mode: strictly 'cards' or 'table' (Raw JSON is removed!)
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('table');
 
@@ -1185,7 +1268,8 @@ What specific decision makers should I uncover for you?`,
             minRating: mapsMinRating,
             requirePhone: mapsRequirePhone,
             selectedDirectories: ['google_maps', 'google_search', 'yelp'],
-            selectedSocials: ['facebook', 'instagram', 'linkedin']
+            selectedSocials: ['facebook', 'instagram', 'linkedin'],
+            apolloApiKey: apolloApiKey.trim() || undefined
           })
         });
 
@@ -1301,7 +1385,8 @@ What specific decision makers should I uncover for you?`,
             customPrompt: notes,
             selectedSocials: ['linkedin', 'twitter', 'github'],
             selectedDirectories: ['crunchbase', 'g2', 'clutch'],
-            requirePhone: true
+            requirePhone: true,
+            apolloApiKey: apolloApiKey.trim() || undefined
           })
         });
 
@@ -1705,6 +1790,7 @@ What specific decision makers should I uncover for you?`,
             dirNicheTags,
             requirePhone,
             requireSocials,
+            apolloApiKey: apolloApiKey.trim() || undefined
           }),
         });
 
@@ -1941,7 +2027,8 @@ What specific decision makers should I uncover for you?`,
             customPrompt: `The user requested in conversational chat: "${query}". Extract realistic verified decision makers strictly belonging to "${cleanChatNiche}" in "${resolvedLocation}". Provide exactly ${effectiveBatchSize} leads.`,
             selectedSocials,
             selectedDirectories,
-            requirePhone: true
+            requirePhone: true,
+            apolloApiKey: apolloApiKey.trim() || undefined
           })
         });
 
@@ -2510,18 +2597,54 @@ What specific decision makers should I uncover for you?`,
               <span>Save Current</span>
             </button>
           </div>
-          {/* Top Sources Row: Social Media & Business Directories Modals */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-slate-950/60 rounded-2xl border border-slate-800/80">
+          {/* Top Sources Row: Apollo.io Live Intelligence, Social Media & Business Directories */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-4 bg-slate-950/60 rounded-2xl border border-slate-800/80">
+            {/* Apollo.io Live Intelligence Connector */}
+            <div className={`flex items-center justify-between p-3 rounded-xl border transition ${
+              isApolloConnected 
+                ? 'bg-amber-950/20 border-amber-500/40 shadow-sm shadow-amber-500/10' 
+                : 'bg-slate-900 border-slate-800 hover:border-amber-500/30'
+            }`}>
+              <div className="space-y-0.5">
+                <div className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                  <span className="text-amber-400">🎯 Apollo.io Intelligence</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
+                    isApolloConnected 
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' 
+                      : 'bg-amber-500/15 text-amber-300 border-amber-500/25'
+                  }`}>
+                    {isApolloConnected ? 'Connected (Free)' : 'Free Tier'}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-400 truncate max-w-[190px]">
+                  {isApolloConnected ? '275M+ Live Verified Contacts' : 'Click to connect free API key'}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowApolloModal(true)}
+                className={`px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1 transition cursor-pointer ${
+                  isApolloConnected
+                    ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/40 text-amber-200'
+                    : 'bg-amber-500 hover:bg-amber-400 text-slate-950 font-black border-amber-400 shadow-md shadow-amber-500/20'
+                }`}
+              >
+                <span>{isApolloConnected ? 'Manage' : 'Connect'}</span>
+                <ChevronDown className="w-3 h-3" />
+              </button>
+            </div>
+
             {/* Social Media Sources Trigger */}
             <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-slate-800">
               <div className="space-y-0.5">
                 <div className="text-xs font-bold text-slate-200 flex items-center gap-2">
-                  <span>💼 Social Media Platforms</span>
+                  <span>💼 Social Platforms</span>
                   <span className="px-2 py-0.2 rounded-full text-[10px] font-extrabold bg-blue-500/20 text-blue-300 border border-blue-500/30">
                     {selectedSocials.length} Selected
                   </span>
                 </div>
-                <div className="text-[11px] text-slate-400 truncate max-w-[240px]">
+                <div className="text-[11px] text-slate-400 truncate max-w-[190px]">
                   {selectedSocials.map(s => socialPlatformsList.find(sp => sp.id === s)?.name).filter(Boolean).join(', ')}
                 </div>
               </div>
@@ -2529,9 +2652,9 @@ What specific decision makers should I uncover for you?`,
               <button
                 type="button"
                 onClick={() => setShowSocialModal(true)}
-                className="px-3.5 py-1.5 rounded-lg bg-blue-950/60 hover:bg-blue-900 border border-blue-500/40 text-blue-300 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                className="px-3 py-1.5 rounded-lg bg-blue-950/60 hover:bg-blue-900 border border-blue-500/40 text-blue-300 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
               >
-                <span>Select Socials</span>
+                <span>Select</span>
                 <ChevronDown className="w-3 h-3" />
               </button>
             </div>
@@ -2540,12 +2663,12 @@ What specific decision makers should I uncover for you?`,
             <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-slate-800">
               <div className="space-y-0.5">
                 <div className="text-xs font-bold text-slate-200 flex items-center gap-2">
-                  <span>📍 Major Directories & Google Maps</span>
+                  <span>📍 Major Directories</span>
                   <span className="px-2 py-0.2 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                     {selectedDirectories.length} Selected
                   </span>
                 </div>
-                <div className="text-[11px] text-slate-400 truncate max-w-[240px]">
+                <div className="text-[11px] text-slate-400 truncate max-w-[190px]">
                   {selectedDirectories.map(d => businessDirectoriesList.find(dp => dp.id === d)?.name).filter(Boolean).join(', ')}
                 </div>
               </div>
@@ -2553,9 +2676,9 @@ What specific decision makers should I uncover for you?`,
               <button
                 type="button"
                 onClick={() => setShowDirectoryModal(true)}
-                className="px-3.5 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                className="px-3 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
               >
-                <span>Select Directories</span>
+                <span>Select</span>
                 <ChevronDown className="w-3 h-3" />
               </button>
             </div>
@@ -3601,6 +3724,195 @@ What specific decision makers should I uncover for you?`,
                 className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs transition cursor-pointer"
               >
                 Confirm ({selectedDirectories.length})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* APOLLO.IO B2B INTELLIGENCE MODAL */}
+      {showApolloModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in">
+          <div className="bg-[#0b0f19] border border-amber-500/40 w-full max-w-xl rounded-3xl p-6 shadow-2xl shadow-amber-500/10 space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 text-lg">
+                  🎯
+                </span>
+                <div>
+                  <h3 className="font-extrabold text-slate-100 text-base flex items-center gap-2">
+                    <span>Connect Apollo.io B2B Intelligence</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      100% Free Tier
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Direct access to Apollo's 275M+ live verified decision makers and active emails
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowApolloModal(false);
+                  setApolloFeedback({ status: 'idle', message: '' });
+                }}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Current Status Box */}
+            <div className={`p-4 rounded-2xl border flex items-center justify-between ${
+              isApolloConnected 
+                ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200' 
+                : 'bg-slate-900/80 border-slate-800 text-slate-300'
+            }`}>
+              <div className="space-y-1">
+                <div className="text-xs font-bold flex items-center gap-2">
+                  <span>Connection Status:</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                    isApolloConnected 
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
+                      : 'bg-slate-800 text-slate-400 border border-slate-700'
+                  }`}>
+                    {isApolloConnected ? 'Connected & Active (Free Plan)' : 'Not Connected'}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  {isApolloConnected 
+                    ? 'All lead mining runs will directly query Apollo.io verified B2B intelligence.' 
+                    : 'Paste your free Apollo API key below to unlock 100% verified emails & contacts.'}
+                </div>
+              </div>
+
+              {isApolloConnected && (
+                <button
+                  type="button"
+                  onClick={handleDisconnectApollo}
+                  className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-bold transition cursor-pointer"
+                >
+                  Disconnect
+                </button>
+              )}
+            </div>
+
+            {/* Free Setup Steps */}
+            <div className="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-4 space-y-2.5">
+              <div className="text-xs font-extrabold text-amber-300 flex items-center justify-between">
+                <span>⚡ How to get your Apollo API Key for Free (1 minute):</span>
+                <a
+                  href="https://app.apollo.io/#/settings/integrations/apis"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-amber-400 hover:text-amber-300 flex items-center gap-1 text-[11px] underline underline-offset-2"
+                >
+                  <span>Open Apollo Keys Dashboard</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+              <ol className="text-[11px] text-slate-300 space-y-1.5 list-decimal list-inside pl-1">
+                <li>Create a free account at <strong className="text-white">apollo.io</strong> (No credit card required).</li>
+                <li>Go to <strong className="text-amber-200">Settings → Integrations → API Keys</strong>.</li>
+                <li>Click <strong className="text-white">+ Create New Key</strong>, copy it and paste below.</li>
+              </ol>
+            </div>
+
+            {/* Key Input Field */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-200 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Apollo.io API Key</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowKeyText(prev => !prev)}
+                  className="text-[11px] text-slate-400 hover:text-slate-200 flex items-center gap-1 cursor-pointer"
+                >
+                  <Eye className="w-3 h-3" />
+                  <span>{showKeyText ? 'Hide' : 'Show'}</span>
+                </button>
+              </label>
+
+              <div className="relative">
+                <input
+                  type={showKeyText ? 'text' : 'password'}
+                  value={apolloInputKey}
+                  onChange={(e) => {
+                    setApolloInputKey(e.target.value);
+                    setApolloFeedback({ status: 'idle', message: '' });
+                  }}
+                  placeholder="Paste your Apollo API key (e.g. apollo_...)"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 transition font-mono"
+                />
+              </div>
+
+              {/* Feedback Alert */}
+              {apolloFeedback.status === 'success' && (
+                <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2">
+                  <Check className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span>{apolloFeedback.message}</span>
+                </div>
+              )}
+              {apolloFeedback.status === 'error' && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs flex items-center gap-2">
+                  <X className="w-4 h-4 shrink-0 text-rose-400" />
+                  <span>{apolloFeedback.message}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Benefits Highlight */}
+            <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400 pt-1">
+              <div className="flex items-center gap-1.5 p-2 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                <span className="text-emerald-400">✓</span>
+                <span>100% Real Decision Makers</span>
+              </div>
+              <div className="flex items-center gap-1.5 p-2 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                <span className="text-emerald-400">✓</span>
+                <span>Active Business Emails</span>
+              </div>
+              <div className="flex items-center gap-1.5 p-2 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                <span className="text-emerald-400">✓</span>
+                <span>Zero Dead Websites (Live DNS)</span>
+              </div>
+              <div className="flex items-center gap-1.5 p-2 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                <span className="text-emerald-400">✓</span>
+                <span>Verified Direct Phone Numbers</span>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowApolloModal(false);
+                  setApolloFeedback({ status: 'idle', message: '' });
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-semibold transition cursor-pointer"
+              >
+                Close
+              </button>
+
+              <button
+                type="button"
+                disabled={isVerifyingApollo || !apolloInputKey.trim()}
+                onClick={handleVerifyApolloKey}
+                className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-extrabold text-xs flex items-center gap-2 transition cursor-pointer shadow-lg shadow-amber-500/20"
+              >
+                {isVerifyingApollo ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Verifying with Apollo...</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-3.5 h-3.5 fill-current" />
+                    <span>Verify & Connect Apollo Key</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
