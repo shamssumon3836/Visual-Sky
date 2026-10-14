@@ -84,10 +84,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
     },
     {
       id: 'generator',
-      label: 'AI Lead Miner',
+      label: 'Apollo & AI Miner',
       icon: Sparkles,
-      tag: isServiceDisabled('generator') ? '🔒 Disabled' : 'Gemini 2.0',
-      tagColor: isServiceDisabled('generator') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+      tag: isServiceDisabled('generator') ? '🔒 Disabled' : 'Apollo + AI 🎯',
+      tagColor: isServiceDisabled('generator') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30 font-bold'
     },
     {
       id: 'leads',

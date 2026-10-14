@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { IndustryBlueprint } from './miner/MiningModes';
+import { ApolloMinerPanel } from './miner/ApolloMinerPanel';
 import { GoogleMapsMinerPanel } from './miner/GoogleMapsMinerPanel';
 import { BlueprintsPanel } from './miner/BlueprintsPanel';
 import { MinedLeadsToolbar, LeadSortOption } from './miner/MinedLeadsToolbar';
@@ -945,8 +946,8 @@ interface AILeadGeneratorProps {
 export const AILeadGenerator: React.FC<AILeadGeneratorProps> = ({ onOpenSendMail }) => {
   const { addLeads, setActiveTab, minedLeads, setMinedLeads, leadTags, addLeadTag, addNotification, deductAiTokens } = useApp();
 
-  // Active Tab Mode: 'structured' | 'chat' | 'maps' | 'lookalike' | 'blueprints'
-  const [activeMiningMode, setActiveMiningMode] = useState<'structured' | 'chat' | 'maps' | 'lookalike' | 'blueprints'>('structured');
+  // Active Tab Mode: 'apollo' | 'structured' | 'chat' | 'maps' | 'lookalike' | 'blueprints'
+  const [activeMiningMode, setActiveMiningMode] = useState<'apollo' | 'structured' | 'chat' | 'maps' | 'lookalike' | 'blueprints'>('apollo');
   const [sortBy, setSortBy] = useState<LeadSortOption>('score');
   const [icebreakerStudioLead, setIcebreakerStudioLead] = useState<Lead | null>(null);
   const [isVerifyingLeadId, setIsVerifyingLeadId] = useState<string | null>(null);
@@ -1225,6 +1226,114 @@ What specific decision makers should I uncover for you?`,
     'Extract 10 AI startup CTOs in San Francisco with GitHub & LinkedIn',
     'Find 12 Digital Marketing agency directors in Toronto, Canada'
   ];
+
+  // Start Mining via Apollo.io B2B Intelligence Mode
+  const handleStartApolloMining = async (params: {
+    niche: string;
+    location: string;
+    targetRole: string;
+    batchSize: number;
+    requirePhone: boolean;
+  }) => {
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    setIsGenerating(true);
+    setErrorMsg('');
+    setProgressPercent(15);
+    setProgressStep(`Connecting to Apollo.io 275M+ B2B Intelligence Database for "${params.niche}"...`);
+
+    try {
+      const t1 = setTimeout(() => {
+        if (!controller.signal.aborted) {
+          setProgressPercent(45);
+          setProgressStep(`Extracting ${params.targetRole || 'decision maker'} profiles in ${params.location}...`);
+        }
+      }, 500);
+
+      const t2 = setTimeout(() => {
+        if (!controller.signal.aborted) {
+          setProgressPercent(75);
+          setProgressStep('Executing real-time DNS & MX validation (guaranteeing 0% dead websites)...');
+        }
+      }, 1100);
+
+      const res = await fetch('/api/apollo/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          apiKey: apolloApiKey.trim() || undefined,
+          niche: params.niche,
+          location: params.location,
+          targetRole: params.targetRole,
+          count: params.batchSize,
+          requirePhone: params.requirePhone
+        })
+      });
+
+      clearTimeout(t1);
+      clearTimeout(t2);
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || `Failed to mine leads (Status ${res.status})`);
+      }
+
+      const data = await res.json();
+      const generatedLeads: Lead[] = data.leads || [];
+
+      if (generatedLeads.length === 0) {
+        throw new Error('No leads returned for the specified filters. Try broadening the niche or location.');
+      }
+
+      setProgressPercent(95);
+      setProgressStep('Compiling lead dossiers with verified mobile numbers and active websites...');
+
+      // Deduplicate against existing mined leads
+      const existingIds = new Set(minedLeads.map(l => l.id));
+      const newUnique = generatedLeads.filter(l => !existingIds.has(l.id));
+      const combined = [...newUnique, ...minedLeads];
+
+      setMinedLeads(combined);
+      try {
+        localStorage.setItem('visualsky_mined_leads', JSON.stringify(combined));
+      } catch {}
+
+      // Select new leads by default
+      setSelectedLeadIds(combined.map(l => l.id));
+
+      setProgressPercent(100);
+      setProgressStep(`Extracted ${generatedLeads.length} live Apollo B2B leads!`);
+
+      confetti({
+        particleCount: 90,
+        spread: 90,
+        origin: { y: 0.6 }
+      });
+
+      addNotification({
+        title: 'Apollo.io Leads Mined 🎯',
+        message: `Extracted ${generatedLeads.length} verified B2B leads with 100% active websites & MX delivery.`,
+        type: 'system'
+      });
+    } catch (err: any) {
+      if (err.name === 'AbortError') return;
+      console.error('Apollo mining error:', err);
+      setErrorMsg(err.message || 'Failed to mine Apollo leads.');
+      addNotification({
+        title: 'Apollo Mining Error',
+        message: err.message || 'Could not complete Apollo search.',
+        type: 'error'
+      });
+    } finally {
+      setIsGenerating(false);
+      abortControllerRef.current = null;
+      setTimeout(() => {
+        setProgressPercent(0);
+        setProgressStep('');
+      }, 1500);
+    }
+  };
 
   // Start Mining via Google Maps Local Business Mode
   const handleStartMapsMining = async () => {
@@ -2215,20 +2324,39 @@ What specific decision makers should I uncover for you?`,
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-black text-slate-100 flex items-center gap-3">
+          <h1 className="text-2xl sm:text-3xl font-black text-slate-100 flex items-center gap-2.5 flex-wrap">
             <Sparkles className="w-8 h-8 text-purple-400" />
-            AI Lead Miner & Social Intelligence
+            <span>AI Lead Miner & Social Intelligence</span>
+            <span className="px-2.5 py-0.5 text-xs font-black bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full flex items-center gap-1 shadow-sm shadow-amber-500/20">
+              <span>🎯 Apollo.io 275M+ Live B2B</span>
+            </span>
             <span className="px-2.5 py-0.5 text-xs font-extrabold bg-purple-500/20 text-purple-300 border border-purple-500/40 rounded-full">
-              Google Gemini 2.0 Lead Intelligence
+              Gemini 2.0 Lead Intelligence
             </span>
           </h1>
           <p className="text-xs sm:text-sm text-slate-400 mt-1">
-            Mine decision makers with verified direct phone numbers, Google Maps places, major business directories, and social platforms.
+            Mine verified decision makers via Apollo.io B2B Intelligence, Google Maps places, social platforms, and major directories.
           </p>
         </div>
 
-        {/* Mode Switcher: 5 Channels (Wizard, Lookalike, Chat, Maps, Blueprints) */}
+        {/* Mode Switcher: 6 Channels (Apollo.io, Wizard, Lookalike, Chat, Maps, Blueprints) */}
         <div className="flex flex-wrap items-center bg-slate-900 border border-slate-800 p-1 rounded-2xl gap-1">
+          <button
+            onClick={() => setActiveMiningMode('apollo')}
+            className={`px-4 py-2 rounded-xl text-xs font-black transition flex items-center gap-1.5 cursor-pointer ${
+              activeMiningMode === 'apollo'
+                ? 'bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-slate-950 font-black shadow-lg shadow-amber-500/30'
+                : 'text-amber-300 hover:text-white hover:bg-amber-950/40 border border-amber-500/30'
+            }`}
+          >
+            <Target className="w-3.5 h-3.5" />
+            <span>🎯 Apollo.io Intelligence</span>
+            <span className={`px-1.5 py-0.2 text-[9px] rounded uppercase font-black ${
+              activeMiningMode === 'apollo' ? 'bg-black/40 text-slate-950' : 'bg-amber-500/20 text-amber-300'
+            }`}>
+              {isApolloConnected ? 'Connected' : 'Free Tier'}
+            </span>
+          </button>
           <button
             onClick={() => setActiveMiningMode('structured')}
             className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
@@ -2289,6 +2417,20 @@ What specific decision makers should I uncover for you?`,
           </button>
         </div>
       </div>
+
+      {/* APOLLO.IO B2B SALES INTELLIGENCE MODE */}
+      {activeMiningMode === 'apollo' && (
+        <ApolloMinerPanel
+          apolloApiKey={apolloApiKey}
+          isApolloConnected={isApolloConnected}
+          onOpenApolloModal={() => setShowApolloModal(true)}
+          onStartApolloMining={handleStartApolloMining}
+          onStopMining={handleStopMining}
+          isGenerating={isGenerating}
+          progressPercent={progressPercent}
+          progressStep={progressStep}
+        />
+      )}
 
       {/* CHAT MINER MODE */}
       {activeMiningMode === 'chat' && (

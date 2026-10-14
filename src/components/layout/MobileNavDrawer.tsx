@@ -102,11 +102,11 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
     },
     {
       id: 'generator',
-      label: 'AI Lead Miner',
-      description: 'Gemini 2.0 B2B lead discovery',
+      label: 'Apollo & AI Miner',
+      description: 'Apollo 275M+ & Gemini B2B discovery',
       icon: Sparkles,
-      tag: isServiceDisabled('generator') ? '🔒 Disabled' : 'Gemini 2.0',
-      tagColor: isServiceDisabled('generator') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+      tag: isServiceDisabled('generator') ? '🔒 Disabled' : 'Apollo + AI 🎯',
+      tagColor: isServiceDisabled('generator') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30 font-bold'
     },
     {
       id: 'leads',
