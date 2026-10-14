@@ -3946,10 +3946,10 @@ What specific decision makers should I uncover for you?`,
               )}
             </div>
 
-            {/* Free Setup Steps */}
+            {/* Free Setup Steps & Guidance */}
             <div className="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-4 space-y-2.5">
               <div className="text-xs font-extrabold text-amber-300 flex items-center justify-between">
-                <span>⚡ How to get your Apollo API Key for Free (1 minute):</span>
+                <span>⚡ Apollo API Key Setup (পেইড Apollo প্ল্যান থাকলে):</span>
                 <a
                   href="https://app.apollo.io/#/settings/integrations/apis"
                   target="_blank"
@@ -3960,11 +3960,9 @@ What specific decision makers should I uncover for you?`,
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
-              <ol className="text-[11px] text-slate-300 space-y-1.5 list-decimal list-inside pl-1">
-                <li>Create a free account at <strong className="text-white">apollo.io</strong> (No credit card required).</li>
-                <li>Go to <strong className="text-amber-200">Settings → Integrations → API Keys</strong>.</li>
-                <li>Click <strong className="text-white">+ Create New Key</strong>, copy it and paste below.</li>
-              </ol>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                <strong className="text-amber-300">নোট:</strong> Apollo.io তাদের অফিশিয়াল পলিসি অনুযায়ী ফ্রি প্ল্যানে সরাসরি API সার্চ বন্ধ রেখেছে (API ব্যবহারের জন্য তারা পেইড প্ল্যান চায়)। আপনার যদি পেইড Apollo না থাকে তবে টাকা খরচ করার কোনো প্রয়োজন নেই — আমাদের <strong className="text-cyan-300">Built-in Free B2B Intelligence Engine</strong> কোনো কী ছাড়াই আনলিমিটেড ভেরিফাইড লিড এনে দেবে!
+              </p>
             </div>
 
             {/* Key Input Field */}
@@ -4005,9 +4003,39 @@ What specific decision makers should I uncover for you?`,
                 </div>
               )}
               {apolloFeedback.status === 'error' && (
-                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs flex items-center gap-2">
-                  <X className="w-4 h-4 shrink-0 text-rose-400" />
-                  <span>{apolloFeedback.message}</span>
+                <div className="space-y-3">
+                  <div className="p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs flex items-start gap-2">
+                    <X className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                    <span className="leading-relaxed">{apolloFeedback.message}</span>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-amber-500/15 to-orange-500/10 border-2 border-amber-500/40 space-y-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">💡</span>
+                      <span className="text-xs font-black text-amber-300">
+                        আপনার Apollo-তে কোনো টাকা খরচ করার প্রয়োজন নেই!
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 leading-relaxed">
+                      Apollo.io তাদের ফ্রি প্ল্যানে API সার্চ বন্ধ রাখলেও আমাদের অ্যাপের <strong className="text-amber-200">Built-in Free B2B Intelligence Engine</strong> কোনো সাবস্ক্রিপশন ছাড়াই লাইভ DNS ভেরিফায়েড ওয়েবসাইট, বিজনেস ইমেইল ও ফোন নম্বর দিতে পারে।
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsApolloConnected(false);
+                        setShowApolloModal(false);
+                        setApolloFeedback({ status: 'idle', message: '' });
+                        addNotification({
+                          title: 'Free B2B Intelligence Active ⚡',
+                          message: 'Apollo Free Mode সক্রিয় করা হয়েছে। কোনো পেইড API Key ছাড়াই লিড মাইনিং করতে পারবেন!',
+                          type: 'success'
+                        });
+                      }}
+                      className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition cursor-pointer"
+                    >
+                      <span>⚡ Continue with Free B2B Intelligence (No API Key Required)</span>
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

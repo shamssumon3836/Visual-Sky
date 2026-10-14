@@ -124,9 +124,9 @@ export const ApolloMinerPanel: React.FC<ApolloMinerPanelProps> = ({
               <span className={`px-2.5 py-0.5 rounded-full text-xs font-black border ${
                 isApolloConnected
                   ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 animate-pulse'
-                  : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                  : 'bg-gradient-to-r from-amber-500/20 to-orange-500/20 text-amber-300 border-amber-500/50'
               }`}>
-                {isApolloConnected ? '🟢 Live Apollo API Connected' : '⚡ Apollo Free Intelligence Active'}
+                {isApolloConnected ? '🟢 Custom Apollo API Key Active' : '⚡ Free B2B Intelligence Active (No Key Needed)'}
               </span>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-500/20 text-blue-300 border border-blue-500/30">
                 275M+ Live Verified Records
@@ -148,11 +148,11 @@ export const ApolloMinerPanel: React.FC<ApolloMinerPanelProps> = ({
             className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition cursor-pointer border ${
               isApolloConnected
                 ? 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-amber-500/40 shadow-sm'
-                : 'bg-amber-500 hover:bg-amber-400 text-slate-950 font-black border-amber-400 shadow-md shadow-amber-500/30'
+                : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-black border-amber-500/40 shadow-sm'
             }`}
           >
             <Key className="w-3.5 h-3.5" />
-            <span>{isApolloConnected ? 'Manage Apollo Key' : 'Connect Free Apollo Key'}</span>
+            <span>{isApolloConnected ? 'Manage Apollo Key' : 'Custom Apollo Key (Optional)'}</span>
           </button>
 
           <button
@@ -171,7 +171,7 @@ export const ApolloMinerPanel: React.FC<ApolloMinerPanelProps> = ({
         <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3 text-xs text-slate-300 animate-in fade-in">
           <div className="flex items-center justify-between">
             <span className="font-extrabold text-amber-300 flex items-center gap-1.5">
-              <span>⚡ How to get your free Apollo API Key (1 minute):</span>
+              <span>⚡ Free B2B Intelligence vs Custom Apollo Key:</span>
             </span>
             <a
               href="https://app.apollo.io/#/settings/integrations/apis"
@@ -183,12 +183,17 @@ export const ApolloMinerPanel: React.FC<ApolloMinerPanelProps> = ({
               <ExternalLink className="w-3 h-3" />
             </a>
           </div>
-          <ol className="list-decimal list-inside space-y-1.5 text-slate-400 pl-1 leading-relaxed">
-            <li>Create or log into your free account at <strong className="text-white">apollo.io</strong> (free tier gives monthly email credits).</li>
-            <li>In the bottom left, click <strong className="text-white">Settings</strong> &rarr; select <strong className="text-white">Integrations</strong> &rarr; click <strong className="text-white">API Keys</strong>.</li>
-            <li>Click <strong className="text-white">Create New Key</strong>, name it (e.g. <em>VisualSky Cold Outreach</em>), and copy the key.</li>
-            <li>Click <strong className="text-amber-300">Connect Free Apollo Key</strong> above, paste it, and click Verify. All lead runs will query live Apollo records!</li>
-          </ol>
+          <div className="space-y-2 text-slate-300 text-[11px] leading-relaxed">
+            <p>
+              <strong className="text-amber-300">১. 100% Free Mode (কোনো Key লাগবে না):</strong> আপনি কোনো Apollo Key ছাড়াই সরাসরি নিচের <span className="text-amber-400 font-bold">&quot;Mine with Apollo.io Intelligence&quot;</span> বাটনে ক্লিক করে ফ্রিতে লিড মাইনিং করতে পারেন। আমাদের ব্যাকএন্ড লাইভ DNS ও MX রেজোলিউশন দিয়ে ডেড সাইট ফিল্টার করে লিড দেয়।
+            </p>
+            <p>
+              <strong className="text-emerald-300">২. Custom Apollo Key (পেইড অ্যাকাউন্ট থাকলে):</strong> আপনার যদি Apollo.io-র পেইড প্ল্যান থাকে, তবে Settings &gt; Integrations &gt; API Keys থেকে কী কপি করে এখানে কানেক্ট করতে পারেন। (নোট: Apollo তাদের Free প্ল্যানে API বন্ধ রাখে, তাই Free প্ল্যানের জন্য কোনো Key দরকার নেই)।
+            </p>
+            <p>
+              <strong className="text-cyan-300">৩. Free Apollo Web Export (ফ্রি ১০k লিড):</strong> আপনি চাইলে Apollo.io ওয়েবসাইটে ফ্রিতে ব্রাউজ করে ফিল্টার করে CSV এক্সপোর্ট করে আমাদের অ্যাপের <span className="text-cyan-400 font-bold">&quot;Lead Directory &gt; Upload CSV&quot;</span>-তে ড্রপ করতে পারেন, আমাদের সিস্টেম সব লিডের MX এবং সাইট হেলথ সাথে সাথে ভেরিফাই করে দেবে।
+            </p>
+          </div>
         </div>
       )}
 

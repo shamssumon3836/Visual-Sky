@@ -5916,10 +5916,20 @@ app.post('/api/apollo/verify-key', async (req, res) => {
       });
     } else if (testRes.status === 401 || testRes.status === 403) {
       const errData = await testRes.json().catch(() => ({}));
+      const rawMsg = errData.error || errData.error_details?.message || errData.message || '';
+      const isFreePlanRestriction = 
+        rawMsg.toLowerCase().includes('free plan') || 
+        rawMsg.toLowerCase().includes('pricing') || 
+        rawMsg.toLowerCase().includes('mixed_people/search') ||
+        rawMsg.toLowerCase().includes('not included');
+
       return res.json({
         success: false,
         valid: false,
-        message: errData.error || errData.error_details?.message || 'Invalid Apollo.io API Key. Please verify key from Apollo Settings > Integrations > API Keys.'
+        isFreePlanRestriction,
+        message: isFreePlanRestriction
+          ? 'Apollo.io Free plan-এ সরাসরি API Search বন্ধ রেখেছে (API ব্যবহারের জন্য তারা $49+/mo চায়)। কিন্তু চিন্তার কিছু নেই! আপনার কোনো পেইড প্ল্যান লাগবে না — VisualSky-এর Built-in Free B2B Intelligence দিয়ে আপনি ১০০% ফ্রিতে লাইভ DNS & MX ভেরিফাইড লিড পেতে পারেন।'
+          : (rawMsg || 'Invalid Apollo.io API Key. Please verify key from Apollo Settings > Integrations > API Keys.')
       });
     } else if (testRes.status === 429) {
       return res.json({
