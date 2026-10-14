@@ -480,6 +480,21 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
           </button>
         )}
 
+        {/* Direct Apollo.io Intelligence Quick Access Button */}
+        <button
+          onClick={() => setActiveTab('apollo')}
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer border ${
+            activeTab === 'apollo'
+              ? 'bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-slate-950 font-black shadow-lg shadow-amber-500/30'
+              : 'bg-amber-500/10 text-amber-300 border-amber-500/40 hover:bg-amber-500/20 hover:border-amber-500/60'
+          }`}
+          title="Apollo.io B2B Intelligence &bull; 275M+ Live Verified Decision Makers"
+        >
+          <span className="text-amber-400">🎯</span>
+          <span className="whitespace-nowrap font-black">Apollo.io</span>
+          <span className="hidden sm:inline text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono font-bold">275M+</span>
+        </button>
+
         {/* Send Mail Action Button (User request from original app) */}
         {onOpenSendMail && (
           <button

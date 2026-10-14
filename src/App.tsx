@@ -193,8 +193,8 @@ const MainContent: React.FC = () => {
 
     // Check specific module permissions for clients
     if (isClientRole) {
-      if (activeTab === 'generator' && currentUser.permissions?.leadMinerEnabled === false) {
-        return renderRestrictedServiceView('AI Lead Miner', <Sparkles className="w-10 h-10" />);
+      if ((activeTab === 'generator' || activeTab === 'apollo') && currentUser.permissions?.leadMinerEnabled === false) {
+        return renderRestrictedServiceView('Apollo & AI Lead Miner', <Sparkles className="w-10 h-10" />);
       }
       if (activeTab === 'inbox' && currentUser.permissions?.smartInboxEnabled === false) {
         return renderRestrictedServiceView('Smart Unified Inbox', <Inbox className="w-10 h-10" />);
@@ -224,8 +224,10 @@ const MainContent: React.FC = () => {
         return <MainDashboard onOpenSendMail={() => handleOpenSendMail()} onOpenLeadModal={() => setActiveTab('leads')} />;
       case 'leads':
         return <LeadDirectory onOpenSendMail={(lead) => handleOpenSendMail(lead)} />;
+      case 'apollo':
+        return <AILeadGenerator defaultMode="apollo" onOpenSendMail={(lead) => handleOpenSendMail(lead)} />;
       case 'generator':
-        return <AILeadGenerator onOpenSendMail={(lead) => handleOpenSendMail(lead)} />;
+        return <AILeadGenerator defaultMode="apollo" onOpenSendMail={(lead) => handleOpenSendMail(lead)} />;
       case 'inbox':
         return <SmartInbox />;
       case 'sent':

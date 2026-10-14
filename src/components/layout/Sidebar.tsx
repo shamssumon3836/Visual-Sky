@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   Users, 
   Sparkles, 
+  Target,
   Inbox, 
   Send, 
   Server, 
@@ -83,11 +84,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
       badgeColor: isServiceDisabled('smtp') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-blue-500/20 text-blue-300 border-blue-500/30'
     },
     {
+      id: 'apollo',
+      label: 'Apollo.io Intelligence',
+      icon: Target,
+      tag: isServiceDisabled('generator') ? '🔒 Disabled' : '275M+ B2B 🎯',
+      tagColor: isServiceDisabled('generator') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-gradient-to-r from-amber-500/20 to-orange-500/20 text-amber-300 border-amber-500/40 font-black'
+    },
+    {
       id: 'generator',
-      label: 'Apollo & AI Miner',
+      label: 'AI Lead Miner',
       icon: Sparkles,
-      tag: isServiceDisabled('generator') ? '🔒 Disabled' : 'Apollo + AI 🎯',
-      tagColor: isServiceDisabled('generator') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30 font-bold'
+      tag: isServiceDisabled('generator') ? '🔒 Disabled' : 'Gemini 2.0',
+      tagColor: isServiceDisabled('generator') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-purple-500/20 text-purple-300 border-purple-500/30 font-bold'
     },
     {
       id: 'leads',

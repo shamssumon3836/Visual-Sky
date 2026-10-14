@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Lead, LeadTag } from '../../types';
 import { 
@@ -941,13 +941,20 @@ function synthesizeClientLeads(
 
 interface AILeadGeneratorProps {
   onOpenSendMail?: (lead: Lead) => void;
+  defaultMode?: 'apollo' | 'structured' | 'chat' | 'maps' | 'lookalike' | 'blueprints';
 }
 
-export const AILeadGenerator: React.FC<AILeadGeneratorProps> = ({ onOpenSendMail }) => {
+export const AILeadGenerator: React.FC<AILeadGeneratorProps> = ({ onOpenSendMail, defaultMode }) => {
   const { addLeads, setActiveTab, minedLeads, setMinedLeads, leadTags, addLeadTag, addNotification, deductAiTokens } = useApp();
 
   // Active Tab Mode: 'apollo' | 'structured' | 'chat' | 'maps' | 'lookalike' | 'blueprints'
-  const [activeMiningMode, setActiveMiningMode] = useState<'apollo' | 'structured' | 'chat' | 'maps' | 'lookalike' | 'blueprints'>('apollo');
+  const [activeMiningMode, setActiveMiningMode] = useState<'apollo' | 'structured' | 'chat' | 'maps' | 'lookalike' | 'blueprints'>(defaultMode || 'apollo');
+
+  useEffect(() => {
+    if (defaultMode) {
+      setActiveMiningMode(defaultMode);
+    }
+  }, [defaultMode]);
   const [sortBy, setSortBy] = useState<LeadSortOption>('score');
   const [icebreakerStudioLead, setIcebreakerStudioLead] = useState<Lead | null>(null);
   const [isVerifyingLeadId, setIsVerifyingLeadId] = useState<string | null>(null);

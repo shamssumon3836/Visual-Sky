@@ -174,11 +174,20 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
             </button>
 
             <button
+              onClick={() => setActiveTab('apollo')}
+              className="flex items-center gap-2 px-4.5 py-3.5 bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-amber-600/20 hover:from-amber-500/30 hover:to-orange-500/30 border border-amber-500/50 text-amber-300 rounded-2xl text-xs font-black transition transform hover:-translate-y-0.5 cursor-pointer shadow-lg shadow-amber-500/10"
+            >
+              <Target className="w-4 h-4 text-amber-400" />
+              <span>Apollo.io Intelligence</span>
+              <span className="px-1.5 py-0.5 text-[9px] bg-amber-500/30 text-amber-200 rounded-md font-mono">275M+</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('generator')}
               className="flex items-center gap-2 px-4 py-3.5 bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-slate-200 rounded-2xl text-xs font-bold transition cursor-pointer"
             >
               <Sparkles className="w-4 h-4 text-purple-400" />
-              <span>Mine Leads</span>
+              <span>AI Lead Miner</span>
             </button>
           </div>
         </div>
@@ -268,6 +277,44 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
           <div className="flex items-center justify-between text-[11px] text-slate-400 mt-3 pt-3 border-t border-slate-800/80">
             <span className="text-purple-300 font-bold">{replyRatePercent}% Response Velocity</span>
             <ChevronRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-white transition" />
+          </div>
+        </div>
+      </div>
+
+      {/* 🎯 APOLLO.IO B2B SALES INTELLIGENCE SPOTLIGHT */}
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-amber-950/40 via-slate-900 to-slate-900 border border-amber-500/40 p-6 shadow-2xl">
+        <div className="absolute top-0 right-0 w-72 h-72 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-5">
+          <div className="space-y-2 max-w-2xl">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 shadow-sm">
+                <Target className="w-3 h-3 text-amber-400" />
+                <span>Apollo.io Intelligence &bull; Live B2B Engine</span>
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                0% Dead Sites Guarantee
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                Live DNS + MX Verification
+              </span>
+            </div>
+            <h3 className="text-lg sm:text-xl font-black text-slate-100">
+              Mine 275M+ Real Decision Makers with Direct Verified Email &amp; Phone
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
+              Connect your free Apollo.io API key or utilize built-in free intelligence. Every lead is pre-filtered with live DNS resolution to eliminate NXDOMAIN errors, check MX mail records, and extract validated LinkedIn profiles.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              onClick={() => setActiveTab('apollo')}
+              className="px-5 py-3 rounded-2xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-400 hover:via-orange-400 hover:to-amber-500 text-slate-950 font-black text-xs shadow-xl shadow-amber-500/25 flex items-center gap-2 transition transform hover:-translate-y-0.5 cursor-pointer"
+            >
+              <Target className="w-4 h-4 fill-slate-950" />
+              <span>Launch Apollo.io Intelligence</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </div>

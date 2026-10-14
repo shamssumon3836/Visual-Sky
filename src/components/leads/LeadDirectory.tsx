@@ -17,6 +17,7 @@ import {
   RefreshCw, 
   Edit3, 
   Sparkles, 
+  Target,
   Tag as TagIcon,
   Building, 
   X, 
@@ -54,7 +55,8 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
     openCampaignWizard,
     searchQuery,
     setSearchQuery,
-    addNotification
+    addNotification,
+    setActiveTab
   } = useApp();
 
   // Active Filter
@@ -668,6 +670,16 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
           </div>
 
           <div className="flex items-center flex-wrap gap-2">
+            <button
+              onClick={() => setActiveTab('apollo')}
+              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-amber-600/20 hover:from-amber-500/30 hover:to-orange-500/30 border border-amber-500/50 text-xs font-black text-amber-300 flex items-center gap-1.5 transition cursor-pointer shadow-sm shadow-amber-500/10"
+              title="Mine verified B2B decision makers with Apollo.io 275M+ Intelligence"
+            >
+              <Target className="w-3.5 h-3.5 text-amber-400" />
+              <span>Apollo.io Intelligence</span>
+              <span className="px-1.5 py-0.2 text-[9px] bg-amber-500/30 text-amber-200 rounded font-mono font-bold">275M+</span>
+            </button>
+
             <button
               onClick={handleScanAllEmailsDns}
               disabled={isScanningDns}

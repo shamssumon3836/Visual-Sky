@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { VisualSkyLogo } from '../brand/VisualSkyLogo';
 import { 
   Sparkles, 
+  Target,
   Server, 
   CheckCircle2, 
   ArrowRight, 
@@ -31,6 +32,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onOpenAuth }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
 
   const features = [
+    {
+      icon: Target,
+      title: 'Apollo.io Intelligence (275M+ B2B)',
+      desc: 'Mine 275M+ verified B2B decision makers with direct mobile numbers, company domains, live DNS resolution, and 0% dead-website guarantee.',
+      accent: 'amber',
+      liveMetric: '275M+ Verified B2B Records'
+    },
     {
       icon: Server,
       title: 'Smart SMTP Rotation',
