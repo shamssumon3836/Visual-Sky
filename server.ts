@@ -6333,9 +6333,10 @@ app.post('/api/apollo/verify-key', async (req, res) => {
 app.post('/api/apollo/search', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   try {
-    const { apiKey, niche = 'Video Editing Agency', location = 'London, UK', targetRole = 'Founder & CEO', count = 25 } = req.body || {};
+    const { apiKey, niche = 'Video Editing Agency', location = 'London, UK', targetRole = 'Founder & CEO' } = req.body || {};
     const keyToUse = (apiKey || process.env.APOLLO_API_KEY || '').trim();
-    const leadCount = Math.max(1, Math.min(Number(count) || 25, 500));
+    const requestedCount = Number(req.body?.count ?? req.body?.leadCount ?? req.body?.batchSize ?? 25);
+    const leadCount = Math.max(1, Math.min(requestedCount || 25, 500));
 
     let finalLeads: any[] = [];
     let isLiveApollo = false;

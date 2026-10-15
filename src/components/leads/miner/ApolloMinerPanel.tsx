@@ -345,7 +345,7 @@ export const ApolloMinerPanel: React.FC<ApolloMinerPanelProps> = ({
 
             {/* Quick Presets */}
             <div className="flex items-center gap-1.5">
-              {[10, 25, 50, 100, 200].map((num) => (
+              {[10, 25, 50, 100, 200, 500].map((num) => (
                 <button
                   key={num}
                   type="button"
