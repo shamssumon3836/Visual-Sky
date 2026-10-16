@@ -20,7 +20,6 @@ import {
   MapPin, 
   Plus,
   Globe,
-  Map,
   Compass,
   X,
   Check,
@@ -1877,10 +1876,13 @@ What specific decision makers should I uncover for you?`,
         }
       }));
 
-      const resultMap = new Map(verifyResults.map(r => [r.id, r]));
+      const resultMap: Record<string, any> = {};
+      for (const r of verifyResults) {
+        if (r && r.id) resultMap[r.id] = r;
+      }
 
       setMinedLeads(prev => prev.map(l => {
-        const res = resultMap.get(l.id);
+        const res = resultMap[l.id];
         if (res) {
           return {
             ...l,
@@ -2444,7 +2446,8 @@ What specific decision makers should I uncover for you?`,
         selectedSaveTag || 'Conversational AI Miner',
         true
       );
-      setMinedLeads(prev => [...fallbackLeads, ...prev]);
+      setMinedLeads(fallbackLeads);
+      setSelectedLeadIds(fallbackLeads.map(l => l.id));
       const fallbackMsg: ChatMinerMessage = {
         id: `ai-err-${Date.now()}`,
         role: 'assistant',

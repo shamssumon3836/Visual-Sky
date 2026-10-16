@@ -5958,14 +5958,45 @@ Respond ONLY with a valid JSON array of objects with schema:
     }
   }
 ]`;
+        const detectedIndustryForPrompt = detectIndustryCategory(targetNiche);
         const subDistricts = geoInfo.districts;
-        const angles = [
-          "top established premier enterprises, market leaders, and accredited commercial studios",
-          "high-growth boutique studios, specialized agencies, and modern industry innovators",
-          "top-reviewed independent practices, client-accredited specialists, and verified service providers",
-          "award-winning commercial post-production facilities and commercial video editing houses",
-          "corporate film agencies, video marketing studios, and digital content creators"
-        ];
+        const industryAnglesMap = {
+          real_estate: [
+            "premier residential & commercial real estate brokerages, prime estate agencies, and property consultants",
+            "luxury property investment advisory firms, land acquisition specialists, and estate managers",
+            "top-rated chartered commercial surveyors, leasing agencies, and residential developments",
+            "independent high-street real estate brokers, property acquisition houses, and residential realty",
+            "prime metropolitan real estate advisory groups and accredited property management practices"
+          ],
+          video: [
+            "award-winning commercial post-production facilities and commercial video editing houses",
+            "corporate film agencies, video marketing studios, and digital content creators",
+            "high-growth boutique video editing studios, specialized colorists, and post innovators",
+            "premier commercial production houses, motion graphics agencies, and broadcast editors",
+            "cinematic storytelling studios and commercial brand film post-production houses"
+          ],
+          marketing: [
+            "high-growth performance marketing agencies, paid media consultancies, and growth partners",
+            "full-service digital marketing agencies, SEO consultancies, and creative brand strategists",
+            "social media marketing agencies, content studios, and influencer marketing specialists",
+            "B2B demand generation consultancies and inbound growth marketing firms",
+            "ecommerce marketing agencies and conversion rate optimization specialists"
+          ],
+          healthcare: [
+            "premier medical centers, private healthcare clinics, and specialized medical practices",
+            "private dental clinics, orthodontic centers, and cosmetic surgery practices",
+            "wellness centers, clinical diagnostics institutes, and medical consultancies",
+            "top-reviewed health specialists and certified healthcare providers"
+          ],
+          general: [
+            "top established premier enterprises, market leaders, and accredited business firms",
+            "high-growth boutique practices, specialized firms, and modern industry innovators",
+            "top-reviewed independent practices, client-accredited specialists, and verified service providers",
+            "commercial firms, corporate consultancies, and certified professional providers",
+            "premier local practitioners and accredited commercial enterprises"
+          ]
+        };
+        const angles = industryAnglesMap[detectedIndustryForPrompt] || industryAnglesMap.general;
         const callsNeeded = Math.min(5, Math.max(1, Math.ceil(count / 25)));
         const perCallCount = Math.min(30, Math.max(10, Math.ceil(count / callsNeeded)));
         const callConfigs = Array.from({ length: callsNeeded }, (_, idx) => ({
@@ -6038,6 +6069,14 @@ Respond ONLY with a valid JSON array of objects with schema:
         if (checkRes.status === "fulfilled" && checkRes.value.isAlive) {
           const normKey = checkRes.value.hostname;
           if (!seenWebsites.has(normKey)) {
+            const targetCat = detectIndustryCategory(targetNiche);
+            const candText = `${cand.company || ""} ${cand.title || ""} ${cand.niche || ""} ${checkRes.value.cleanUrl || ""}`.toLowerCase();
+            if (targetCat === "real_estate" && /video|editing|post[\s-]*production|vfx|film|cinema|animation|motion|studio\s*cuts/i.test(candText)) {
+              continue;
+            }
+            if (targetCat === "video" && /real\s*estate|realty|property|residential|letting|housing|surveyor/i.test(candText)) {
+              continue;
+            }
             seenWebsites.add(normKey);
             const phoneVal = validatePhoneNumber(cand.phone || "", cleanLocation);
             const verifiedPhone = phoneVal.isValid ? phoneVal.formatted : getValidPhoneForLocation(cleanLocation, verifiedLeads.length);
@@ -8112,7 +8151,10 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
     if (!rawHost || !rawUsername || !rawPassword) {
       return res.status(400).json({ success: false, error: "IMAP host, username, and password are required" });
     }
-    const cleanHost = String(rawHost).trim().toLowerCase();
+    let cleanHost = String(rawHost).trim().toLowerCase();
+    if (cleanHost.includes("visualsky.pro")) {
+      cleanHost = "mail.visualsky.pro";
+    }
     const cleanUser = String(rawUsername).trim();
     const userLower = cleanUser.toLowerCase();
     lastImapSyncTimestampByUser.set(userLower, Date.now());
@@ -8120,7 +8162,11 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
     const poolKey = `${cleanHost}::${userLower}`;
     const candidateHosts = [];
     const addCandidate = (h) => {
-      if (h && !candidateHosts.includes(h)) candidateHosts.push(h);
+      let hostCandidate = (h || "").trim().toLowerCase();
+      if (hostCandidate.includes("visualsky.pro")) {
+        hostCandidate = "mail.visualsky.pro";
+      }
+      if (hostCandidate && !candidateHosts.includes(hostCandidate)) candidateHosts.push(hostCandidate);
     };
     const cachedWorkingHost = verifiedImapHostCache.get(poolKey);
     if (cachedWorkingHost) {
@@ -8145,6 +8191,8 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
       addCandidate("mail.privateemail.com");
     } else if (cleanHost.includes("icloud.com") || cleanHost.includes("mail.me.com")) {
       addCandidate("imap.mail.me.com");
+    } else if (cleanHost.includes("visualsky.pro") || userDomain === "visualsky.pro") {
+      addCandidate("mail.visualsky.pro");
     } else if (cleanHost.startsWith("smtp.")) {
       const baseDomain = cleanHost.slice(5);
       addCandidate(`mail.${baseDomain}`);
@@ -8152,7 +8200,7 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
       addCandidate(cleanHost);
     } else {
       addCandidate(cleanHost);
-      if (userDomain) {
+      if (userDomain && userDomain !== "visualsky.pro") {
         addCandidate(`mail.${userDomain}`);
         addCandidate(`imap.${userDomain}`);
       }
@@ -8162,6 +8210,12 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
     const createAndConnectClient = async () => {
       let lastConnectErr = null;
       for (const candidateHost of candidateHosts) {
+        try {
+          await import_dns.default.promises.lookup(candidateHost);
+        } catch (dnsErr) {
+          lastConnectErr = dnsErr;
+          continue;
+        }
         const testClient = new import_imapflow.ImapFlow({
           host: candidateHost,
           port: imapPort,
@@ -8192,7 +8246,7 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
               const tErr = new Error(`IMAP connection to ${candidateHost}:${imapPort} timed out.`);
               tErr.code = "ETIMEDOUT";
               reject(tErr);
-            }, 7500);
+            }, 6e3);
           });
           await Promise.race([connectPromise, timeoutPromise]);
           verifiedImapHostCache.set(poolKey, candidateHost);
@@ -8208,7 +8262,7 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
           }
         }
       }
-      throw lastConnectErr || new Error(`Could not connect to IMAP server (${candidateHosts[0]}:${imapPort})`);
+      throw lastConnectErr || new Error(`Could not connect to IMAP server (${candidateHosts[0] || cleanHost}:${imapPort})`);
     };
     let connectedClient = null;
     let usingPooledClient = false;
@@ -8565,11 +8619,13 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
       }
     }
   } catch (err) {
-    console.error("IMAP sync failed:", err?.message);
+    console.warn("IMAP sync note:", err?.message);
     res.setHeader("Content-Type", "application/json");
-    return res.status(400).json({
+    return res.status(200).json({
       success: false,
-      error: `IMAP Connection Error: ${err?.message || "Failed to authenticate with IMAP server"}`
+      count: 0,
+      messages: [],
+      error: `IMAP Connection Note: ${err?.message || "Failed to authenticate with IMAP server"}`
     });
   }
 });
@@ -9034,8 +9090,10 @@ async function startServer() {
                 if (s && !s.isTrash && s.host && s.username && s.password) {
                   const uLower = String(s.username).trim().toLowerCase();
                   if (!accountsMap.has(uLower)) {
+                    const rawH = String(s.imapHost || s.host).trim();
+                    const cleanH = rawH.toLowerCase().includes("visualsky.pro") ? "mail.visualsky.pro" : rawH;
                     accountsMap.set(uLower, {
-                      host: String(s.imapHost || s.host).trim(),
+                      host: cleanH,
                       port: Number(s.imapPort) || 993,
                       username: String(s.username).trim(),
                       password: String(s.password),

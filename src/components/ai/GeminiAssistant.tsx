@@ -310,8 +310,16 @@ export const GeminiAssistant: React.FC = () => {
       return;
     }
 
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
+    const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionClass) {
+      addNotification({
+        title: 'Voice Dictation Not Supported',
+        message: 'Voice dictation is not supported in this browser. Please use Chrome or Edge.',
+        type: 'system'
+      });
+      return;
+    }
+    const recognition = new SpeechRecognitionClass();
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.lang = 'en-US';

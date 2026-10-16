@@ -43,9 +43,97 @@ import {
   BrainCircuit,
   StickyNote,
   Paperclip,
-  Upload
+  Upload,
+  Keyboard,
+  Volume2,
+  VolumeX,
+  Download,
+  AlertCircle,
+  HelpCircle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+
+const playReplyChime = () => {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.35);
+  } catch {}
+};
+
+export const detectLeadIntentCategory = (lastMsgText: string, labels: string[] = []): {
+  type: 'hot' | 'meeting' | 'question' | 'later' | 'cold' | 'replied';
+  label: string;
+  badgeClass: string;
+  icon: string;
+} => {
+  const lower = (lastMsgText || '').toLowerCase();
+  if (labels.includes('Meeting Scheduled') || /meeting|calendar|schedule|zoom|google meet|calendly|call me|available at|what time|tomorrow at|thursday at|friday at/i.test(lower)) {
+    return { type: 'meeting', label: 'Wants Meeting', badgeClass: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40', icon: '📅' };
+  }
+  if (labels.includes('Hot Lead') || /interested|sounds good|send me|more details|lets talk|let's talk|pricing|cost|send over|proposal|demo/i.test(lower)) {
+    return { type: 'hot', label: 'High Intent', badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40', icon: '🔥' };
+  }
+  if (/\?|how does|what is|can you|do you support|security|gdpr|case study|samples/i.test(lower)) {
+    return { type: 'question', label: 'Inquiry / Q&A', badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40', icon: '❓' };
+  }
+  if (/busy|next month|next quarter|q4|reach out later|not now|bad timing/i.test(lower)) {
+    return { type: 'later', label: 'Follow Up Later', badgeClass: 'bg-blue-500/20 text-blue-300 border-blue-500/40', icon: '⏳' };
+  }
+  if (/unsubscribe|remove me|stop emailing|not interested|wrong person/i.test(lower)) {
+    return { type: 'cold', label: 'Not Interested', badgeClass: 'bg-slate-800 text-slate-400 border-slate-700', icon: '💤' };
+  }
+  return { type: 'replied', label: 'Active Conversation', badgeClass: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40', icon: '💬' };
+};
+
+const SPAM_TRIGGERS = [
+  '100% free', 'guaranteed', 'risk-free', 'act now', 'urgent',
+  'winner', 'exclusive deal', 'no catch', 'congratulations',
+  'double your income', 'earn extra cash', 'pure profit', 'unlimited'
+];
+
+export const checkSpamScore = (text: string): { score: number; flaggedWords: string[] } => {
+  if (!text || !text.trim()) return { score: 100, flaggedWords: [] };
+  const lower = text.toLowerCase();
+  const flagged = SPAM_TRIGGERS.filter(trigger => lower.includes(trigger));
+  const score = Math.max(50, 100 - flagged.length * 15);
+  return { score, flaggedWords: flagged };
+};
+
+export const renderClickableMessageBody = (text: string) => {
+  if (!text) return null;
+  const urlRegex = /(https?:\/\/[^\s]+|mailto:[^\s]+)/g;
+  const parts = text.split(urlRegex);
+  return parts.map((part, i) => {
+    if (part.match(urlRegex)) {
+      return (
+        <a
+          key={i}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-cyan-400 hover:text-cyan-300 underline font-mono break-all inline-flex items-center gap-0.5 mx-0.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span>{part}</span>
+          <ExternalLink className="w-2.5 h-2.5 inline shrink-0 opacity-80" />
+        </a>
+      );
+    }
+    return part;
+  });
+};
 
 const cleanBodyText = (text: string, fallbackCompany?: string, fallbackName?: string) => {
   if (!text) return '';
@@ -85,15 +173,38 @@ export const SmartInbox: React.FC = () => {
 
   const [isSyncingManual, setIsSyncingManual] = useState<boolean>(false);
 
-  // Automatically sync IMAP replies silently in background when SmartInbox opens & every 5s while visible (no manual button or reload needed)
+  // Chime sound notification toggle (persisted in localStorage)
+  const [chimeEnabled, setChimeEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('visualsky_inbox_chime') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleChime = () => {
+    setChimeEnabled(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('visualsky_inbox_chime', String(next));
+      } catch {}
+      if (next) playReplyChime();
+      return next;
+    });
+  };
+
+  // Automatically sync IMAP replies silently in background when SmartInbox opens & every 12s while visible (no manual button or reload needed)
   useEffect(() => {
     const runSilentSync = () => {
       if (document.visibilityState === 'visible') {
         syncInboxReplies(undefined, true)
-          .then(() => {
+          .then((res) => {
             setLastAutoSyncTime(
               new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
             );
+            if (res && res.success && res.count > 0 && chimeEnabled) {
+              playReplyChime();
+            }
           })
           .catch(() => {});
       }
@@ -104,7 +215,7 @@ export const SmartInbox: React.FC = () => {
       clearTimeout(initTimer);
       clearInterval(timer);
     };
-  }, []);
+  }, [chimeEnabled]);
 
   const handleManualSync = async () => {
     if (isSyncingManual) return;
@@ -114,6 +225,7 @@ export const SmartInbox: React.FC = () => {
       if (res.success) {
         if (res.count > 0) {
           confetti({ particleCount: 40, spread: 60 });
+          if (chimeEnabled) playReplyChime();
           addNotification({
             title: '🎉 New Replies Synced!',
             message: `Fetched ${res.count} new reply from your IMAP inbox.`,
@@ -152,6 +264,46 @@ export const SmartInbox: React.FC = () => {
   
   const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
   const [replyText, setReplyText] = useState<string>('');
+  const [draftSavedPulse, setDraftSavedPulse] = useState<boolean>(false);
+
+  // Load saved draft per thread when activeThreadId changes
+  useEffect(() => {
+    if (!activeThreadId) {
+      setReplyText('');
+      return;
+    }
+    try {
+      const saved = localStorage.getItem(`visualsky_inbox_draft_${activeThreadId}`);
+      if (saved) {
+        setReplyText(saved);
+      } else {
+        setReplyText('');
+      }
+    } catch {
+      setReplyText('');
+    }
+  }, [activeThreadId]);
+
+  // Debounced auto-save of current replyText
+  useEffect(() => {
+    if (!activeThreadId) return;
+    const timer = setTimeout(() => {
+      try {
+        if (replyText.trim()) {
+          localStorage.setItem(`visualsky_inbox_draft_${activeThreadId}`, replyText);
+          setDraftSavedPulse(true);
+          setTimeout(() => setDraftSavedPulse(false), 1400);
+        } else {
+          localStorage.removeItem(`visualsky_inbox_draft_${activeThreadId}`);
+        }
+      } catch {}
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [replyText, activeThreadId]);
+
+  const spamReport = useMemo(() => {
+    return checkSpamScore(replyText);
+  }, [replyText]);
 
   const [isGeneratingAiReply, setIsGeneratingAiReply] = useState<boolean>(false);
   const [customReplyPrompt, setCustomReplyPrompt] = useState<string>('');
@@ -174,6 +326,8 @@ export const SmartInbox: React.FC = () => {
   const [isDraggingReplyFiles, setIsDraggingReplyFiles] = useState<boolean>(false);
   const [showComposeAttachDropzone, setShowComposeAttachDropzone] = useState<boolean>(false);
   const [isDraggingComposeFiles, setIsDraggingComposeFiles] = useState<boolean>(false);
+  const [showShortcutsModal, setShowShortcutsModal] = useState<boolean>(false);
+  const [isChangingTone, setIsChangingTone] = useState<boolean>(false);
 
   // User-friendly CRM Drawer & AI Thread Summary states
   const [showLeadCrmCard, setShowLeadCrmCard] = useState<boolean>(false);
@@ -542,10 +696,75 @@ export const SmartInbox: React.FC = () => {
     setActiveThreadId(thread.id);
     setMobileShowChat(true);
     setShowLabelMenu(false);
+    setShowLeadCrmCard(false);
+    setShowTemplateMenu(false);
+    setShowMoreOptionsMenu(false);
     if (thread.unreadCount > 0) {
       markThreadRead(thread.id);
     }
   };
+
+  // Keyboard navigation & productivity shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (e.key === 'j' || (e.key === 'ArrowDown' && e.altKey)) {
+        e.preventDefault();
+        const curIdx = filteredThreads.findIndex(t => t.id === activeThreadId);
+        if (curIdx < filteredThreads.length - 1) {
+          handleSelectThread(filteredThreads[curIdx + 1]);
+        }
+      } else if (e.key === 'k' || (e.key === 'ArrowUp' && e.altKey)) {
+        e.preventDefault();
+        const curIdx = filteredThreads.findIndex(t => t.id === activeThreadId);
+        if (curIdx > 0) {
+          handleSelectThread(filteredThreads[curIdx - 1]);
+        }
+      } else if (e.key === 'r') {
+        e.preventDefault();
+        setIsComposerMinimized(false);
+        replyTextareaRef.current?.focus();
+      } else if (e.key === 's' && currentThread) {
+        e.preventDefault();
+        toggleThreadStar(currentThread.id);
+      } else if (e.key === 'e' && currentThread) {
+        e.preventDefault();
+        if (currentThread.isTrash || selectedFolder === 'trash') {
+          permanentDeleteThread(currentThread.id);
+        } else {
+          deleteThreadToTrash(currentThread.id);
+        }
+      } else if (e.key === 'c') {
+        e.preventDefault();
+        setShowComposeModal(true);
+      } else if (e.key === '?' || (e.key === '/' && e.shiftKey)) {
+        e.preventDefault();
+        setShowShortcutsModal(prev => !prev);
+      } else if (e.key === 'Escape') {
+        setShowShortcutsModal(false);
+        setShowLabelMenu(false);
+        setShowTemplateMenu(false);
+        setShowMoreOptionsMenu(false);
+        setShowComposeModal(false);
+        setShowLeadCrmCard(false);
+        setPreviewAttachment(null);
+        if (mobileShowChat) setMobileShowChat(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [filteredThreads, activeThreadId, currentThread, mobileShowChat, selectedFolder]);
 
   useEffect(() => {
     if (!currentThread) return;
@@ -753,9 +972,73 @@ export const SmartInbox: React.FC = () => {
       replySmtpId || undefined,
       replyAttachments.length > 0 ? replyAttachments : undefined
     );
+    try {
+      localStorage.removeItem(`visualsky_inbox_draft_${currentThread.id}`);
+    } catch {}
     setReplyText('');
     setReplyAttachments([]);
     setCustomReplyPrompt('');
+  };
+
+  // 1-Click Export Thread Transcript for CRM / Records
+  const handleExportThread = () => {
+    if (!currentThread) return;
+    const msgs = Array.isArray(currentThread.messages) ? currentThread.messages : [];
+    let exportContent = `Email Thread Transcript: ${currentThread.subject}\n`;
+    exportContent += `Participant: ${currentThread.leadName} <${currentThread.leadEmail}>\n`;
+    exportContent += `Company: ${currentThread.leadCompany || 'N/A'}\n`;
+    exportContent += `Labels: ${(currentThread.labels || []).join(', ') || 'None'}\n`;
+    exportContent += `Exported: ${new Date().toLocaleString()}\n`;
+    exportContent += `==================================================\n\n`;
+
+    msgs.forEach((m, idx) => {
+      exportContent += `[#${idx + 1}] ${m.timestamp || 'Message'} | From: ${m.sender === 'lead' ? currentThread.leadName : currentUser.name || 'You'} <${m.senderEmail || ''}>\n`;
+      exportContent += `--------------------------------------------------\n`;
+      exportContent += `${cleanBodyText(m.body, currentThread.leadCompany, currentThread.leadName)}\n\n`;
+    });
+
+    const blob = new Blob([exportContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Thread-${(currentThread.leadName || 'Contact').replace(/[^a-zA-Z0-9]/g, '_')}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    addNotification({
+      title: 'Thread Exported 📄',
+      message: `Downloaded transcript for ${currentThread.leadName}.`,
+      type: 'system'
+    });
+  };
+
+  // 1-Click Adjust AI Reply Tone
+  const handleAdjustReplyTone = async (targetTone: string) => {
+    if (!replyText.trim() || isChangingTone) return;
+    setIsChangingTone(true);
+    try {
+      const response = await fetch('/api/gemini/optimize-body', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          body: replyText,
+          targetTone
+        })
+      });
+      const parsed = await safeParseResponse(response, 'Failed to adjust tone');
+      const data = parsed.data || {};
+      if (parsed.ok && data.success && data.optimizedBody) {
+        setReplyText(data.optimizedBody);
+      }
+      const usedTokens = data?.usage?.totalTokens || 85;
+      deductAiTokens(usedTokens);
+      addNotification({
+        title: `Tone Refined: ${targetTone} ✨`,
+        message: 'Your reply draft has been rewritten to match this tone.',
+        type: 'system'
+      });
+    } catch {} finally {
+      setIsChangingTone(false);
+    }
   };
 
   // AI Reply Draft Generator
@@ -1275,8 +1558,50 @@ export const SmartInbox: React.FC = () => {
             </div>
           </div>
 
-          <div className="space-y-2 shrink-0">
-            <div className="p-2.5 bg-slate-950/80 rounded-xl border border-slate-800 space-y-0.5 text-[10px]">
+          <div className="space-y-1.5 shrink-0 pt-2 border-t border-slate-800/80">
+            {/* Quick Utility Tools: Audio Chime & Keyboard Shortcuts */}
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={toggleChime}
+                className={`py-1.5 px-2 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 border transition cursor-pointer active:scale-95 ${
+                  chimeEnabled
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25'
+                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                }`}
+                title={chimeEnabled ? 'Reply Sound: Enabled' : 'Reply Sound: Muted'}
+              >
+                {chimeEnabled ? <Volume2 className="w-3.5 h-3.5 text-emerald-400" /> : <VolumeX className="w-3.5 h-3.5" />}
+                <span>{chimeEnabled ? 'Sound ON' : 'Muted'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowShortcutsModal(true)}
+                className="py-1.5 px-2 rounded-xl text-[11px] font-bold bg-slate-950 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-cyan-300 flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95"
+                title="Keyboard Shortcuts (?)"
+              >
+                <Keyboard className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Shortcuts</span>
+              </button>
+            </div>
+
+            {/* IMAP Live Sync Button */}
+            <button
+              type="button"
+              onClick={handleManualSync}
+              disabled={isSyncingManual}
+              className="w-full py-1.5 px-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold text-[11px] flex items-center justify-between transition cursor-pointer active:scale-95 disabled:opacity-50"
+              title="Sync IMAP Inboxes Now"
+            >
+              <div className="flex items-center gap-1.5">
+                <RefreshCw className={`w-3 h-3 text-cyan-400 ${isSyncingManual ? 'animate-spin' : ''}`} />
+                <span>Sync Mailboxes</span>
+              </div>
+              <span className="text-[10px] text-emerald-400 font-mono">{lastAutoSyncTime}</span>
+            </button>
+
+            <div className="p-2 bg-slate-950/80 rounded-xl border border-slate-800 space-y-0.5 text-[10px]">
               <div className="flex items-center justify-between text-slate-400 font-medium">
                 <span>IMAP / SMTP Relay</span>
                 <span className="text-emerald-400 font-bold">100% Online</span>
@@ -1293,26 +1618,84 @@ export const SmartInbox: React.FC = () => {
           mobileShowChat ? 'hidden md:flex' : 'flex'
         }`}>
           
-          {/* Mobile/Tablet Search + Folders Drawer + Sync + Compose Bar (Visible below lg) */}
-          <div className="lg:hidden flex items-center gap-1.5 p-2 border-b border-slate-800 bg-slate-950/90 shrink-0">
-            <button
-              type="button"
-              onClick={() => setShowMobileFolderDrawer(true)}
-              className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 font-extrabold text-[11px] flex items-center gap-1 shrink-0 cursor-pointer active:scale-95"
-              title="Open All Folders & Labels"
-            >
-              <Inbox className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Folders</span>
-            </button>
+          {/* Clean, Unified Thread List Header */}
+          <div className="p-2 sm:p-2.5 border-b border-slate-800 bg-slate-950/95 shrink-0 space-y-2">
+            {/* Row 1: Folder Title + Mobile Drawer Toggle + Sync & Compose */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <button
+                  type="button"
+                  onClick={() => setShowMobileFolderDrawer(true)}
+                  className="lg:hidden p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 shrink-0 cursor-pointer active:scale-95"
+                  title="Open Folders"
+                >
+                  <Inbox className="w-3.5 h-3.5" />
+                </button>
+                <div className="flex items-center gap-2 min-w-0">
+                  <h3 className="font-extrabold text-xs sm:text-sm text-white truncate">
+                    {selectedLabelFilter
+                      ? `🏷️ ${selectedLabelFilter}`
+                      : selectedFolder === 'inbox'
+                      ? 'Inbox'
+                      : selectedFolder === 'needs_reply'
+                      ? 'Waiting Reply'
+                      : selectedFolder === 'unread'
+                      ? 'Unread'
+                      : selectedFolder === 'sent'
+                      ? 'Sent'
+                      : selectedFolder === 'starred'
+                      ? 'Starred'
+                      : selectedFolder === 'high_intent'
+                      ? 'Hot Leads'
+                      : selectedFolder === 'meetings'
+                      ? 'Meetings'
+                      : 'Trash'}
+                  </h3>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-400 font-bold shrink-0">
+                    {filteredThreads.length}
+                  </span>
+                  {selectedLabelFilter && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedLabelFilter(null)}
+                      className="text-[10px] text-cyan-400 hover:underline cursor-pointer font-bold"
+                    >
+                      (Clear)
+                    </button>
+                  )}
+                </div>
+              </div>
 
-            <div className="relative flex-1 min-w-0">
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleManualSync}
+                  disabled={isSyncingManual}
+                  className="p-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-cyan-400 cursor-pointer active:scale-95 disabled:opacity-50"
+                  title="Sync Mailboxes Now"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingManual ? 'animate-spin text-cyan-400' : ''}`} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowComposeModal(true)}
+                  className="px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-extrabold text-xs flex items-center gap-1 cursor-pointer shadow-sm active:scale-95"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Compose</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Row 2: Clean Search Input */}
+            <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search mail..."
-                className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-8 pr-6 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                placeholder="Search messages, leads, emails..."
+                className="w-full bg-slate-900/90 border border-slate-800 rounded-xl pl-8 pr-7 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500/80 transition"
               />
               {searchQuery && (
                 <button
@@ -1325,191 +1708,116 @@ export const SmartInbox: React.FC = () => {
               )}
             </div>
 
-            <button
-              type="button"
-              onClick={handleManualSync}
-              disabled={isSyncingManual}
-              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 shrink-0 cursor-pointer active:scale-95 disabled:opacity-50"
-              title="Sync IMAP Replies Now"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingManual ? 'animate-spin text-emerald-400' : ''}`} />
-            </button>
+            {/* Row 3: Filter Pills or Bulk Selection Actions */}
+            <div className="flex items-center justify-between gap-1 text-[11px] pt-0.5">
+              <label className="flex items-center gap-1.5 cursor-pointer select-none text-slate-400 hover:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={filteredThreads.length > 0 && selectedThreadIds.length === filteredThreads.length}
+                  onChange={handleToggleSelectAll}
+                  className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 cursor-pointer w-3.5 h-3.5"
+                />
+                <span className="text-[11px] font-medium">
+                  {selectedThreadIds.length > 0 ? `${selectedThreadIds.length} Selected` : 'Select All'}
+                </span>
+              </label>
 
-            <button
-              type="button"
-              onClick={() => setShowComposeModal(true)}
-              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-extrabold text-xs flex items-center gap-1 shrink-0 cursor-pointer shadow active:scale-95"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Compose</span>
-            </button>
-          </div>
-
-          {/* Gmail Top Categories Tabs */}
-          <div className="grid grid-cols-4 border-b border-slate-800 bg-slate-950/90 text-[11px] px-1 shrink-0">
-            {[
-              { id: 'primary', label: 'Primary' },
-              { id: 'interested', label: 'High Intent' },
-              { id: 'meetings', label: 'Meetings' },
-              { id: 'followup', label: 'Follow Up' }
-            ].map(tab => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setPrimaryTab(tab.id as any)}
-                className={`py-2 sm:py-1.5 px-1 text-center font-bold border-b-2 truncate transition cursor-pointer ${
-                  primaryTab === tab.id
-                    ? 'border-cyan-400 text-cyan-300 bg-cyan-950/20'
-                    : 'border-transparent text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Mobile/Tablet Folder + Label Bar (visible below lg) */}
-          <div className="lg:hidden flex flex-wrap items-center gap-1.5 px-2 py-1.5 border-b border-slate-800/80 bg-slate-950/60 shrink-0">
-            {[
-              { id: 'inbox', label: '📥 Inbox' },
-              { id: 'needs_reply', label: `⚡ Waiting (${waitingReplyCount})` },
-              { id: 'unread', label: `🟢 Unread (${threads.filter(t => !t.isTrash && t.unreadCount > 0).length})` },
-              { id: 'sent', label: '📤 Sent' },
-              { id: 'starred', label: '⭐ Starred' },
-              { id: 'high_intent', label: '🔥 Hot Leads' },
-              { id: 'meetings', label: '📅 Meetings' },
-              { id: 'trash', label: '🗑️ Trash' }
-            ].map(f => (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() => {
-                  setSelectedFolder(f.id as any);
-                  setSelectedLabelFilter(null);
-                }}
-                className={`px-2.5 py-1 rounded-xl text-[11px] font-bold whitespace-nowrap cursor-pointer transition active:scale-95 ${
-                  selectedFolder === f.id && !selectedLabelFilter
-                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
-                    : 'bg-slate-900/80 text-slate-400 hover:text-slate-200 border border-slate-800/80'
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
-            {selectedLabelFilter && (
-              <button
-                type="button"
-                onClick={() => setSelectedLabelFilter(null)}
-                className="px-2.5 py-1 rounded-xl text-[11px] font-bold whitespace-nowrap bg-purple-500/20 text-purple-200 border border-purple-500/40 flex items-center gap-1 shrink-0 cursor-pointer"
-              >
-                <span>🏷️ {selectedLabelFilter}</span>
-                <X className="w-3 h-3" />
-              </button>
-            )}
-          </div>
-
-          {/* Sub-header: Select All + Bulk Actions (when selected) or Quick Filter Pills */}
-          <div className="px-3 py-1.5 border-b border-slate-800/80 bg-slate-950/50 flex items-center justify-between gap-1.5 text-[11px] text-slate-400 shrink-0 relative">
-            <label className="flex items-center gap-2 cursor-pointer select-none hover:text-slate-200 shrink-0 py-0.5">
-              <input
-                type="checkbox"
-                checked={filteredThreads.length > 0 && selectedThreadIds.length === filteredThreads.length}
-                onChange={handleToggleSelectAll}
-                className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 cursor-pointer w-4 h-4"
-              />
-              <span className="font-bold text-[11px]">
-                {selectedThreadIds.length > 0 ? `${selectedThreadIds.length} Selected` : `All (${filteredThreads.length})`}
-              </span>
-            </label>
-
-            {selectedThreadIds.length > 0 ? (
-              <div className="flex items-center gap-1 animate-in fade-in">
-                {selectedFolder === 'trash' ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      bulkRestoreThreads(selectedThreadIds);
-                      setSelectedThreadIds([]);
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold cursor-pointer"
-                  >
-                    Restore
-                  </button>
-                ) : (
-                  <>
+              {selectedThreadIds.length > 0 ? (
+                <div className="flex items-center gap-1 animate-in fade-in">
+                  {selectedFolder === 'trash' ? (
                     <button
                       type="button"
-                      onClick={handleBulkMarkRead}
-                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-bold cursor-pointer"
+                      onClick={() => {
+                        bulkRestoreThreads(selectedThreadIds);
+                        setSelectedThreadIds([]);
+                      }}
+                      className="px-2 py-0.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold cursor-pointer"
                     >
-                      Read
+                      Restore
                     </button>
-                    <div className="relative">
+                  ) : (
+                    <>
                       <button
                         type="button"
-                        onClick={() => setShowBulkLabelMenu(prev => !prev)}
-                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                        onClick={handleBulkMarkRead}
+                        className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-bold cursor-pointer"
                       >
-                        <Tag className="w-3 h-3" />
-                        <span>Label</span>
+                        Read
                       </button>
-                      {showBulkLabelMenu && (
-                        <div className="absolute right-0 mt-1.5 w-44 bg-slate-950 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-40 space-y-0.5">
-                          {labelPresets.map(preset => (
-                            <button
-                              key={preset.name}
-                              type="button"
-                              onClick={() => handleBulkAssignLabel(preset.name)}
-                              className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-slate-900 text-xs text-slate-200 cursor-pointer flex items-center gap-2"
-                            >
-                              <span className={`w-2 h-2 rounded-full border ${preset.color}`} />
-                              <span>{preset.name}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setShowBulkLabelMenu(prev => !prev)}
+                          className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Tag className="w-3 h-3" />
+                          <span>Label</span>
+                        </button>
+                        {showBulkLabelMenu && (
+                          <div className="absolute right-0 mt-1.5 w-44 bg-slate-950 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-40 space-y-0.5">
+                            {labelPresets.map(preset => (
+                              <button
+                                key={preset.name}
+                                type="button"
+                                onClick={() => handleBulkAssignLabel(preset.name)}
+                                className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-slate-900 text-xs text-slate-200 cursor-pointer flex items-center gap-2"
+                              >
+                                <span className={`w-2 h-2 rounded-full border ${preset.color}`} />
+                                <span>{preset.name}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleBulkDelete}
+                    className="px-2 py-0.5 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-800 text-[10px] font-bold cursor-pointer"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedThreadIds([])}
+                    className="px-1.5 py-0.5 rounded-lg text-slate-400 hover:text-white text-[10px] cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : selectedFolder === 'trash' && threads.some(t => t.isTrash) ? (
                 <button
                   type="button"
-                  onClick={handleBulkDelete}
-                  className="px-2.5 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-800 text-[10px] font-bold cursor-pointer"
+                  onClick={handleEmptyTrash}
+                  className="px-2 py-0.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/40 text-rose-200 font-bold text-[10px] flex items-center gap-1 cursor-pointer"
                 >
-                  Delete
+                  <Trash2 className="w-3 h-3 text-rose-400" />
+                  <span>Empty</span>
                 </button>
-              </div>
-            ) : selectedFolder === 'trash' && threads.some(t => t.isTrash) ? (
-              <button
-                type="button"
-                onClick={handleEmptyTrash}
-                className="px-2.5 py-1 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/40 text-rose-200 font-bold text-[10px] flex items-center gap-1 cursor-pointer"
-              >
-                <Trash2 className="w-3 h-3 text-rose-400" />
-                <span>Empty Trash</span>
-              </button>
-            ) : (
-              <div className="flex items-center gap-1">
-                {[
-                  { id: 'all', label: 'All' },
-                  { id: 'unread', label: 'Unread' },
-                  { id: 'needs_reply', label: 'Needs Reply' }
-                ].map(flt => (
-                  <button
-                    key={flt.id}
-                    type="button"
-                    onClick={() => setQuickStatusFilter(flt.id as any)}
-                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition cursor-pointer ${
-                      quickStatusFilter === flt.id
-                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    {flt.label}
-                  </button>
-                ))}
-              </div>
-            )}
+              ) : (
+                <div className="flex items-center gap-1 bg-slate-900/80 p-0.5 rounded-lg border border-slate-800">
+                  {[
+                    { id: 'all', label: 'All' },
+                    { id: 'unread', label: 'Unread' },
+                    { id: 'needs_reply', label: 'Needs Reply' }
+                  ].map(flt => (
+                    <button
+                      key={flt.id}
+                      type="button"
+                      onClick={() => setQuickStatusFilter(flt.id as any)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition cursor-pointer ${
+                        quickStatusFilter === flt.id
+                          ? 'bg-cyan-500 text-slate-950 font-black shadow-xs'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {flt.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Threads List */}
@@ -1535,32 +1843,40 @@ export const SmartInbox: React.FC = () => {
                   (Array.isArray(t.labels) && t.labels.includes('Real Reply')) ||
                   (Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead') && t.messages.some(m => m.sender === 'user'));
 
+                const latestLeadReply = Array.isArray(t.messages)
+                  ? [...t.messages].reverse().find(m => m.sender === 'lead')
+                  : null;
+                const rawPreview = latestLeadReply
+                  ? cleanBodyText(latestLeadReply.body, t.leadCompany, t.leadName)
+                  : cleanBodyText(t.lastMessage, t.leadCompany, t.leadName);
+                const { mainReply } = splitReplyAndQuotedHistory(rawPreview);
+
                 return (
                   <div
                     key={t.id}
                     onClick={() => handleSelectThread(t)}
-                    className={`p-3 sm:p-3.5 transition-all cursor-pointer flex gap-2.5 sm:gap-3 relative group ${
-                      isUnread
-                        ? 'bg-gradient-to-r from-emerald-500/25 via-cyan-500/15 to-slate-900 border-l-4 border-l-emerald-400 ring-1 ring-emerald-400/40 shadow-[inset_0_0_24px_rgba(16,185,129,0.18)]'
-                        : isSelected
-                        ? 'bg-slate-800/75 border-l-4 border-l-cyan-400'
-                        : 'hover:bg-slate-800/40 opacity-90'
+                    className={`p-3 transition-all cursor-pointer flex gap-2.5 relative group border-l-2 ${
+                      isSelected
+                        ? 'bg-slate-800/90 border-l-cyan-400'
+                        : isUnread
+                        ? 'bg-slate-900/95 hover:bg-slate-850 border-l-emerald-400'
+                        : 'hover:bg-slate-850/60 border-l-transparent'
                     }`}
                   >
-                    {/* Checkbox + Star with mobile-friendly touch targets */}
-                    <div className="flex flex-col items-center gap-2.5 pt-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    {/* Checkbox + Star */}
+                    <div className="flex flex-col items-center gap-2 pt-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
                         checked={isChecked}
                         onChange={(e) => handleToggleSingleSelect(t.id, e as any)}
-                        className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 cursor-pointer w-4 h-4"
+                        className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 cursor-pointer w-3.5 h-3.5"
                       />
                       <button
                         type="button"
                         onClick={() => toggleThreadStar(t.id)}
-                        className="p-1 -m-1 text-slate-500 hover:text-amber-400 cursor-pointer transition"
+                        className="p-0.5 text-slate-500 hover:text-amber-400 cursor-pointer transition"
                       >
-                        <Star className={`w-4 h-4 ${t.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
+                        <Star className={`w-3.5 h-3.5 ${t.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
                       </button>
                     </div>
 
@@ -1569,53 +1885,29 @@ export const SmartInbox: React.FC = () => {
                       <div className="flex items-center justify-between gap-1">
                         <div className="flex items-center gap-1.5 min-w-0">
                           {isUnread && (
-                            <span className="relative flex h-2.5 w-2.5 shrink-0" title="Unseen New Mail">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400" />
-                            </span>
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" title="Unread" />
                           )}
                           <span
                             className={`truncate ${
                               isUnread
-                                ? 'text-[13px] font-black text-white'
+                                ? 'text-xs font-bold text-white'
                                 : 'text-xs font-semibold text-slate-200'
                             }`}
                           >
                             {t.leadName}
                           </span>
                           {msgCount > 1 && (
-                            <span
-                              className={`text-[10px] font-mono px-1.5 py-0.2 rounded shrink-0 ${
-                                isUnread
-                                  ? 'bg-emerald-500/30 text-emerald-200 font-bold border border-emerald-400/40'
-                                  : 'bg-slate-800 text-slate-400'
-                              }`}
-                            >
+                            <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-slate-800 text-slate-400 shrink-0">
                               {msgCount}
                             </span>
                           )}
-                          {isUnread && (
-                            <span className="px-1.5 py-0.5 rounded-full bg-emerald-400 text-slate-950 font-black text-[9px] uppercase tracking-wider shadow-sm animate-pulse shrink-0">
-                              {isReplyMail ? '✨ NEW REPLY' : '✨ NEW'}
-                            </span>
-                          )}
                         </div>
-                        <span
-                          className={`text-[10px] font-mono shrink-0 ${
-                            isUnread ? 'text-emerald-300 font-extrabold' : 'text-slate-500'
-                          }`}
-                        >
+                        <span className="text-[10px] font-mono text-slate-400 shrink-0">
                           {t.updatedAt || t.lastMessageDate || 'Today'}
                         </span>
                       </div>
 
-                      <div
-                        className={`text-xs truncate ${
-                          isUnread
-                            ? 'text-emerald-300 font-extrabold'
-                            : 'text-slate-300 font-medium'
-                        }`}
-                      >
+                      <div className={`text-xs truncate ${isUnread ? 'text-slate-100 font-bold' : 'text-slate-300 font-medium'}`}>
                         {t.subject}
                       </div>
 
@@ -1627,31 +1919,39 @@ export const SmartInbox: React.FC = () => {
                           ? cleanBodyText(latestLeadReply.body, t.leadCompany, t.leadName)
                           : cleanBodyText(t.lastMessage, t.leadCompany, t.leadName);
                         const { mainReply } = splitReplyAndQuotedHistory(rawPreview);
-                        return isUnread ? (
-                          <div className="mt-1 p-2 rounded-xl bg-emerald-950/70 border border-emerald-400/50 text-[11px] text-white font-bold line-clamp-2 leading-snug shadow-sm">
-                            <span className="text-emerald-300 font-black mr-1">
-                              {isReplyMail ? '📩 New Reply:' : '📩 New Mail:'}
-                            </span>
-                            {mainReply}
-                          </div>
-                        ) : (
-                          <p className="text-[11px] text-slate-400 font-normal line-clamp-2 leading-snug">
+                        return (
+                          <p className={`text-[11px] line-clamp-2 leading-relaxed ${isUnread ? 'text-slate-300 font-normal' : 'text-slate-400 font-normal'}`}>
                             {latestLeadReply ? `💬 ${mainReply}` : mainReply}
                           </p>
                         );
                       })()}
 
-                      <div className="flex items-center justify-between gap-1 pt-1">
+                      <div className="flex items-center justify-between gap-1 pt-0.5">
                         <div className="flex items-center gap-1 flex-wrap">
-                          {waitingForUser ? (
+                          {waitingForUser && (
                             <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
                               ⚡ Needs Reply
                             </span>
-                          ) : (
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                              ✓ Replied
+                          )}
+
+                          {(() => {
+                            const intent = detectLeadIntentCategory(rawPreview, t.labels);
+                            if (intent.label === 'General') return null;
+                            return (
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border flex items-center gap-0.5 ${intent.badgeClass}`}>
+                                <span>{intent.icon}</span>
+                                <span>{intent.label}</span>
+                              </span>
+                            );
+                          })()}
+
+                          {Boolean(localStorage.getItem(`visualsky_inbox_draft_${t.id}`)) && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-0.5">
+                              <span>✏️</span>
+                              <span>Draft</span>
                             </span>
                           )}
+
                           {t.labels && t.labels.map((lbl, idx) => (
                             <span
                               key={idx}
@@ -1709,90 +2009,90 @@ export const SmartInbox: React.FC = () => {
         }`}>
           {currentThread ? (
             <>
-              {/* Compact & Mobile-Friendly Message Header */}
-              <div className="px-2.5 sm:px-3.5 py-2 border-b border-slate-800 bg-slate-950/95 backdrop-blur-md flex flex-col gap-1.5 shrink-0">
-                {/* Row 1: Back Button + Subject/Sender Info + Star & Trash */}
+              {/* Clean, Modern Conversation Header */}
+              <div className="px-3 sm:px-4 py-2.5 border-b border-slate-800 bg-slate-950/95 shrink-0 space-y-2">
                 <div className="flex items-start sm:items-center justify-between gap-2">
-                  <div className="flex items-start sm:items-center gap-2 min-w-0 flex-1">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
                     <button
                       type="button"
                       onClick={() => setMobileShowChat(false)}
-                      className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 font-extrabold text-xs flex items-center gap-1 md:hidden cursor-pointer shrink-0 active:scale-95 shadow-sm"
-                      title="Back to Inbox List"
+                      className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-cyan-300 font-bold text-xs flex items-center gap-1 md:hidden cursor-pointer shrink-0 active:scale-95"
                     >
                       <ArrowLeft className="w-3.5 h-3.5" />
                       <span>Back</span>
                     </button>
 
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <h2 className="text-xs sm:text-sm md:text-[15px] font-black text-slate-100 truncate max-w-full">
-                          {currentThread.subject}
-                        </h2>
-                        {currentThread.labels && currentThread.labels.map((lbl, idx) => (
-                          <span
-                            key={idx}
-                            className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 flex items-center gap-1"
-                          >
-                            <span>{lbl}</span>
-                            <button
-                              type="button"
-                              onClick={() => removeThreadLabel(currentThread.id, lbl)}
-                              className="hover:text-rose-400 cursor-pointer"
-                              title="Remove label"
-                            >
-                              <X className="w-2.5 h-2.5" />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                      <div className="text-[11px] text-slate-400 flex items-center gap-1.5 flex-wrap mt-0.5">
-                        <span className="font-bold text-slate-200 truncate max-w-[140px] sm:max-w-none">{currentThread.leadName}</span>
-                        <span>&bull;</span>
-                        <button
-                          type="button"
-                          onClick={() => handleCopyText(currentThread.leadEmail, 'header-email', 'Email Copied')}
-                          className="text-cyan-400 hover:text-cyan-300 font-mono flex items-center gap-1 cursor-pointer truncate max-w-[180px] sm:max-w-none"
-                          title="Tap to copy prospect email"
-                        >
-                          <span className="truncate">{currentThread.leadEmail}</span>
-                          {copiedTextId === 'header-email' ? (
-                            <Check className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
-                          ) : (
-                            <Copy className="w-2.5 h-2.5 opacity-70 shrink-0" />
-                          )}
-                        </button>
-                        {currentThread.leadCompany && (
-                          <>
-                            <span className="hidden sm:inline">&bull;</span>
-                            <span className="text-slate-300 truncate hidden sm:inline">{currentThread.leadCompany}</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
+                    <h2 className="text-xs sm:text-sm md:text-base font-extrabold text-white truncate">
+                      {currentThread.subject}
+                    </h2>
                   </div>
 
-                  {/* Top-Right Essential Icons (Always visible & easy to tap) */}
+                  {/* Actions Bar */}
                   <div className="flex items-center gap-1 shrink-0">
-                    {currentThread.isTrash && (
+                    {/* CRM Profile Toggle */}
+                    {matchedCrmLead ? (
                       <button
                         type="button"
-                        onClick={() => restoreThread(currentThread.id)}
-                        className="px-2 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-                        title="Restore to Inbox"
+                        onClick={() => setShowLeadCrmCard(prev => !prev)}
+                        className={`px-2.5 py-1 rounded-lg border text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
+                          showLeadCrmCard
+                            ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200'
+                            : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
+                        }`}
+                        title="View Lead CRM Profile & Notes"
                       >
-                        <CornerUpLeft className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Restore</span>
+                        <User className="w-3.5 h-3.5 text-cyan-400" />
+                        <span className="hidden sm:inline">CRM</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleSaveCurrentSenderToLeads}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1 cursor-pointer transition"
+                        title="Save to CRM Leads"
+                      >
+                        <UserPlus className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="hidden sm:inline">+ Lead</span>
                       </button>
                     )}
+
+                    {/* AI Thread Summary */}
+                    <button
+                      type="button"
+                      onClick={handleAnalyzeThreadIntent}
+                      disabled={isAnalyzingThread}
+                      className={`px-2.5 py-1 rounded-lg border text-xs font-bold flex items-center gap-1 cursor-pointer transition disabled:opacity-50 ${
+                        threadAiSummary && threadAiSummary.threadId === currentThread.id
+                          ? 'bg-purple-600 text-white border-purple-400'
+                          : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-purple-300'
+                      }`}
+                      title="AI Thread Intelligence & Summary"
+                    >
+                      <BrainCircuit className={`w-3.5 h-3.5 ${isAnalyzingThread ? 'animate-spin' : ''}`} />
+                      <span className="hidden sm:inline">{isAnalyzingThread ? 'Thinking...' : 'Summary'}</span>
+                    </button>
+
+                    {/* Export */}
+                    <button
+                      type="button"
+                      onClick={handleExportThread}
+                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-cyan-300 cursor-pointer"
+                      title="Export Transcript"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Star */}
                     <button
                       type="button"
                       onClick={() => toggleThreadStar(currentThread.id)}
-                      className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-amber-400 cursor-pointer active:scale-95"
-                      title="Star conversation"
+                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-amber-400 cursor-pointer"
+                      title="Star (s)"
                     >
                       <Star className={`w-3.5 h-3.5 ${currentThread.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
                     </button>
+
+                    {/* Trash */}
                     <button
                       type="button"
                       onClick={() => {
@@ -1802,81 +2102,74 @@ export const SmartInbox: React.FC = () => {
                           deleteThreadToTrash(currentThread.id);
                         }
                       }}
-                      className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 cursor-pointer active:scale-95"
-                      title={currentThread.isTrash ? 'Delete Permanently' : 'Move to Trash'}
+                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-rose-400 cursor-pointer"
+                      title={currentThread.isTrash ? 'Delete Permanently' : 'Trash (e)'}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
+
+                {/* Sub-row: Lead info with avatar and 1-click email copy */}
+                <div className="flex items-center justify-between gap-2 flex-wrap pt-0.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-500 text-white font-bold text-xs flex items-center justify-center shrink-0">
+                      {currentThread.leadName?.[0] || 'L'}
+                    </div>
+                    <span className="font-bold text-xs text-slate-200 truncate">{currentThread.leadName}</span>
+                    {currentThread.leadCompany && (
+                      <span className="text-xs text-slate-400 truncate">({currentThread.leadCompany})</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleCopyText(currentThread.leadEmail, 'header-email', 'Email Copied')}
+                      className="text-cyan-400 hover:text-cyan-300 font-mono text-[11px] flex items-center gap-1 cursor-pointer truncate"
+                      title="Copy email"
+                    >
+                      <span className="truncate">{currentThread.leadEmail}</span>
+                      {copiedTextId === 'header-email' ? (
+                        <Check className="w-3 h-3 text-emerald-400 shrink-0" />
+                      ) : (
+                        <Copy className="w-3 h-3 opacity-60 shrink-0" />
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Labels on thread */}
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {currentThread.labels && currentThread.labels.map((lbl, idx) => (
+                      <span
+                        key={idx}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-cyan-300 border border-slate-700 flex items-center gap-1"
+                      >
+                        <span>{lbl}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeThreadLabel(currentThread.id, lbl)}
+                          className="hover:text-rose-400 cursor-pointer"
+                          title="Remove label"
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      </span>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setShowLabelMenu(prev => !prev)}
+                      className="px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-400 hover:text-cyan-300 hover:bg-slate-800 cursor-pointer"
+                      title="Add label"
+                    >
+                      + Tag
+                    </button>
+                  </div>
+                </div>
               </div>
 
-              {/* Scrollable Messages Stream - Maximum Vertical Space for Reading */}
+              {/* Scrollable Messages Stream */}
               <div
                 ref={messagesScrollRef}
-                className="flex-1 overflow-y-auto p-2 sm:p-3 md:p-4 space-y-2.5 sm:space-y-3 min-h-0 bg-gradient-to-b from-slate-950/40 to-slate-900/40"
+                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 bg-slate-950/30"
               >
-                {/* Ultra-Compact 1-Line Latest Reply Quick-Translate Bar (when thread has multiple messages) */}
-                {(() => {
-                  const allMsgs = Array.isArray(currentThread.messages) ? currentThread.messages : [];
-                  const latestLeadMsg = [...allMsgs].reverse().find(m => m.sender === 'lead');
-                  if (!latestLeadMsg || messageDirectionFilter === 'user_only' || allMsgs.length <= 1) return null;
-                  const cleanedSpotlight = cleanBodyText(
-                    latestLeadMsg.body,
-                    currentThread.leadCompany,
-                    currentThread.leadName
-                  );
-                  const { mainReply } = splitReplyAndQuotedHistory(cleanedSpotlight);
-                  const spotlightKey = `spotlight-${latestLeadMsg.id || currentThread.id}`;
-
-                  return (
-                    <div className="px-3 py-2 rounded-xl bg-gradient-to-r from-emerald-950/60 via-slate-900/95 to-cyan-950/50 border border-emerald-500/40 space-y-1.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0 flex-1">
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-slate-950 font-black text-[9px] uppercase tracking-wider shrink-0">
-                            📩 Latest Reply
-                          </span>
-                          <span className="text-xs text-emerald-50 font-medium truncate">
-                            {mainReply}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleTranslateMessage(spotlightKey, mainReply)}
-                            className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
-                          >
-                            <Sparkles className="w-3 h-3 text-emerald-300" />
-                            <span>
-                              {translatingMsgId === spotlightKey
-                                ? 'অনুবাদ হচ্ছে...'
-                                : translatedMessagesMap[spotlightKey]
-                                ? 'Hide বাংলা'
-                                : '🇧🇩 বাংলায় বুঝুন'}
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsComposerMinimized(false);
-                              replyTextareaRef.current?.focus();
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-[11px] flex items-center gap-1 cursor-pointer transition"
-                          >
-                            <Reply className="w-3 h-3" />
-                            <span>Reply</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {translatedMessagesMap[spotlightKey] && (
-                        <div className="p-2.5 rounded-lg bg-slate-950/90 border border-emerald-500/40 text-xs text-emerald-200 whitespace-pre-wrap leading-relaxed">
-                          {translatedMessagesMap[spotlightKey]}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
 
                 {(() => {
                   const baseMessages =
@@ -2028,7 +2321,7 @@ export const SmartInbox: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Main Message Body with Crystal-Clear Contrast & Adjustable Size */}
+                        {/* Main Message Body with Crystal-Clear Contrast, Clickable URLs & Adjustable Size */}
                         <div
                           className={`${
                             largeReadingText
@@ -2038,7 +2331,7 @@ export const SmartInbox: React.FC = () => {
                               : 'text-xs md:text-sm text-slate-200'
                           } whitespace-pre-wrap leading-relaxed break-words`}
                         >
-                          {mainReply}
+                          {renderClickableMessageBody(mainReply)}
                         </div>
 
                         {/* Mobile-Friendly On-Demand Attached Files Bar (View & Download Buttons) */}
@@ -2667,48 +2960,115 @@ export const SmartInbox: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Reply Textarea (Hidden when user minimizes composer for full-screen reading) */}
+                  {/* Reply Textarea & Quick Metrics / Deliverability Bar */}
                   {!isComposerMinimized && (
-                    <textarea
-                      ref={replyTextareaRef}
-                      rows={2}
-                      value={replyText}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        setShowReplyAttachDropzone(true);
-                        setIsDraggingReplyFiles(true);
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        setIsDraggingReplyFiles(false);
-                        if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-                          handleAttachFiles(e.dataTransfer.files, 'reply');
-                        }
-                      }}
-                      onFocus={() => {
-                        if (
-                          (currentThread.unreadCount || 0) > 0 ||
-                          (Array.isArray(currentThread.messages) &&
-                            currentThread.messages.some(msg => msg.sender === 'lead' && msg.isRead === false))
-                        ) {
-                          markThreadRead(currentThread.id);
-                        }
-                      }}
-                      onChange={(e) => setReplyText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && (replyText.trim() || replyAttachments.length > 0)) {
-                          handleSendReply(e as any);
-                        }
-                      }}
-                      placeholder={`Reply to ${currentThread.leadName} (${currentThread.leadEmail})...`}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner resize-y"
-                    />
+                    <div className="space-y-1.5">
+                      {/* Live Metrics: Draft Status + Deliverability + Quick Tone Refiners */}
+                      <div className="flex flex-wrap items-center justify-between gap-1.5 px-1 text-[11px]">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {draftSavedPulse ? (
+                            <span className="text-emerald-400 font-bold flex items-center gap-1 animate-pulse">
+                              <Check className="w-3 h-3" />
+                              <span>Draft saved</span>
+                            </span>
+                          ) : replyText.trim() ? (
+                            <span className="text-slate-400 font-mono text-[10px]">
+                              {replyText.trim().split(/\s+/).filter(Boolean).length} words &bull; {replyText.length} chars
+                            </span>
+                          ) : (
+                            <span className="text-slate-500 text-[10px]">Type your message or use AI Draft</span>
+                          )}
+
+                          {replyText.trim().length > 15 && (
+                            <span
+                              className={`text-[10px] font-mono font-bold flex items-center gap-1 px-1.5 py-0.5 rounded ${
+                                spamReport.score >= 90
+                                  ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                                  : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                              }`}
+                              title={
+                                spamReport.flaggedWords.length > 0
+                                  ? `Spam triggers detected: ${spamReport.flaggedWords.join(', ')}`
+                                  : 'Clean deliverability score'
+                              }
+                            >
+                              <ShieldCheck className="w-3 h-3" />
+                              <span>{spamReport.score}% Deliverability</span>
+                              {spamReport.flaggedWords.length > 0 && (
+                                <span className="text-rose-400 font-normal">
+                                  ({spamReport.flaggedWords.slice(0, 2).join(', ')})
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* 1-Click Tone Quick Refiners when replyText is present */}
+                        {replyText.trim().length > 20 && (
+                          <div className="flex items-center gap-1 shrink-0 overflow-x-auto no-scrollbar">
+                            <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">Tone:</span>
+                            {[
+                              { label: '💼 Formal', tone: 'Professional & Direct' },
+                              { label: '🤝 Friendly', tone: 'Warm & Friendly' },
+                              { label: '⚡ Direct', tone: 'Short & Punchy (1-2 sentences)' },
+                              { label: '🎯 Persuasive', tone: 'Persuasive & Value-Focused' },
+                            ].map(t => (
+                              <button
+                                key={t.tone}
+                                type="button"
+                                disabled={isChangingTone}
+                                onClick={() => handleAdjustReplyTone(t.tone)}
+                                className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-[10px] font-bold text-slate-300 hover:text-cyan-300 transition cursor-pointer active:scale-95 disabled:opacity-40 whitespace-nowrap"
+                                title={`Rewrite reply in ${t.tone} tone`}
+                              >
+                                {t.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <textarea
+                        ref={replyTextareaRef}
+                        rows={2}
+                        value={replyText}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          setShowReplyAttachDropzone(true);
+                          setIsDraggingReplyFiles(true);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setIsDraggingReplyFiles(false);
+                          if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+                            handleAttachFiles(e.dataTransfer.files, 'reply');
+                          }
+                        }}
+                        onFocus={() => {
+                          if (
+                            (currentThread.unreadCount || 0) > 0 ||
+                            (Array.isArray(currentThread.messages) &&
+                              currentThread.messages.some(msg => msg.sender === 'lead' && msg.isRead === false))
+                          ) {
+                            markThreadRead(currentThread.id);
+                          }
+                        }}
+                        onChange={(e) => setReplyText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && (replyText.trim() || replyAttachments.length > 0)) {
+                            handleSendReply(e as any);
+                          }
+                        }}
+                        placeholder={`Reply to ${currentThread.leadName} (${currentThread.leadEmail})... (Press Ctrl+Enter to send)`}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 shadow-inner resize-y"
+                      />
+                    </div>
                   )}
 
-                  {/* ONE UNIFIED BOTTOM LINE: Ordered by Most-Used Options First, Never Sliding Under Send Reply */}
-                  <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
-                    <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 flex-1 min-w-0">
-                      {/* 1. Attach File (Most Used #1: Drag & Drop + Browse from Folder) */}
+                  {/* Clean Bottom Actions Bar */}
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {/* 1. Attach File */}
                       <button
                         type="button"
                         onClick={() => {
@@ -2716,29 +3076,27 @@ export const SmartInbox: React.FC = () => {
                           setShowReplyAttachDropzone(prev => !prev);
                           setIsAiCopilotExpanded(false);
                           setShowTemplateMenu(false);
-                          setShowLabelMenu(false);
-                          setShowLeadCrmCard(false);
                           setShowMoreOptionsMenu(false);
                         }}
                         disabled={isUploadingAttachment}
-                        className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-extrabold flex items-center gap-1 cursor-pointer transition shadow-sm shrink-0 active:scale-95 ${
+                        className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer transition shadow-xs shrink-0 active:scale-95 ${
                           showReplyAttachDropzone || replyAttachments.length > 0
-                            ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-                            : 'bg-emerald-950/70 hover:bg-emerald-900 text-emerald-200 border-emerald-500/40'
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-extrabold'
+                            : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-800'
                         }`}
-                        title="Attach any file (Drag & Drop or Select from Folder)"
+                        title="Attach files or screenshots"
                       >
-                        <Paperclip className="w-3.5 h-3.5" />
+                        <Paperclip className="w-3.5 h-3.5 text-emerald-400" />
                         <span>
                           {isUploadingAttachment
                             ? 'Attaching...'
                             : replyAttachments.length > 0
-                            ? `Attach (${replyAttachments.length})`
-                            : 'Attach File'}
+                            ? `Files (${replyAttachments.length})`
+                            : 'Attach'}
                         </span>
                       </button>
 
-                      {/* 2. AI Draft (Most Used #2: 1-Click AI Reply Generator) */}
+                      {/* 2. AI Reply Draft */}
                       <button
                         type="button"
                         onClick={() => {
@@ -2746,22 +3104,20 @@ export const SmartInbox: React.FC = () => {
                           setIsAiCopilotExpanded(prev => !prev);
                           setShowReplyAttachDropzone(false);
                           setShowTemplateMenu(false);
-                          setShowLabelMenu(false);
-                          setShowLeadCrmCard(false);
                           setShowMoreOptionsMenu(false);
                         }}
-                        className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-extrabold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95 ${
+                        className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer transition shrink-0 active:scale-95 ${
                           isAiCopilotExpanded
-                            ? 'bg-purple-600 text-white border-purple-400 shadow-sm shadow-purple-500/30'
-                            : 'bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 border-purple-700/60'
+                            ? 'bg-purple-600 text-white border-purple-400 shadow-sm shadow-purple-500/25'
+                            : 'bg-purple-950/40 hover:bg-purple-900/60 text-purple-200 border-purple-500/30'
                         }`}
-                        title="Toggle AI Draft Presets & Custom AI Reply Generator"
+                        title="AI Reply Assistant"
                       >
                         <Sparkles className="w-3.5 h-3.5 text-purple-300" />
-                        <span>AI Draft</span>
+                        <span>AI Reply</span>
                       </button>
 
-                      {/* 3. Template Picker (Most Used #3: Insert Saved Email Template) */}
+                      {/* 3. Template Picker */}
                       <button
                         type="button"
                         onClick={() => {
@@ -2769,96 +3125,20 @@ export const SmartInbox: React.FC = () => {
                           setShowTemplateMenu(prev => !prev);
                           setShowReplyAttachDropzone(false);
                           setIsAiCopilotExpanded(false);
-                          setShowLabelMenu(false);
-                          setShowLeadCrmCard(false);
                           setShowMoreOptionsMenu(false);
                         }}
-                        className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95 ${
+                        className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer transition shrink-0 active:scale-95 ${
                           showTemplateMenu
                             ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200'
-                            : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-200'
+                            : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
                         }`}
                         title="Insert saved email template"
                       >
-                        <FileText className="w-3 h-3 text-cyan-400" />
+                        <FileText className="w-3.5 h-3.5 text-cyan-400" />
                         <span>Template</span>
                       </button>
 
-                      {/* 4. Label Assignment (Most Used #4: Tag Thread as Hot Lead, Interested, etc.) */}
-                      {!currentThread.isTrash && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowLabelMenu(prev => !prev);
-                            setShowReplyAttachDropzone(false);
-                            setIsAiCopilotExpanded(false);
-                            setShowTemplateMenu(false);
-                            setShowLeadCrmCard(false);
-                            setShowMoreOptionsMenu(false);
-                          }}
-                          className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95 ${
-                            showLabelMenu
-                              ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200'
-                              : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
-                          }`}
-                          title="Assign or Remove Label"
-                        >
-                          <Tag className="w-3 h-3 text-cyan-400" />
-                          <span>Label</span>
-                        </button>
-                      )}
-
-                      {/* 5. CRM Info / Save Lead (Most Used #5: View & Edit Lead Status & Notes) */}
-                      {matchedCrmLead ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowLeadCrmCard(prev => !prev);
-                            setShowReplyAttachDropzone(false);
-                            setIsAiCopilotExpanded(false);
-                            setShowTemplateMenu(false);
-                            setShowLabelMenu(false);
-                            setShowMoreOptionsMenu(false);
-                          }}
-                          className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95 ${
-                            showLeadCrmCard
-                              ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200'
-                              : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
-                          }`}
-                          title="View & Edit Lead CRM Profile and Notes"
-                        >
-                          <User className="w-3 h-3 text-cyan-400" />
-                          <span>CRM Info</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={handleSaveCurrentSenderToLeads}
-                          className="px-2.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95"
-                          title="Save this contact to your Leads Directory"
-                        >
-                          <UserPlus className="w-3 h-3 text-emerald-400" />
-                          <span>+ Lead</span>
-                        </button>
-                      )}
-
-                      {/* 6. AI Summary (Most Used #6: Thread Summary & Deal Intelligence) */}
-                      <button
-                        type="button"
-                        onClick={handleAnalyzeThreadIntent}
-                        disabled={isAnalyzingThread}
-                        className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 cursor-pointer transition disabled:opacity-50 shrink-0 active:scale-95 ${
-                          threadAiSummary && threadAiSummary.threadId === currentThread.id
-                            ? 'bg-indigo-600 text-white border-indigo-400'
-                            : 'bg-indigo-950/60 hover:bg-indigo-900/80 border-indigo-500/40 text-indigo-200'
-                        }`}
-                        title="AI Thread Summary & Recommended Action"
-                      >
-                        <BrainCircuit className={`w-3.5 h-3.5 ${isAnalyzingThread ? 'animate-spin' : ''}`} />
-                        <span>{isAnalyzingThread ? 'Analyzing...' : 'AI Summary'}</span>
-                      </button>
-
-                      {/* 7. More Options Toggle (From SMTP, +Slot, Message Filter, Text Size, Hide/Show Box) */}
+                      {/* 4. More Options (SMTP sender, Tone, Calendar Slot) */}
                       <button
                         type="button"
                         onClick={() => {
@@ -2866,17 +3146,15 @@ export const SmartInbox: React.FC = () => {
                           setShowReplyAttachDropzone(false);
                           setIsAiCopilotExpanded(false);
                           setShowTemplateMenu(false);
-                          setShowLabelMenu(false);
-                          setShowLeadCrmCard(false);
                         }}
-                        className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95 ${
+                        className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1 cursor-pointer transition shrink-0 active:scale-95 ${
                           showMoreOptionsMenu
                             ? 'bg-slate-700 text-white border-cyan-400'
-                            : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
+                            : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-400 hover:text-slate-200'
                         }`}
-                        title="More options: From SMTP account, +Meeting Slot, Filter messages, Text size, Hide/Show box"
+                        title="More sending options"
                       >
-                        <span>⚙️ More</span>
+                        <span>Options</span>
                       </button>
                     </div>
 
@@ -3395,6 +3673,56 @@ export const SmartInbox: React.FC = () => {
                   </div>
                 );
               })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* KEYBOARD SHORTCUTS MODAL GUIDE */}
+      {showShortcutsModal && (
+        <div
+          onClick={() => setShowShortcutsModal(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-[#090d16] border border-cyan-500/40 w-full max-w-md rounded-2xl p-4 sm:p-5 space-y-4 shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Keyboard className="w-4 h-4 text-cyan-400" />
+                <h3 className="font-extrabold text-sm text-white">Smart Inbox Keyboard Shortcuts</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowShortcutsModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-2 text-xs">
+              {[
+                { key: 'j or Alt + ↓', desc: 'Jump to Next Email Thread' },
+                { key: 'k or Alt + ↑', desc: 'Jump to Previous Email Thread' },
+                { key: 'r', desc: 'Focus Reply Box instantly' },
+                { key: 's', desc: 'Star / Unstar active conversation' },
+                { key: 'e', desc: 'Move conversation to Trash' },
+                { key: 'c', desc: 'Compose new cold outbound email' },
+                { key: 'Ctrl + Enter', desc: 'Send Reply draft' },
+                { key: 'Esc', desc: 'Close open modal, drawer, or preview' },
+                { key: '?', desc: 'Toggle this Shortcuts Guide' },
+              ].map(sc => (
+                <div key={sc.key} className="flex items-center justify-between py-1.5 border-b border-slate-800/60">
+                  <span className="text-slate-300 font-medium">{sc.desc}</span>
+                  <kbd className="px-2 py-0.5 rounded bg-slate-800 text-cyan-300 font-mono text-[11px] font-bold border border-slate-700">
+                    {sc.key}
+                  </kbd>
+                </div>
+              ))}
+            </div>
+            <div className="text-[11px] text-slate-400 text-center pt-1">
+              Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">Esc</kbd> anytime to close.
             </div>
           </div>
         </div>

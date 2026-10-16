@@ -172,8 +172,8 @@ function sanitizeForFirestore(payload: WorkspaceData): WorkspaceData {
     if (Array.isArray(clone.sentEmails) && clone.sentEmails.length > 400) {
       clone.sentEmails = clone.sentEmails.slice(0, 400);
     }
-    if (Array.isArray(clone.minedLeads) && clone.minedLeads.length > 300) {
-      clone.minedLeads = clone.minedLeads.slice(0, 300);
+    if (Array.isArray(clone.minedLeads) && clone.minedLeads.length > 2000) {
+      clone.minedLeads = clone.minedLeads.slice(0, 2000);
     }
     if (Array.isArray(clone.aiChatSessions) && clone.aiChatSessions.length > 50) {
       clone.aiChatSessions = clone.aiChatSessions.slice(0, 50);
@@ -434,7 +434,9 @@ export async function queryUserWorkspace(identifiers: {
       permanentlyDeletedIds: allDeletedArr,
       userDeletedCampaigns: anyUserDeletedCampaigns || Boolean(primary.userDeletedCampaigns || secondary.userDeletedCampaigns),
       sentEmails: mergeWorkspaceCollectionsById(primary.sentEmails, secondary.sentEmails, cumulativeTombstones),
-      minedLeads: mergeWorkspaceCollectionsById(primary.minedLeads, secondary.minedLeads, cumulativeTombstones),
+      minedLeads: (Array.isArray(primary.minedLeads) && primary.minedLeads.length > 0)
+        ? primary.minedLeads
+        : (Array.isArray(secondary.minedLeads) ? secondary.minedLeads : []),
       aiChatSessions: mergeWorkspaceCollectionsById(primary.aiChatSessions, secondary.aiChatSessions, cumulativeTombstones),
       aiActiveSessionId: primary.aiActiveSessionId || secondary.aiActiveSessionId,
       userProfile: {

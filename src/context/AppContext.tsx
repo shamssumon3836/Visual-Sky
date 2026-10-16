@@ -1953,14 +1953,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       (latestWorkspaceRef.current as any).sentEmails = liveSent;
     }
 
-    // 9. Mined Leads Hydration
+    // 9. Mined Leads Hydration (Active search results must NEVER be mixed with stale previous searches)
     if (Array.isArray(data.minedLeads)) {
-      const mergedMined = mergeWorkspaceCollectionsById(
-        data.minedLeads,
-        latestWorkspaceRef.current.minedLeads,
-        permDeletedSet
-      );
-      const cleanMined = mergedMined.filter((m: any) => m && !permDeletedSet.has(String(m.id)));
+      const localMined = Array.isArray(latestWorkspaceRef.current.minedLeads)
+        ? latestWorkspaceRef.current.minedLeads
+        : [];
+      const targetMined = localMined.length > 0 ? localMined : data.minedLeads;
+      const cleanMined = targetMined.filter((m: any) => m && !permDeletedSet.has(String(m.id)));
       setMinedLeadsState(cleanMined);
       try { localStorage.setItem('visualsky_mined_leads', JSON.stringify(cleanMined)); } catch {}
       (latestWorkspaceRef.current as any).minedLeads = cleanMined;
@@ -4456,7 +4455,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                host: targetSmtp.host,
+                host: ((targetSmtp.host || '').trim().toLowerCase() === 'imap.visualsky.pro' || (targetSmtp.host || '').trim().toLowerCase() === 'smtp.visualsky.pro')
+                  ? 'mail.visualsky.pro'
+                  : targetSmtp.host,
                 port: 993,
                 username: targetSmtp.username,
                 password: targetSmtp.password,
