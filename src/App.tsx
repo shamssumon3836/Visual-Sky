@@ -444,58 +444,154 @@ interface RootErrorBoundaryProps {
 
 interface RootErrorBoundaryState {
   hasError: boolean;
+  error?: any;
+  showDetails?: boolean;
 }
 
 class RootErrorBoundary extends (React.Component as any) {
-  state: RootErrorBoundaryState = { hasError: false };
+  state: RootErrorBoundaryState = { hasError: false, error: null, showDetails: false };
   props: RootErrorBoundaryProps;
   setState: any;
 
   constructor(props: RootErrorBoundaryProps) {
     super(props);
     this.props = props;
-    this.state = { hasError: false };
+    this.state = { hasError: false, error: null, showDetails: false };
   }
 
-  static getDerivedStateFromError() {
-    return { hasError: true };
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
   }
 
-  componentDidCatch(error: any) {
-    console.warn('[VisualSky Root Recovery]:', error);
+  componentDidCatch(error: any, info: any) {
+    console.warn('[VisualSky Root Recovery]:', error, info);
     try {
+      // 1. Reset active tab to default safe dashboard
+      localStorage.setItem('visualsky_active_tab', 'dashboard');
+
+      // 2. Safely sanitize user object
       const savedUser = localStorage.getItem('visualsky_current_user');
       if (savedUser) {
-        const parsed = JSON.parse(savedUser);
-        if (parsed && typeof parsed === 'object') {
-          parsed.quotaUsed = Number(parsed.quotaUsed) || 0;
-          parsed.quotaLimit = Number(parsed.quotaLimit) || 100000;
-          parsed.aiCredits = Number(parsed.aiCredits) || 50000;
-          localStorage.setItem('visualsky_current_user', JSON.stringify(parsed));
+        try {
+          const parsed = JSON.parse(savedUser);
+          if (parsed && typeof parsed === 'object') {
+            parsed.quotaUsed = Number(parsed.quotaUsed) || 0;
+            parsed.quotaLimit = Number(parsed.quotaLimit) || 100000;
+            parsed.aiCredits = Number(parsed.aiCredits) || 50000;
+            localStorage.setItem('visualsky_current_user', JSON.stringify(parsed));
+          }
+        } catch {
+          localStorage.removeItem('visualsky_current_user');
+        }
+      }
+
+      // 3. Purge any corrupted JSON arrays in localStorage
+      const keysToValidate = [
+        'visualsky_leads',
+        'visualsky_threads',
+        'visualsky_campaigns',
+        'visualsky_smtp',
+        'visualsky_templates',
+        'visualsky_tmpl_categories',
+        'visualsky_tags',
+        'visualsky_notifs',
+        'visualsky_mined_leads'
+      ];
+      for (const k of keysToValidate) {
+        const val = localStorage.getItem(k);
+        if (val) {
+          try {
+            JSON.parse(val);
+          } catch {
+            localStorage.removeItem(k);
+          }
         }
       }
     } catch {}
   }
 
+  handleReload = () => {
+    try {
+      localStorage.setItem('visualsky_active_tab', 'dashboard');
+    } catch {}
+    this.setState({ hasError: false, error: null });
+    window.location.reload();
+  };
+
+  handleHardReset = () => {
+    try {
+      const keysToClear = [
+        'visualsky_threads',
+        'visualsky_leads',
+        'visualsky_campaigns',
+        'visualsky_notifs',
+        'visualsky_mined_leads',
+        'visualsky_cols',
+        'visualsky_active_tab'
+      ];
+      for (const k of keysToClear) {
+        localStorage.removeItem(k);
+      }
+      localStorage.setItem('visualsky_active_tab', 'dashboard');
+    } catch {}
+    this.setState({ hasError: false, error: null });
+    window.location.reload();
+  };
+
   render() {
     if (this.state.hasError) {
+      const errMsg =
+        this.state.error?.message ||
+        (typeof this.state.error === 'string' ? this.state.error : 'Unknown runtime exception');
+
       return (
-        <div className="min-h-screen bg-[#080c14] text-slate-100 flex items-center justify-center p-6">
-          <div className="max-w-md w-full bg-slate-900/90 border border-slate-800 rounded-2xl p-6 text-center space-y-4">
-            <h2 className="text-lg font-bold text-white">Workspace Restored</h2>
-            <p className="text-xs text-slate-400">
-              Your session cache was automatically repaired. Click below to continue.
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                this.setState({ hasError: false });
-                window.location.reload();
-              }}
-              className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs transition cursor-pointer"
-            >
-              Reload Workspace
-            </button>
+        <div className="min-h-screen bg-[#080c14] text-slate-100 flex items-center justify-center p-6 selection:bg-cyan-500/30 selection:text-cyan-200">
+          <div className="max-w-md w-full bg-slate-900/95 border border-slate-800 rounded-3xl p-6 sm:p-8 text-center space-y-5 shadow-2xl">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 font-black text-2xl shadow-lg shadow-cyan-500/10">
+              VS
+            </div>
+
+            <div className="space-y-1.5">
+              <h2 className="text-xl font-extrabold text-white">Workspace Health Check</h2>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Your workspace session cache has been refreshed and safely restored to the dashboard.
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={this.handleReload}
+                className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-extrabold text-xs transition cursor-pointer shadow-md shadow-cyan-500/20 active:scale-95"
+              >
+                Reload Workspace
+              </button>
+
+              <button
+                type="button"
+                onClick={this.handleHardReset}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs border border-slate-700 transition cursor-pointer active:scale-95"
+              >
+                Reset Local Cache
+              </button>
+            </div>
+
+            {errMsg && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => this.setState({ showDetails: !this.state.showDetails })}
+                  className="text-[11px] text-slate-500 hover:text-slate-400 cursor-pointer underline"
+                >
+                  {this.state.showDetails ? 'Hide Diagnostics' : 'View Diagnostics'}
+                </button>
+                {this.state.showDetails && (
+                  <pre className="mt-2 text-left text-[10px] font-mono bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-rose-300 overflow-x-auto whitespace-pre-wrap max-h-32">
+                    {errMsg}
+                  </pre>
+                )}
+              </div>
+            )}
           </div>
         </div>
       );

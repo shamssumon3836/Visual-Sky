@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
+import { isNotificationGranted } from '../../utils/safeBrowser';
 import { VisualSkyLogo } from '../brand/VisualSkyLogo';
 import { ProfileModal } from '../profile/ProfileModal';
 import { 
@@ -83,12 +84,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
   const [showSearchPopover, setShowSearchPopover] = useState<boolean>(false);
   const [showMobileSearch, setShowMobileSearch] = useState<boolean>(false);
   const [notifFilter, setNotifFilter] = useState<'all' | 'reply' | 'open' | 'bounce'>('all');
-  const [browserPushGranted, setBrowserPushGranted] = useState<boolean>(() => {
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      return Notification.permission === 'granted';
-    }
-    return false;
-  });
+  const [browserPushGranted, setBrowserPushGranted] = useState<boolean>(() => isNotificationGranted());
 
   const notifRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
@@ -622,7 +618,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
                     type="button"
                     onClick={async () => {
                       const ok = await requestDesktopNotificationPermission();
-                      const granted = ok || (typeof Notification !== 'undefined' && Notification.permission === 'granted');
+                      const granted = ok || isNotificationGranted();
                       setBrowserPushGranted(granted);
                       try {
                         await fetch('/api/push/test', {

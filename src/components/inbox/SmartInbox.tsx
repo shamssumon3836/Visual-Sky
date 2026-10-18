@@ -1945,7 +1945,13 @@ export const SmartInbox: React.FC = () => {
                             );
                           })()}
 
-                          {Boolean(localStorage.getItem(`visualsky_inbox_draft_${t.id}`)) && (
+                          {(() => {
+                            try {
+                              return Boolean(localStorage.getItem(`visualsky_inbox_draft_${t.id}`));
+                            } catch {
+                              return false;
+                            }
+                          })() && (
                             <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-0.5">
                               <span>✏️</span>
                               <span>Draft</span>

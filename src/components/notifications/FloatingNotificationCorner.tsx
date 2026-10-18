@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { AppNotification } from '../../types';
+import { getSafeNotificationPermission } from '../../utils/safeBrowser';
 import {
   Mail,
   Eye,
@@ -34,17 +35,15 @@ export const FloatingNotificationCorner: React.FC = () => {
   const [visibleToasts, setVisibleToasts] = useState<AppNotification[]>([]);
   const [quickReplyMap, setQuickReplyMap] = useState<Record<string, string>>({});
   const [sendingReplyId, setSendingReplyId] = useState<string | null>(null);
-  const [nativePermission, setNativePermission] = useState<NotificationPermission>(
-    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'default'
+  const [nativePermission, setNativePermission] = useState<NotificationPermission>(() =>
+    getSafeNotificationPermission()
   );
   const seenIdsRef = useRef<Set<string>>(new Set());
   const initializedRef = useRef<boolean>(false);
 
   // Sync native permission status
   useEffect(() => {
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      setNativePermission(Notification.permission);
-    }
+    setNativePermission(getSafeNotificationPermission());
   }, [notificationSettings.desktopPushEnabled]);
 
   // Pre-populate existing notifications on first mount so only new live events pop up
@@ -150,9 +149,7 @@ export const FloatingNotificationCorner: React.FC = () => {
   const handleEnableNativeAlerts = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const granted = await requestDesktopNotificationPermission();
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      setNativePermission(Notification.permission);
-    }
+    setNativePermission(getSafeNotificationPermission());
     if (granted) {
       playNotificationSound('chime');
       sendDesktopNotification({

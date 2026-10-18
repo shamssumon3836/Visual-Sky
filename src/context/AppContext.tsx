@@ -22,6 +22,7 @@ import {
 } from '../types';
 import confetti from 'canvas-confetti';
 import { audioEngine } from '../utils/audioPlayer';
+import { getSafeNotificationPermission, isNotificationGranted } from '../utils/safeBrowser';
 import { supabase, isSupabaseConfigured, signOutSupabase } from '../lib/supabase';
 import {
   queryUserWorkspace,
@@ -2435,7 +2436,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       navigator.serviceWorker
         .register('/sw.js', { scope: '/' })
         .then(() => {
-          if ('Notification' in window && Notification.permission === 'granted') {
+          if (isNotificationGranted()) {
             subscribeBrowserToWebPush().catch(() => {});
           }
         })
@@ -2444,9 +2445,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // If Notification permission is still 'default', prompt automatically on first user click so background push works immediately
     const handleFirstInteractionForPush = () => {
-      if ('Notification' in window && Notification.permission === 'default') {
+      const perm = getSafeNotificationPermission();
+      if (perm === 'default') {
         requestDesktopNotificationPermission().catch(() => {});
-      } else if ('Notification' in window && Notification.permission === 'granted') {
+      } else if (perm === 'granted') {
         subscribeBrowserToWebPush().catch(() => {});
       }
     };
@@ -2506,9 +2508,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const requestDesktopNotificationPermission = async (): Promise<boolean> => {
     let nativeGranted = false;
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      try {
-        if (Notification.permission === 'granted') {
+    try {
+      if (typeof window !== 'undefined' && 'Notification' in window && typeof Notification !== 'undefined') {
+        if (isNotificationGranted()) {
           nativeGranted = true;
         } else {
           const permission = await new Promise<NotificationPermission>((resolve) => {
@@ -2523,9 +2525,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
           nativeGranted = permission === 'granted';
         }
-      } catch (err) {
-        console.warn('Native notification permission not available:', err);
       }
+    } catch (err) {
+      console.warn('Native notification permission not available:', err);
     }
 
     updateNotificationSettings({ desktopPushEnabled: true, soundEnabled: true });
@@ -2548,10 +2550,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch {}
     }
 
-    if (activeSettings.desktopPushEnabled === false || !('Notification' in window)) {
+    if (activeSettings.desktopPushEnabled === false || !isNotificationGranted()) {
       return;
     }
-    if (Notification.permission !== 'granted') return;
 
     const notifTag = notif.tag || notif.id;
     const notifOptions: any = {
