@@ -119,7 +119,62 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
   const [uploadedFileName, setUploadedFileName] = useState<string>('');
   const [parsedLeadsPreview, setParsedLeadsPreview] = useState<Partial<Lead>[]>([]);
   const [uploadError, setUploadError] = useState<string>('');
+  const [showDuplicateDetails, setShowDuplicateDetails] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Real-time Duplicate Email Detector across active leads & uploaded file
+  const duplicateAnalysis = useMemo(() => {
+    if (parsedLeadsPreview.length === 0) {
+      return {
+        duplicateLeads: [] as Array<{ item: Partial<Lead>; existingMatch?: Lead; reason: string }>,
+        uniqueLeads: [] as Partial<Lead>[],
+        duplicateCount: 0,
+        uniqueCount: 0
+      };
+    }
+
+    const existingEmailMap = new Map<string, Lead>();
+    leads.forEach(l => {
+      if (!l.isTrash && l.email) {
+        existingEmailMap.set(l.email.trim().toLowerCase(), l);
+      }
+    });
+
+    const seenInBatch = new Set<string>();
+    const duplicateLeads: Array<{ item: Partial<Lead>; existingMatch?: Lead; reason: string }> = [];
+    const uniqueLeads: Partial<Lead>[] = [];
+
+    parsedLeadsPreview.forEach(item => {
+      const email = (item.email || '').trim().toLowerCase();
+      if (!email) {
+        uniqueLeads.push(item);
+        return;
+      }
+
+      if (existingEmailMap.has(email)) {
+        duplicateLeads.push({
+          item,
+          existingMatch: existingEmailMap.get(email),
+          reason: 'Already in Lead Directory'
+        });
+      } else if (seenInBatch.has(email)) {
+        duplicateLeads.push({
+          item,
+          reason: 'Duplicate within uploaded file'
+        });
+      } else {
+        seenInBatch.add(email);
+        uniqueLeads.push(item);
+      }
+    });
+
+    return {
+      duplicateLeads,
+      uniqueLeads,
+      duplicateCount: duplicateLeads.length,
+      uniqueCount: uniqueLeads.length
+    };
+  }, [parsedLeadsPreview, leads]);
 
   // Sync default tag if tags array updates
   useEffect(() => {
@@ -487,7 +542,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                 email: item.email || `lead${parsed.length + 1}@company.com`,
                 company: item.company || 'Enterprise Corp',
                 title: item.title || 'Decision Maker',
-                phone: item.phone || '+1 (555) 000-0000',
+                phone: item.phone ? String(item.phone).trim() : '',
                 website: item.website || 'https://example.com',
                 niche: item.niche || 'Imported Target',
                 location: item.location || 'United States',
@@ -539,7 +594,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
           let name = '';
           let company = '';
           let title = 'Decision Maker';
-          let phone = '+1 (555) 019-2834';
+          let phone = '';
           let website = 'https://example.com';
 
           if (hasHeader) {
@@ -577,7 +632,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
               email: email || `contact${parsed.length + 1}@leadtarget.io`,
               company: company || 'Enterprise Partner',
               title: title || 'Executive Decision Maker',
-              phone: phone || '+1 (555) 019-2834',
+              phone: phone ? phone.trim() : '',
               website: website || 'https://example.com',
               niche: 'Imported CSV Target',
               location: 'United States',
@@ -629,17 +684,62 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
     }
   };
 
-  const handleConfirmUpload = () => {
+  const handleConfirmUpload = (allowDuplicates: boolean = false) => {
     if (parsedLeadsPreview.length === 0) return;
     const tagToAssign = uploadSelectedTag || leadTags[0]?.name || 'Imported Leads';
-    const leadsWithTag = parsedLeadsPreview.map(lead => ({
+
+    // If duplicate emails exist and permission is NOT granted, import only the unique leads
+    const leadsToImport = (!allowDuplicates && duplicateAnalysis.duplicateCount > 0)
+      ? duplicateAnalysis.uniqueLeads
+      : parsedLeadsPreview;
+
+    if (leadsToImport.length === 0) {
+      addNotification({
+        title: 'No New Leads to Import',
+        message: 'All leads in this file already exist in your directory. Upload was skipped.',
+        type: 'warning'
+      });
+      setShowUploadModal(false);
+      setParsedLeadsPreview([]);
+      setUploadedFileName('');
+      setShowDuplicateDetails(false);
+      return;
+    }
+
+    const leadsWithTag = leadsToImport.map(lead => ({
       ...lead,
       tags: [tagToAssign]
     }));
+
     addLeads(leadsWithTag, tagToAssign);
     setShowUploadModal(false);
     setParsedLeadsPreview([]);
     setUploadedFileName('');
+    setShowDuplicateDetails(false);
+
+    if (allowDuplicates && duplicateAnalysis.duplicateCount > 0) {
+      addNotification({
+        title: `Imported ${leadsToImport.length} Leads (Duplicates Allowed) ✨`,
+        message: `Imported with permission, including ${duplicateAnalysis.duplicateCount} duplicate email(s).`,
+        type: 'lead',
+        linkTab: 'leads'
+      });
+    } else if (duplicateAnalysis.duplicateCount > 0) {
+      addNotification({
+        title: `Imported ${leadsToImport.length} Unique Leads ✨`,
+        message: `Skipped ${duplicateAnalysis.duplicateCount} duplicate email(s) that already exist in your directory.`,
+        type: 'lead',
+        linkTab: 'leads'
+      });
+    } else {
+      addNotification({
+        title: `Imported ${leadsToImport.length} Leads ✨`,
+        message: `All ${leadsToImport.length} leads successfully imported with tag "${tagToAssign}".`,
+        type: 'lead',
+        linkTab: 'leads'
+      });
+    }
+
     confetti({ particleCount: 60, spread: 70 });
   };
 
@@ -1164,10 +1264,14 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                         {/* Phone - Strictly Single Line (No 2nd line wrapping) */}
                         {isColVisible('phone') && (
                           <td className="p-3.5">
-                            <div className="font-mono text-emerald-400 font-medium text-[11px] flex items-center gap-1.5 whitespace-nowrap">
-                              <Phone className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                              <span>{lead.phone || '+1 (555) 000-0000'}</span>
-                            </div>
+                            {lead.phone ? (
+                              <div className="font-mono text-emerald-400 font-medium text-[11px] flex items-center gap-1.5 whitespace-nowrap">
+                                <Phone className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                <span>{lead.phone}</span>
+                              </div>
+                            ) : (
+                              <span className="text-[11px] text-slate-500 font-mono whitespace-nowrap">—</span>
+                            )}
                           </td>
                         )}
 
@@ -1560,7 +1664,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                   />
                 </div>
                 <div>
-                  <label className="text-[11px] font-bold text-slate-300 block mb-1">Direct Phone</label>
+                  <label className="text-[11px] font-bold text-slate-300 block mb-1">Direct Phone (Optional / ঐচ্ছিক)</label>
                   <input
                     type="text"
                     value={newLeadData.phone}
@@ -1725,6 +1829,74 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                         </div>
                       </div>
                     )}
+
+                    {/* ⚠️ DUPLICATE EMAIL DETECTION & PERMISSION BLOCK */}
+                    {duplicateAnalysis.duplicateCount > 0 ? (
+                      <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/50 space-y-2.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-amber-500 text-slate-950">
+                                ⚠️ Duplicate Warning
+                              </span>
+                              <span className="text-xs font-bold text-amber-200">
+                                {duplicateAnalysis.duplicateCount}টি ডুপ্লিকেট ইমেইল পাওয়া গেছে
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-300 leading-relaxed">
+                              ফাইলের <strong className="text-amber-300">{duplicateAnalysis.duplicateCount}টি</strong> ইমেইল ইতিমধ্যে পূর্বের লিড লিস্টে বিদ্যমান। অনুমতি ছাড়া ডুপ্লিকেট আপলোড হবে না।
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setShowDuplicateDetails(prev => !prev)}
+                            className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline cursor-pointer shrink-0 mt-0.5"
+                          >
+                            {showDuplicateDetails ? 'লুকান ▲' : `লিস্ট দেখুন (${duplicateAnalysis.duplicateCount}) ▼`}
+                          </button>
+                        </div>
+
+                        {showDuplicateDetails && (
+                          <div className="max-h-32 overflow-y-auto space-y-1 pr-1 bg-slate-950/80 p-2.5 rounded-xl border border-amber-500/20">
+                            {duplicateAnalysis.duplicateLeads.map((dup, i) => (
+                              <div key={i} className="flex items-center justify-between text-[11px] py-1 px-2.5 rounded bg-slate-900/90 border border-slate-800">
+                                <div className="flex items-center gap-1.5 truncate">
+                                  <span className="font-mono text-amber-300 truncate">{dup.item.email}</span>
+                                  <span className="text-[10px] text-slate-400 truncate">({dup.item.name || 'Lead'})</span>
+                                </div>
+                                <span className="text-[10px] font-bold text-amber-400 shrink-0 ml-2">
+                                  {dup.existingMatch ? `আগে ছিল: ${dup.existingMatch.company || dup.existingMatch.name}` : dup.reason}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2 pt-1 flex-wrap">
+                          {duplicateAnalysis.uniqueCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleConfirmUpload(false)}
+                              className="flex-1 min-w-[220px] py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-600/30 transition cursor-pointer flex items-center justify-center gap-1.5"
+                            >
+                              <span>✓ ডুপ্লিকেট বাদ দিয়ে শুধু নতুন {duplicateAnalysis.uniqueCount}টি আপলোড করুন (নিরাপদ)</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmUpload(true)}
+                            className="py-2 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold text-xs transition cursor-pointer"
+                          >
+                            অনুমতি দিন: ডুপ্লিকেট সহ সবগুলো ({parsedLeadsPreview.length}টি) আপলোড করুন
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-emerald-950/20 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 font-bold flex items-center gap-2">
+                        <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>✓ কোনো ডুপ্লিকেট ইমেইল নেই — সব {parsedLeadsPreview.length}টি লিড একদম ইউনিক ও নতুন!</span>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -1732,19 +1904,43 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
               <div className="pt-2 flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowUploadModal(false)}
+                  onClick={() => {
+                    setShowUploadModal(false);
+                    setShowDuplicateDetails(false);
+                  }}
                   className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer"
                 >
                   Cancel
                 </button>
-                <button
-                  type="button"
-                  disabled={parsedLeadsPreview.length === 0}
-                  onClick={handleConfirmUpload}
-                  className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer"
-                >
-                  Import {parsedLeadsPreview.length} Leads
-                </button>
+                {duplicateAnalysis.duplicateCount > 0 ? (
+                  <>
+                    {duplicateAnalysis.uniqueCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleConfirmUpload(false)}
+                        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+                      >
+                        Import {duplicateAnalysis.uniqueCount} Unique Leads
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleConfirmUpload(true)}
+                      className="px-4 py-2 rounded-xl bg-amber-500/30 hover:bg-amber-500/40 text-amber-300 border border-amber-500/40 font-bold text-xs transition cursor-pointer"
+                    >
+                      Allow All ({parsedLeadsPreview.length})
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={parsedLeadsPreview.length === 0}
+                    onClick={() => handleConfirmUpload(false)}
+                    className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+                  >
+                    Import {parsedLeadsPreview.length} Leads
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -2021,17 +2217,33 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                 >
                   Cancel
                 </button>
-                <button
-                  type="button"
-                  disabled={validItems.length === 0}
-                  onClick={() => {
+                {(() => {
+                  const pasteExistingSet = new Set(leads.filter(l => !l.isTrash && l.email).map(l => l.email.trim().toLowerCase()));
+                  const pasteDuplicates = validItems.filter(i => pasteExistingSet.has(i.email.trim().toLowerCase()));
+                  const pasteUniqueValid = validItems.filter(i => !pasteExistingSet.has(i.email.trim().toLowerCase()));
+
+                  const doImportPaste = (allowDuplicates: boolean) => {
                     const tagToAssign = uploadSelectedTag || leadTags[0]?.name || 'Verified Leads';
-                    const cleanLeads = validItems.map(item => ({
+                    const itemsToImport = allowDuplicates ? validItems : pasteUniqueValid;
+
+                    if (itemsToImport.length === 0) {
+                      addNotification({
+                        title: 'No New Leads to Import',
+                        message: 'All pasted emails already exist in your directory.',
+                        type: 'warning'
+                      });
+                      setShowPasteVerifyModal(false);
+                      setRawPasteText('');
+                      setPastedItems([]);
+                      return;
+                    }
+
+                    const cleanLeads = itemsToImport.map(item => ({
                       name: item.name,
                       email: item.email,
                       company: item.company,
                       title: 'Decision Maker',
-                      phone: '+1 (555) 019-2834',
+                      phone: '',
                       website: `https://${item.email.split('@')[1] || 'example.com'}`,
                       niche: 'Verified Outreach Target',
                       location: 'United States',
@@ -2041,12 +2253,66 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                     setShowPasteVerifyModal(false);
                     setRawPasteText('');
                     setPastedItems([]);
+
+                    if (allowDuplicates && pasteDuplicates.length > 0) {
+                      addNotification({
+                        title: `Imported ${itemsToImport.length} Leads (Duplicates Allowed) ✨`,
+                        message: `Imported with permission, including ${pasteDuplicates.length} duplicate email(s).`,
+                        type: 'lead',
+                        linkTab: 'leads'
+                      });
+                    } else if (pasteDuplicates.length > 0) {
+                      addNotification({
+                        title: `Imported ${itemsToImport.length} Unique Leads ✨`,
+                        message: `Skipped ${pasteDuplicates.length} duplicate email(s) that already exist in your directory.`,
+                        type: 'lead',
+                        linkTab: 'leads'
+                      });
+                    } else {
+                      addNotification({
+                        title: `Imported ${itemsToImport.length} Leads ✨`,
+                        message: `All ${itemsToImport.length} leads imported with tag "${tagToAssign}".`,
+                        type: 'lead',
+                        linkTab: 'leads'
+                      });
+                    }
                     confetti({ particleCount: 55, spread: 65 });
-                  }}
-                  className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer"
-                >
-                  Import {validItems.length} Verified Valid Leads (নষ্ট মেইল বাদে)
-                </button>
+                  };
+
+                  return (
+                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                      {pasteDuplicates.length > 0 ? (
+                        <>
+                          {pasteUniqueValid.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => doImportPaste(false)}
+                              className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs shadow-lg transition cursor-pointer"
+                            >
+                              ✓ ডুপ্লিকেট বাদ দিয়ে নতুন {pasteUniqueValid.length}টি আপলোড করুন
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => doImportPaste(true)}
+                            className="px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold text-xs transition cursor-pointer"
+                          >
+                            অনুমতি দিন: ডুপ্লিকেট সহ সবগুলো ({validItems.length}টি) আপলোড করুন
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={validItems.length === 0}
+                          onClick={() => doImportPaste(false)}
+                          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+                        >
+                          Import {validItems.length} Verified Valid Leads (নষ্ট মেইল বাদে)
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>

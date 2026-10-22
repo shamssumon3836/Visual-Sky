@@ -2814,7 +2814,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         title: l.title || 'Founder & CEO',
         company: l.company || 'Enterprise Company',
         email: l.email || `lead${Date.now()}-${idx}@example.com`,
-        phone: l.phone || '+1 (555) 000-0000',
+        phone: l.phone ? String(l.phone).trim() : '',
         website: l.website || 'https://example.com',
         niche: l.niche || 'B2B SaaS',
         location: l.location || 'United States',
