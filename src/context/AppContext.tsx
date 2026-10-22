@@ -401,6 +401,7 @@ interface AppContextType {
   restoreSentEmail: (id: string) => void;
   permanentDeleteSentEmail: (id: string) => void;
   markEmailOpened: (id: string) => void;
+  refreshTrackingStatus: () => Promise<void>;
   simulateLeadReplyToSentEmail: (sentEmailId: string, customSnippet?: string) => void;
   sendDirectEmail: (payload: DirectSendMailPayload) => Promise<boolean>;
   syncInboxReplies: (smtpAccountId?: string, silent?: boolean) => Promise<{ success: boolean; count: number; totalChecked: number; error?: string }>;
@@ -4199,16 +4200,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const markEmailOpened = (id: string) => {
+    let affectedMail: SentEmailLog | undefined;
     setSentEmails(prev => {
       const next = prev.map(s => {
         if (s.id === id) {
           const nextCount = (s.openCount || 0) + 1;
-          return {
+          const updated = {
             ...s,
             status: (s.status === 'replied' ? 'replied' : 'opened') as any,
             openCount: nextCount,
             firstOpenedAt: s.firstOpenedAt || new Date().toISOString()
           };
+          affectedMail = updated;
+          return updated;
         }
         return s;
       });
@@ -4216,32 +4220,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
 
-    // Also update lead directory status
-    const emailLog = sentEmails.find(s => s.id === id);
+    // Also update lead directory and campaign status immediately with direct persistence
+    const emailLog = affectedMail || sentEmails.find(s => s.id === id);
     if (emailLog) {
-      setLeads(prev => prev.map(l => {
-        if (l.email?.toLowerCase() === emailLog.recipientEmail?.toLowerCase() || l.name === emailLog.recipientName) {
-          return {
-            ...l,
-            status: l.status === 'replied' ? 'replied' : 'opened',
-            openCount: (l.openCount || 0) + 1,
-            lastOpenedAt: new Date().toISOString()
-          };
-        }
-        return l;
-      }));
-
-      // Update campaign open count if applicable
-      if (emailLog.campaignId) {
-        setCampaigns(prev => prev.map(c => {
-          if (c.id === emailLog.campaignId) {
+      setLeads(prev => {
+        const next = prev.map(l => {
+          if (l.email?.toLowerCase() === emailLog.recipientEmail?.toLowerCase() || l.name === emailLog.recipientName) {
             return {
-              ...c,
-              openCount: (c.openCount || 0) + 1
+              ...l,
+              status: l.status === 'replied' ? 'replied' : 'opened',
+              openCount: (l.openCount || 0) + 1,
+              lastOpenedAt: new Date().toISOString()
             };
           }
-          return c;
-        }));
+          return l;
+        });
+        persistResourceDirectly('leads', next);
+        return next;
+      });
+
+      if (emailLog.campaignId) {
+        setCampaigns(prev => {
+          const next = prev.map(c => {
+            if (c.id === emailLog.campaignId) {
+              return {
+                ...c,
+                openCount: (c.openCount || 0) + 1
+              };
+            }
+            return c;
+          });
+          persistResourceDirectly('campaigns', next);
+          return next;
+        });
       }
 
       addNotification({
@@ -4254,157 +4265,221 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Authoritative Real-Time Open Tracking Poller (100% Idempotent: 0 opens = 'sent', 1 open = '1 open', never multiplies on reload!)
+  // Authoritative Real-Time Open Tracking Poller & Manual Verifier (100% Idempotent: 0 opens = 'sent', 1 open = '1 open', never multiplies on reload!)
   const notifiedOpenCountsRef = useRef<Map<string, number>>(new Map());
+
+  const refreshTrackingStatus = async () => {
+    try {
+      const res = await fetch('/api/track/events');
+      if (!res.ok) return;
+      const parsed = await safeParseResponse(res, 'Tracking poll failed');
+      const data = parsed.data || {};
+      if (!parsed.ok || !data.success || !Array.isArray(data.events)) return;
+
+      // Group server events by clean pixelId
+      const eventsByPixel = new Map<string, any[]>();
+      for (const ev of data.events) {
+        if (!ev || !ev.pixelId || !ev.openedAt) continue;
+        const cleanPid = String(ev.pixelId).replace(/\.gif$/i, '').trim();
+        const list = eventsByPixel.get(cleanPid) || [];
+        list.push(ev);
+        eventsByPixel.set(cleanPid, list);
+      }
+
+      // Track updated sentEmails for cross-referencing leads & campaigns
+      let updatedSentEmailsSnapshot: SentEmailLog[] = [];
+
+      setSentEmails(prev => {
+        if (!prev || prev.length === 0) return prev;
+        let changed = false;
+
+        const nextSentEmails = prev.map(mail => {
+          if (mail.status === 'failed' || mail.status === 'bounced') {
+            if ((mail.openCount || 0) !== 0) {
+              changed = true;
+              return { ...mail, openCount: 0, firstOpenedAt: undefined };
+            }
+            return mail;
+          }
+
+          const cleanPid = String(mail.trackingPixelId || '').replace(/\.gif$/i, '').trim();
+          const rawMatches = cleanPid ? (eventsByPixel.get(cleanPid) || []) : [];
+
+          // Server already guarantees clean deduplication and cooldown. Deduplicate rapid duplicate hits (within 30s)
+          const verifiedOpens: any[] = [];
+          for (const ev of rawMatches) {
+            const openTimeMs = new Date(ev.openedAt).getTime();
+            if (!Number.isFinite(openTimeMs)) continue;
+            const prevAccepted = verifiedOpens[verifiedOpens.length - 1];
+            if (prevAccepted) {
+              const prevMs = new Date(prevAccepted.openedAt).getTime();
+              if (Math.abs(openTimeMs - prevMs) < 30000) {
+                continue;
+              }
+            }
+            verifiedOpens.push(ev);
+          }
+
+          const exactOpenCount = verifiedOpens.length;
+          const prevNotified = notifiedOpenCountsRef.current.get(mail.id);
+
+          if (prevNotified === undefined) {
+            // Baseline initialization so historical opens don't pop repeated notifications
+            notifiedOpenCountsRef.current.set(mail.id, exactOpenCount);
+          } else if (exactOpenCount > prevNotified) {
+            notifiedOpenCountsRef.current.set(mail.id, exactOpenCount);
+            const openTag = `open-${cleanPid}-${Math.floor(Date.now() / 60000)}`;
+            setTimeout(() => {
+              addNotification({
+                tag: openTag,
+                title: `👁️ Mail Opened by ${mail.recipientName}`,
+                message: `${mail.recipientCompany || mail.recipientEmail} opened "${(mail.subject || '').slice(0, 50)}" (Open #${exactOpenCount})`,
+                type: 'open',
+                linkTab: 'sent',
+                leadEmail: mail.recipientEmail,
+                senderName: mail.recipientName,
+                senderCompany: mail.recipientCompany,
+                subject: mail.subject
+              });
+            }, 0);
+          }
+
+          if (exactOpenCount === 0) {
+            const desiredStatus = mail.status === 'replied' ? 'replied' : 'sent';
+            if (mail.status !== desiredStatus || (mail.openCount || 0) !== 0 || mail.firstOpenedAt) {
+              changed = true;
+              return {
+                ...mail,
+                status: desiredStatus as any,
+                openCount: 0,
+                firstOpenedAt: undefined
+              };
+            }
+            return mail;
+          } else {
+            const desiredStatus = mail.status === 'replied' ? 'replied' : 'opened';
+            const firstOpenIso = verifiedOpens[0]?.openedAt || mail.firstOpenedAt || new Date().toISOString();
+            const latestEv = verifiedOpens[verifiedOpens.length - 1];
+            if (
+              mail.status !== desiredStatus ||
+              mail.openCount !== exactOpenCount ||
+              mail.firstOpenedAt !== firstOpenIso
+            ) {
+              changed = true;
+              return {
+                ...mail,
+                status: desiredStatus as any,
+                openCount: exactOpenCount,
+                firstOpenedAt: firstOpenIso,
+                ipAddress: latestEv?.ip || mail.ipAddress,
+                userAgent: latestEv?.userAgent || mail.userAgent
+              };
+            }
+            return mail;
+          }
+        });
+
+        updatedSentEmailsSnapshot = nextSentEmails;
+        if (changed) {
+          persistResourceDirectly('sentEmails', nextSentEmails);
+          return nextSentEmails;
+        }
+        return prev;
+      });
+
+      // Synchronize leads with sentEmails state
+      setLeads(prevLeads => {
+        if (!prevLeads || prevLeads.length === 0) return prevLeads;
+        const currentSent = updatedSentEmailsSnapshot.length > 0 ? updatedSentEmailsSnapshot : sentEmails;
+        let leadsChanged = false;
+
+        const nextLeads = prevLeads.map(lead => {
+          const matching = currentSent.filter(s =>
+            (s.recipientEmail && lead.email && s.recipientEmail.toLowerCase() === lead.email.toLowerCase()) ||
+            (s.recipientName && lead.name && s.recipientName.toLowerCase() === lead.name.toLowerCase())
+          );
+          if (matching.length === 0) return lead;
+
+          const totalOpens = matching.reduce((sum, s) => sum + (s.openCount || (s.status === 'opened' || s.status === 'replied' ? 1 : 0)), 0);
+          const hasReplies = matching.some(s => s.status === 'replied') || lead.isReplied || lead.status === 'replied';
+          const latestOpenedAt = matching.map(s => s.firstOpenedAt).filter(Boolean).sort().reverse()[0] || lead.lastOpenedAt;
+
+          let targetStatus = lead.status;
+          if (hasReplies) {
+            targetStatus = 'replied';
+          } else if (totalOpens > 0) {
+            if (targetStatus === 'new' || targetStatus === 'contacted' || !targetStatus) {
+              targetStatus = 'opened';
+            }
+          }
+
+          const targetOpenCount = Math.max(lead.openCount || 0, totalOpens);
+          if (lead.openCount !== targetOpenCount || lead.status !== targetStatus || (latestOpenedAt && lead.lastOpenedAt !== latestOpenedAt)) {
+            leadsChanged = true;
+            return {
+              ...lead,
+              openCount: targetOpenCount,
+              status: targetStatus,
+              lastOpenedAt: latestOpenedAt || lead.lastOpenedAt
+            };
+          }
+          return lead;
+        });
+
+        if (leadsChanged) {
+          persistResourceDirectly('leads', nextLeads);
+          return nextLeads;
+        }
+        return prevLeads;
+      });
+
+      // Synchronize campaigns with sentEmails state
+      setCampaigns(prevCamps => {
+        if (!prevCamps || prevCamps.length === 0) return prevCamps;
+        const currentSent = updatedSentEmailsSnapshot.length > 0 ? updatedSentEmailsSnapshot : sentEmails;
+        let campsChanged = false;
+
+        const nextCamps = prevCamps.map(camp => {
+          const matching = currentSent.filter(s => s.campaignId === camp.id);
+          if (matching.length === 0) return camp;
+
+          const openedMailsCount = matching.filter(s => (s.openCount || 0) > 0 || s.status === 'opened' || s.status === 'replied').length;
+          const sentMailsCount = matching.filter(s => s.status !== 'failed' && s.status !== 'bounced').length;
+          const repliedMailsCount = matching.filter(s => s.status === 'replied').length;
+
+          const targetOpenCount = Math.max(camp.openCount || 0, openedMailsCount);
+          const targetSentCount = Math.max(camp.sentCount || 0, sentMailsCount);
+          const targetReplyCount = Math.max(camp.replyCount || 0, repliedMailsCount);
+
+          if (camp.openCount !== targetOpenCount || camp.sentCount !== targetSentCount || camp.replyCount !== targetReplyCount) {
+            campsChanged = true;
+            return {
+              ...camp,
+              openCount: targetOpenCount,
+              sentCount: targetSentCount,
+              replyCount: targetReplyCount
+            };
+          }
+          return camp;
+        });
+
+        if (campsChanged) {
+          persistResourceDirectly('campaigns', nextCamps);
+          return nextCamps;
+        }
+        return prevCamps;
+      });
+    } catch {
+      // Polling silent catch
+    }
+  };
 
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    const pollTrackingEvents = async () => {
-      try {
-        const res = await fetch('/api/track/events');
-        if (!res.ok) return;
-        const parsed = await safeParseResponse(res, 'Tracking poll failed');
-        const data = parsed.data || {};
-        if (!parsed.ok || !data.success || !Array.isArray(data.events)) return;
-
-        // Group server events by clean pixelId
-        const eventsByPixel = new Map<string, any[]>();
-        for (const ev of data.events) {
-          if (!ev || !ev.pixelId || !ev.openedAt) continue;
-          const cleanPid = String(ev.pixelId).replace(/\.gif$/i, '').trim();
-          const list = eventsByPixel.get(cleanPid) || [];
-          list.push(ev);
-          eventsByPixel.set(cleanPid, list);
-        }
-
-        setSentEmails(prev => {
-          if (!prev || prev.length === 0) return prev;
-          let changed = false;
-
-          const nextSentEmails = prev.map(mail => {
-            if (mail.status === 'failed' || mail.status === 'bounced') {
-              if ((mail.openCount || 0) !== 0) {
-                changed = true;
-                return { ...mail, openCount: 0, firstOpenedAt: undefined };
-              }
-              return mail;
-            }
-
-            const cleanPid = String(mail.trackingPixelId || '').replace(/\.gif$/i, '').trim();
-            const rawMatches = cleanPid ? (eventsByPixel.get(cleanPid) || []) : [];
-            const sentTimeMs = new Date(mail.sentAt).getTime();
-
-            // Filter out any scanner pre-fetch within 15 seconds of sentAt, and deduplicate within 60-second windows
-            const verifiedOpens: any[] = [];
-            for (const ev of rawMatches) {
-              const openTimeMs = new Date(ev.openedAt).getTime();
-              if (!Number.isFinite(openTimeMs)) continue;
-              if (Number.isFinite(sentTimeMs) && openTimeMs - sentTimeMs < 15000) {
-                continue;
-              }
-              const prevAccepted = verifiedOpens[verifiedOpens.length - 1];
-              if (prevAccepted) {
-                const prevMs = new Date(prevAccepted.openedAt).getTime();
-                if (Math.abs(openTimeMs - prevMs) < 60000) {
-                  continue;
-                }
-              }
-              verifiedOpens.push(ev);
-            }
-
-            const exactOpenCount = verifiedOpens.length;
-            const prevNotified = notifiedOpenCountsRef.current.get(mail.id);
-            if (prevNotified === undefined) {
-              // Initialize baseline so historical opens don't re-trigger toast notifications on reload
-              notifiedOpenCountsRef.current.set(mail.id, exactOpenCount);
-            } else if (exactOpenCount > prevNotified) {
-              notifiedOpenCountsRef.current.set(mail.id, exactOpenCount);
-              const latestEv = verifiedOpens[verifiedOpens.length - 1];
-              const openTag = `open-${cleanPid}-${Math.floor(Date.now() / 60000)}`;
-              setTimeout(() => {
-                addNotification({
-                  tag: openTag,
-                  title: `👁️ Mail Opened by ${mail.recipientName}`,
-                  message: `${mail.recipientCompany || mail.recipientEmail} opened "${(mail.subject || '').slice(0, 50)}" (Open #${exactOpenCount})`,
-                  type: 'open',
-                  linkTab: 'sent',
-                  leadEmail: mail.recipientEmail,
-                  senderName: mail.recipientName,
-                  senderCompany: mail.recipientCompany,
-                  subject: mail.subject
-                });
-              }, 0);
-
-              setLeads(lPrev =>
-                lPrev.map(l => {
-                  if (
-                    l.email?.toLowerCase() === mail.recipientEmail?.toLowerCase() ||
-                    l.name === mail.recipientName
-                  ) {
-                    return {
-                      ...l,
-                      status: l.status === 'replied' ? 'replied' : 'opened',
-                      openCount: exactOpenCount,
-                      lastOpenedAt: latestEv?.openedAt || new Date().toISOString()
-                    };
-                  }
-                  return l;
-                })
-              );
-            }
-
-            if (exactOpenCount === 0) {
-              // Strictly ensure unopened emails show 'sent' with openCount = 0 (unless 'replied')
-              const desiredStatus = mail.status === 'replied' ? 'replied' : 'sent';
-              if (mail.status !== desiredStatus || (mail.openCount || 0) !== 0 || mail.firstOpenedAt) {
-                changed = true;
-                return {
-                  ...mail,
-                  status: desiredStatus as any,
-                  openCount: 0,
-                  firstOpenedAt: undefined
-                };
-              }
-              return mail;
-            } else {
-              // Exact verified open count (1 open = 1, never multiplied!)
-              const desiredStatus = mail.status === 'replied' ? 'replied' : 'opened';
-              const firstOpenIso = verifiedOpens[0]?.openedAt || mail.firstOpenedAt;
-              const latestEv = verifiedOpens[verifiedOpens.length - 1];
-              if (
-                mail.status !== desiredStatus ||
-                mail.openCount !== exactOpenCount ||
-                mail.firstOpenedAt !== firstOpenIso
-              ) {
-                changed = true;
-                return {
-                  ...mail,
-                  status: desiredStatus as any,
-                  openCount: exactOpenCount,
-                  firstOpenedAt: firstOpenIso,
-                  ipAddress: latestEv?.ip || mail.ipAddress,
-                  userAgent: latestEv?.userAgent || mail.userAgent
-                };
-              }
-              return mail;
-            }
-          });
-
-          if (changed) {
-            persistResourceDirectly('sentEmails', nextSentEmails);
-            return nextSentEmails;
-          }
-          return prev;
-        });
-      } catch {
-        // Polling silent catch
-      }
-    };
-
-    const initialTimer = setTimeout(pollTrackingEvents, 1500);
+    const initialTimer = setTimeout(refreshTrackingStatus, 1500);
     const interval = setInterval(() => {
-      pollTrackingEvents();
+      refreshTrackingStatus();
     }, 8000);
     return () => {
       clearTimeout(initialTimer);
@@ -5963,6 +6038,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         restoreSentEmail,
         permanentDeleteSentEmail,
         markEmailOpened,
+        refreshTrackingStatus,
         simulateLeadReplyToSentEmail,
         sendDirectEmail,
         syncInboxReplies,

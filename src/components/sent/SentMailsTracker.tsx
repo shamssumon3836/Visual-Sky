@@ -50,6 +50,7 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
     smtpAccounts,
     addNotification,
     syncInboxReplies,
+    refreshTrackingStatus,
     persistResourceDirectly
   } = useApp();
 
@@ -225,65 +226,20 @@ export const SentMailsTracker: React.FC<SentMailsTrackerProps> = ({ onOpenSendMa
   const handleRefreshLiveStatus = async () => {
     setIsRefreshingTracker(true);
     try {
-      const res = await fetch('/api/track/events');
-      const parsed = await safeParseResponse(res, 'Tracking check failed');
-      const data = parsed.data || {};
-      if (parsed.ok && data.success && Array.isArray(data.events)) {
-        const eventsByPixel = new Map<string, any[]>();
-        for (const ev of data.events) {
-          if (!ev || !ev.pixelId || !ev.openedAt) continue;
-          const cleanPid = String(ev.pixelId).replace(/\.gif$/i, '').trim();
-          const list = eventsByPixel.get(cleanPid) || [];
-          list.push(ev);
-          eventsByPixel.set(cleanPid, list);
-        }
-
-        setSentEmails(prev => {
-          const next = prev.map(mail => {
-            if (mail.status === 'failed' || mail.status === 'bounced') {
-              return { ...mail, openCount: 0, firstOpenedAt: undefined };
-            }
-            const cleanPid = String(mail.trackingPixelId || '').replace(/\.gif$/i, '').trim();
-            const rawMatches = cleanPid ? (eventsByPixel.get(cleanPid) || []) : [];
-            const sentTimeMs = new Date(mail.sentAt).getTime();
-
-            const verifiedOpens: any[] = [];
-            for (const ev of rawMatches) {
-              const openTimeMs = new Date(ev.openedAt).getTime();
-              if (!Number.isFinite(openTimeMs)) continue;
-              if (Number.isFinite(sentTimeMs) && openTimeMs - sentTimeMs < 15000) continue;
-              const prevAccepted = verifiedOpens[verifiedOpens.length - 1];
-              if (prevAccepted && Math.abs(openTimeMs - new Date(prevAccepted.openedAt).getTime()) < 60000) continue;
-              verifiedOpens.push(ev);
-            }
-
-            const exactOpenCount = verifiedOpens.length;
-            if (exactOpenCount === 0) {
-              return {
-                ...mail,
-                status: (mail.status === 'replied' ? 'replied' : 'sent') as any,
-                openCount: 0,
-                firstOpenedAt: undefined
-              };
-            }
-            return {
-              ...mail,
-              status: (mail.status === 'replied' ? 'replied' : 'opened') as any,
-              openCount: exactOpenCount,
-              firstOpenedAt: verifiedOpens[0]?.openedAt || mail.firstOpenedAt
-            };
-          });
-          persistResourceDirectly('sentEmails', next);
-          return next;
-        });
-      }
+      await refreshTrackingStatus();
       await syncInboxReplies(undefined, true);
       addNotification({
         title: 'Tracking & Replies Synced ✓',
-        message: 'Verified exact open counts and checked IMAP inbox for replies.',
+        message: 'Verified exact open counts across Sent Mails, Leads, and Campaigns.',
         type: 'system'
       });
-    } catch {} finally {
+    } catch {
+      addNotification({
+        title: 'Live Sync Notice',
+        message: 'Could not sync latest tracking events at this moment.',
+        type: 'warning'
+      });
+    } finally {
       setIsRefreshingTracker(false);
     }
   };

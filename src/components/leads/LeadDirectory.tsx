@@ -56,7 +56,8 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
     searchQuery,
     setSearchQuery,
     addNotification,
-    setActiveTab
+    setActiveTab,
+    sentEmails
   } = useApp();
 
   // Active Filter
@@ -307,7 +308,14 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
       }
       const inactiveDays = getLeadInactiveDays(lead);
       if (activeFilter === 'replied') return lead.status === 'replied' || lead.isReplied;
-      if (activeFilter === 'opened') return lead.status === 'opened' || (lead.openCount && lead.openCount > 0);
+      if (activeFilter === 'opened') {
+        if (lead.status === 'opened' || (lead.openCount && lead.openCount > 0)) return true;
+        return sentEmails.some(s =>
+          ((s.recipientEmail && lead.email && s.recipientEmail.toLowerCase() === lead.email.toLowerCase()) ||
+           (s.recipientName && lead.name && s.recipientName.toLowerCase() === lead.name.toLowerCase())) &&
+          ((s.openCount || 0) > 0 || s.status === 'opened' || s.status === 'replied')
+        );
+      }
       if (activeFilter === 'new') return lead.status === 'new';
       if (activeFilter === 'inactive_7d') return inactiveDays >= 7 && inactiveDays < 14;
       if (activeFilter === 'inactive_14d') return inactiveDays >= 14 && inactiveDays < 30;
@@ -315,7 +323,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
 
       return true;
     });
-  }, [activeLeads, searchQuery, selectedTagFilter, activeFilter, dnsVerificationMap]);
+  }, [activeLeads, searchQuery, selectedTagFilter, activeFilter, dnsVerificationMap, sentEmails]);
 
   // Tag color mapping helper
   const getTagColorClass = (tagName: string) => {
@@ -1164,18 +1172,27 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                         )}
 
                         {/* Open Status Column */}
-                        {isColVisible('openStatus') && (
-                          <td className="p-3.5">
-                            {lead.openCount && lead.openCount > 0 ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-500/20 text-blue-300 border border-blue-500/30 flex items-center gap-1 w-fit whitespace-nowrap">
-                                <Eye className="w-3 h-3 text-blue-400" />
-                                {lead.openCount} {lead.openCount === 1 ? 'open' : 'opens'}
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-slate-500 font-mono whitespace-nowrap">0 opens</span>
-                            )}
-                          </td>
-                        )}
+                        {isColVisible('openStatus') && (() => {
+                          const matchingSent = sentEmails.filter(
+                            s => (s.recipientEmail && lead.email && s.recipientEmail.toLowerCase() === lead.email.toLowerCase()) ||
+                                 (s.recipientName && lead.name && s.recipientName.toLowerCase() === lead.name.toLowerCase())
+                          );
+                          const matchingOpens = matchingSent.reduce((sum, s) => sum + (s.openCount || (s.status === 'opened' || s.status === 'replied' ? 1 : 0)), 0);
+                          const effectiveOpens = Math.max(lead.openCount || 0, matchingOpens);
+
+                          return (
+                            <td className="p-3.5">
+                              {effectiveOpens > 0 ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-500/20 text-blue-300 border border-blue-500/30 flex items-center gap-1 w-fit whitespace-nowrap">
+                                  <Eye className="w-3 h-3 text-blue-400" />
+                                  {effectiveOpens} {effectiveOpens === 1 ? 'open' : 'opens'}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-500 font-mono whitespace-nowrap">0 opens</span>
+                              )}
+                            </td>
+                          );
+                        })()}
 
                         {/* Reply Status Column */}
                         {isColVisible('replyStatus') && (
@@ -1208,21 +1225,31 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                         )}
 
                         {/* Pipeline Status */}
-                        {isColVisible('status') && (
-                          <td className="p-3.5">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border whitespace-nowrap ${
-                              lead.status === 'replied'
-                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                                : lead.status === 'opened'
-                                ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
-                                : lead.status === 'contacted'
-                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                                : 'bg-slate-800 text-slate-300 border-slate-700'
-                            }`}>
-                              {lead.status}
-                            </span>
-                          </td>
-                        )}
+                        {isColVisible('status') && (() => {
+                          const matchingSent = sentEmails.filter(
+                            s => (s.recipientEmail && lead.email && s.recipientEmail.toLowerCase() === lead.email.toLowerCase()) ||
+                                 (s.recipientName && lead.name && s.recipientName.toLowerCase() === lead.name.toLowerCase())
+                          );
+                          const hasReplied = lead.status === 'replied' || lead.isReplied || matchingSent.some(s => s.status === 'replied');
+                          const hasOpened = lead.status === 'opened' || (lead.openCount && lead.openCount > 0) || matchingSent.some(s => (s.openCount || 0) > 0 || s.status === 'opened');
+                          const effectiveStatus = hasReplied ? 'replied' : hasOpened ? 'opened' : lead.status;
+
+                          return (
+                            <td className="p-3.5">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border whitespace-nowrap ${
+                                effectiveStatus === 'replied'
+                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                                  : effectiveStatus === 'opened'
+                                  ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+                                  : effectiveStatus === 'contacted'
+                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                                  : 'bg-slate-800 text-slate-300 border-slate-700'
+                              }`}>
+                                {effectiveStatus}
+                              </span>
+                            </td>
+                          );
+                        })()}
 
                         {/* Site Health Ping */}
                         {isColVisible('websiteStatus') && (

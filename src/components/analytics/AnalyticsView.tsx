@@ -45,8 +45,9 @@ export const AnalyticsView: React.FC = () => {
   const campaignReplySum = campaigns.reduce((acc, c) => acc + (c.replyCount || 0), 0);
   const campaignBounceSum = campaigns.reduce((acc, c) => acc + (c.bounceCount || 0), 0);
 
-  const realSentLogCount = sentEmails.length;
-  const realOpenedLogCount = sentEmails.filter(m => (m.openCount || 0) > 0).length;
+  const validSentEmails = sentEmails.filter(m => m.status !== 'failed' && m.status !== 'bounced');
+  const realSentLogCount = validSentEmails.length;
+  const realOpenedLogCount = validSentEmails.filter(m => (m.openCount || 0) > 0 || m.status === 'opened' || m.status === 'replied').length;
   const realRepliedLogCount = threads.length;
 
   const totalSent = Math.max(realSentLogCount, campaignSentSum);
@@ -54,8 +55,8 @@ export const AnalyticsView: React.FC = () => {
   const totalReplied = Math.max(realRepliedLogCount, campaignReplySum);
   const totalBounced = campaignBounceSum;
 
-  const openRate = totalSent > 0 ? ((totalOpened / totalSent) * 100).toFixed(1) : '0.0';
-  const replyRate = totalSent > 0 ? ((totalReplied / totalSent) * 100).toFixed(1) : '0.0';
+  const openRate = totalSent > 0 ? Math.min(100, (totalOpened / totalSent) * 100).toFixed(1) : '0.0';
+  const replyRate = totalSent > 0 ? Math.min(100, (totalReplied / totalSent) * 100).toFixed(1) : '0.0';
   const bounceRate = totalSent > 0 ? ((totalBounced / totalSent) * 100).toFixed(2) : '0.00';
   const primaryInboxRate = totalSent > 0 
     ? Math.max(98.0, Math.min(99.9, 100 - parseFloat(bounceRate) - 0.1)).toFixed(1) 

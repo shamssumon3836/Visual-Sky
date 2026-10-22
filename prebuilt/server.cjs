@@ -59,8 +59,19 @@ process.on("unhandledRejection", (reason) => {
   console.error("[CRITICAL UNHANDLED REJECTION PREVENTED]:", reason?.message || reason);
 });
 var OTP_SECRET = process.env.OTP_SECRET || "visualsky-secure-otp-signature-key-2026";
+var getPort = () => {
+  const portArgIndex = process.argv.indexOf("--port");
+  if (portArgIndex !== -1 && process.argv[portArgIndex + 1]) {
+    const parsed = Number(process.argv[portArgIndex + 1]);
+    if (parsed > 0) return parsed;
+  }
+  if (process.env.PORT && process.env.PORT !== "8080") {
+    return Number(process.env.PORT) || 3e3;
+  }
+  return 3e3;
+};
+var PORT = getPort();
 var app = (0, import_express.default)();
-var PORT = Number(process.env.PORT) || 3e3;
 app.use(import_express.default.json({ limit: "50mb" }));
 app.use((err, _req, res, next) => {
   if (err instanceof SyntaxError && "body" in err) {
@@ -6696,21 +6707,15 @@ function getCleanAuthoritativeTrackingEvents(rawEvents) {
     const cleanPixelId = String(ev.pixelId).replace(/\.gif$/i, "").trim();
     const openedMs = new Date(ev.openedAt).getTime();
     if (!Number.isFinite(openedMs)) continue;
-    const parts = cleanPixelId.split("-");
-    const embeddedSentMs = parts.length >= 2 ? Number(parts[1]) : 0;
-    const recordedSentMs = dispatchedPixelsMap.get(cleanPixelId) || embeddedSentMs;
-    if (recordedSentMs > 0 && openedMs - recordedSentMs < 15e3) {
-      continue;
-    }
     const ua = String(ev.userAgent || "").toLowerCase();
-    if (ua.includes("bot") || ua.includes("spider") || ua.includes("crawler") || ua.includes("scanner") || ua.includes("headless") || ua.includes("barracuda") || ua.includes("mimecast") || ua.includes("proofpoint") || ua.includes("curl/") || ua.includes("wget/") || ua.includes("python-requests")) {
+    if (ua.includes("spider") || ua.includes("crawler") || ua.includes("barracuda") || ua.includes("mimecast") || ua.includes("proofpoint") || ua.includes("curl/") || ua.includes("wget/") || ua.includes("python-requests")) {
       continue;
     }
     const prevForPixel = acceptedByPixel.get(cleanPixelId) || [];
     const lastOpen = prevForPixel[prevForPixel.length - 1];
     if (lastOpen) {
       const lastOpenMs = new Date(lastOpen.openedAt).getTime();
-      if (Math.abs(openedMs - lastOpenMs) < 6e4) {
+      if (Math.abs(openedMs - lastOpenMs) < 45e3) {
         continue;
       }
     }
@@ -6732,13 +6737,9 @@ app.get("/api/track/open/:pixelId", (req, res) => {
     const ua = String(req.headers["user-agent"] || "");
     const uaLower = ua.toLowerCase();
     const purpose = String(req.headers["purpose"] || req.headers["x-moz"] || req.headers["sec-purpose"] || "").toLowerCase();
-    const parts = pixelId.split("-");
-    const embeddedSentMs = parts.length >= 2 ? Number(parts[1]) : 0;
-    const sentAtMs = dispatchedPixelsMap.get(pixelId) || embeddedSentMs;
     const nowMs = Date.now();
-    const isInitialScannerHit = sentAtMs > 0 && nowMs - sentAtMs < 15e3;
-    const isBotOrPrefetch = req.method !== "GET" || purpose.includes("prefetch") || purpose.includes("preview") || uaLower.includes("bot") || uaLower.includes("spider") || uaLower.includes("crawler") || uaLower.includes("scanner") || uaLower.includes("headless") || uaLower.includes("barracuda") || uaLower.includes("mimecast") || uaLower.includes("proofpoint") || uaLower.includes("curl/") || uaLower.includes("wget/") || uaLower.includes("python");
-    if (pixelId && !isInitialScannerHit && !isBotOrPrefetch) {
+    const isBotOrPrefetch = req.method !== "GET" || purpose.includes("prefetch") || purpose.includes("preview") || uaLower.includes("spider") || uaLower.includes("crawler") || uaLower.includes("barracuda") || uaLower.includes("mimecast") || uaLower.includes("proofpoint") || uaLower.includes("curl/") || uaLower.includes("wget/") || uaLower.includes("python");
+    if (pixelId && !isBotOrPrefetch) {
       let events = [];
       if (import_fs.default.existsSync(TRACKING_EVENTS_FILE)) {
         try {
@@ -6751,7 +6752,7 @@ app.get("/api/track/open/:pixelId", (req, res) => {
       const recentDuplicate = events.some((ev) => {
         if (!ev || String(ev.pixelId).replace(/\.gif$/i, "") !== pixelId) return false;
         const evTime = new Date(ev.openedAt).getTime();
-        return Number.isFinite(evTime) && Math.abs(nowMs - evTime) < 6e4;
+        return Number.isFinite(evTime) && Math.abs(nowMs - evTime) < 45e3;
       });
       if (!recentDuplicate) {
         events.push({
@@ -7193,9 +7194,12 @@ app.post("/api/smtp/send", async (req, res) => {
     dispatchedPixelsMap.set(pixelId, Date.now());
     const hostHeader = req.headers["x-forwarded-host"] || req.headers.host || "";
     const protoHeader = req.headers["x-forwarded-proto"] || req.protocol || "https";
-    const origin = hostHeader ? `${protoHeader}://${hostHeader}` : "https://cold.visualsky.pro";
-    const isLocalhostOrigin = origin.includes("localhost") || origin.includes("127.0.0.1");
-    const pixelHtml = isLocalhostOrigin ? `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />` : `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`;
+    let origin = hostHeader ? `${protoHeader}://${hostHeader}` : "";
+    if (!origin || origin.includes("localhost") || origin.includes("127.0.0.1")) {
+      origin = process.env.APP_URL || "https://ais-dev-bzqp5bjpbxbgnzgimumyqz-405509726306.asia-southeast1.run.app";
+    }
+    origin = origin.replace(/\/+$/, "");
+    const pixelHtml = `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`;
     const incomingAttachments = Array.isArray(attachments) ? attachments : [];
     const savedDriveCfg = getSavedDriveStorageSettings();
     for (const att of incomingAttachments) {
@@ -8875,17 +8879,19 @@ async function startServer() {
   const isDevTsx = Boolean(process.argv[1] && process.argv[1].endsWith("server.ts")) && process.env.NODE_ENV !== "production";
   const isProdServer = !isDevTsx;
   if (isDevTsx) {
-    try {
-      const cp = await import("child_process");
-      cp.execSync("node scripts/sync-prebuilt.cjs", { cwd: process.cwd(), stdio: "inherit" });
-      if (import_fs.default.existsSync(runtimeAppJsCandidate)) {
-        try {
-          import_fs.default.unlinkSync(runtimeAppJsCandidate);
-        } catch {
-        }
+    if (!import_fs.default.existsSync(prebuiltAppJsPath) || !import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "index.html"))) {
+      try {
+        const cp = await import("child_process");
+        cp.execSync("node scripts/sync-prebuilt.cjs", { cwd: process.cwd(), stdio: "inherit" });
+      } catch (e) {
+        console.warn("[Server Startup] sync-prebuilt warning:", e);
       }
-    } catch (e) {
-      console.warn("[Server Startup] sync-prebuilt warning:", e);
+    } else {
+      import("child_process").then((cp) => {
+        cp.exec("node scripts/sync-prebuilt.cjs", { cwd: process.cwd() }, () => {
+        });
+      }).catch(() => {
+      });
     }
   }
   const getActiveAppJsPath = () => {

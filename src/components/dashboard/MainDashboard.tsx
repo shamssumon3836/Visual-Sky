@@ -82,25 +82,25 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
   const dormant14d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 14 && !l.isReplied && l.status !== 'replied').length;
   const dormant30d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 30 && !l.isReplied && l.status !== 'replied').length;
 
-  // Real-time aggregate metric calculations
-  const totalCampaignSent = campaigns.reduce((acc, c) => acc + c.sentCount, 0);
-  const totalDirectSent = sentEmails.length;
-  const totalEmailsDispatched = Math.max(totalDirectSent, totalCampaignSent + totalDirectSent);
+  // Real-time aggregate metric calculations (100% authoritative, non-doubled)
+  const validSent = sentEmails.filter(m => !m.isTrash && m.status !== 'failed' && m.status !== 'bounced');
+  const campaignSentSum = campaigns.reduce((acc, c) => acc + (c.sentCount || 0), 0);
+  const totalEmailsDispatched = Math.max(validSent.length, campaignSentSum);
 
-  const totalCampaignOpens = campaigns.reduce((acc, c) => acc + c.openCount, 0);
-  const totalDirectOpens = sentEmails.filter(m => m.openCount > 0 || m.status === 'opened' || m.status === 'replied').length;
-  const uniqueOpensTracked = Math.max(totalDirectOpens, totalCampaignOpens + totalDirectOpens);
+  const openedSentMails = validSent.filter(m => (m.openCount || 0) > 0 || m.status === 'opened' || m.status === 'replied');
+  const campaignOpenSum = campaigns.reduce((acc, c) => acc + (c.openCount || 0), 0);
+  const uniqueOpensTracked = Math.max(openedSentMails.length, campaignOpenSum);
 
   const positiveRepliesLogged = threads.filter(t => !t.isTrash).length;
   const highIntentReplies = threads.filter(t => !t.isTrash && (t.labels.includes('High Intent') || t.labels.includes('Interested') || t.labels.includes('Meeting Scheduled'))).length;
   const deliveryEngineHealth = '99.8%';
 
   const openRatePercent = totalEmailsDispatched > 0 
-    ? ((uniqueOpensTracked / totalEmailsDispatched) * 100).toFixed(1) 
+    ? Math.min(100, (uniqueOpensTracked / totalEmailsDispatched) * 100).toFixed(1) 
     : '0.0';
 
   const replyRatePercent = totalEmailsDispatched > 0 
-    ? ((positiveRepliesLogged / totalEmailsDispatched) * 100).toFixed(1) 
+    ? Math.min(100, (positiveRepliesLogged / totalEmailsDispatched) * 100).toFixed(1) 
     : '0.0';
 
   const handleLaunchFollowUp = (days: '7d' | '14d' | '30d') => {

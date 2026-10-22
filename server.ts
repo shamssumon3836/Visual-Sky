@@ -35,8 +35,20 @@ process.on('unhandledRejection', (reason) => {
 
 const OTP_SECRET = process.env.OTP_SECRET || 'visualsky-secure-otp-signature-key-2026';
 
+const getPort = (): number => {
+  const portArgIndex = process.argv.indexOf('--port');
+  if (portArgIndex !== -1 && process.argv[portArgIndex + 1]) {
+    const parsed = Number(process.argv[portArgIndex + 1]);
+    if (parsed > 0) return parsed;
+  }
+  // In AI Studio Build container, PORT is set to 8080 by Cloud Run, but the dev server must bind to port 3000
+  if (process.env.PORT && process.env.PORT !== '8080') {
+    return Number(process.env.PORT) || 3000;
+  }
+  return 3000;
+};
+const PORT = getPort();
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '50mb' }));
 
@@ -7412,24 +7424,11 @@ function getCleanAuthoritativeTrackingEvents(rawEvents: any[]): any[] {
     const openedMs = new Date(ev.openedAt).getTime();
     if (!Number.isFinite(openedMs)) continue;
 
-    // Check embedded timestamp in pixelId: px-<timestampMs>-<random>
-    const parts = cleanPixelId.split('-');
-    const embeddedSentMs = parts.length >= 2 ? Number(parts[1]) : 0;
-    const recordedSentMs = dispatchedPixelsMap.get(cleanPixelId) || embeddedSentMs;
-
-    // Ignore automated delivery-time spam filter / antivirus pre-scans within 15 seconds of dispatch
-    if (recordedSentMs > 0 && openedMs - recordedSentMs < 15000) {
-      continue;
-    }
-
-    // Ignore obvious bot / scanner user agents
+    // Ignore automated security scanners / headless scripts
     const ua = String(ev.userAgent || '').toLowerCase();
     if (
-      ua.includes('bot') ||
       ua.includes('spider') ||
       ua.includes('crawler') ||
-      ua.includes('scanner') ||
-      ua.includes('headless') ||
       ua.includes('barracuda') ||
       ua.includes('mimecast') ||
       ua.includes('proofpoint') ||
@@ -7440,13 +7439,13 @@ function getCleanAuthoritativeTrackingEvents(rawEvents: any[]): any[] {
       continue;
     }
 
-    // Cooldown deduplication: If this pixel was already opened within the last 60 seconds,
+    // Cooldown deduplication: If this pixel was already opened within the last 45 seconds,
     // treat rapid duplicate hits (e.g. GoogleImageProxy / Apple Mail parallel fetches) as the SAME single open
     const prevForPixel = acceptedByPixel.get(cleanPixelId) || [];
     const lastOpen = prevForPixel[prevForPixel.length - 1];
     if (lastOpen) {
       const lastOpenMs = new Date(lastOpen.openedAt).getTime();
-      if (Math.abs(openedMs - lastOpenMs) < 60000) {
+      if (Math.abs(openedMs - lastOpenMs) < 45000) {
         continue;
       }
     }
@@ -7473,26 +7472,15 @@ app.get('/api/track/open/:pixelId', (req, res) => {
     const ua = String(req.headers['user-agent'] || '');
     const uaLower = ua.toLowerCase();
     const purpose = String(req.headers['purpose'] || req.headers['x-moz'] || req.headers['sec-purpose'] || '').toLowerCase();
-
-    // Check embedded send timestamp from pixelId (format: px-<timestampMs>-<rand>)
-    const parts = pixelId.split('-');
-    const embeddedSentMs = parts.length >= 2 ? Number(parts[1]) : 0;
-    const sentAtMs = dispatchedPixelsMap.get(pixelId) || embeddedSentMs;
     const nowMs = Date.now();
 
-    // 1. Ignore within first 15 seconds of email send (automated MTA / Gmail / Outlook spam scanner image pre-fetch)
-    const isInitialScannerHit = sentAtMs > 0 && (nowMs - sentAtMs < 15000);
-
-    // 2. Ignore browser/proxy speculative prefetch or security scanners
+    // Ignore browser/proxy speculative prefetch or security scanners
     const isBotOrPrefetch =
       req.method !== 'GET' ||
       purpose.includes('prefetch') ||
       purpose.includes('preview') ||
-      uaLower.includes('bot') ||
       uaLower.includes('spider') ||
       uaLower.includes('crawler') ||
-      uaLower.includes('scanner') ||
-      uaLower.includes('headless') ||
       uaLower.includes('barracuda') ||
       uaLower.includes('mimecast') ||
       uaLower.includes('proofpoint') ||
@@ -7500,7 +7488,7 @@ app.get('/api/track/open/:pixelId', (req, res) => {
       uaLower.includes('wget/') ||
       uaLower.includes('python');
 
-    if (pixelId && !isInitialScannerHit && !isBotOrPrefetch) {
+    if (pixelId && !isBotOrPrefetch) {
       let events: any[] = [];
       if (fs.existsSync(TRACKING_EVENTS_FILE)) {
         try {
@@ -7511,11 +7499,11 @@ app.get('/api/track/open/:pixelId', (req, res) => {
         }
       }
 
-      // 3. Enforce 60-second cooldown per pixelId so 1 human open (which often triggers 2-3 proxy requests) records strictly ONCE
+      // Enforce 45-second cooldown per pixelId so 1 human open (which triggers parallel image fetches) records strictly ONCE
       const recentDuplicate = events.some((ev: any) => {
         if (!ev || String(ev.pixelId).replace(/\.gif$/i, '') !== pixelId) return false;
         const evTime = new Date(ev.openedAt).getTime();
-        return Number.isFinite(evTime) && Math.abs(nowMs - evTime) < 60000;
+        return Number.isFinite(evTime) && Math.abs(nowMs - evTime) < 45000;
       });
 
       if (!recentDuplicate) {
@@ -8027,13 +8015,14 @@ app.post('/api/smtp/send', async (req, res) => {
 
     const hostHeader = req.headers['x-forwarded-host'] || req.headers.host || '';
     const protoHeader = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-    const origin = hostHeader ? `${protoHeader}://${hostHeader}` : 'https://cold.visualsky.pro';
+    let origin = hostHeader ? `${protoHeader}://${hostHeader}` : '';
+    if (!origin || origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      origin = process.env.APP_URL || 'https://ais-dev-bzqp5bjpbxbgnzgimumyqz-405509726306.asia-southeast1.run.app';
+    }
+    origin = origin.replace(/\/+$/, '');
 
-    // Use a clean, standard 1x1 .gif image WITHOUT display:none!important or opacity:0!important (which trigger SpamAssassin HTML_HIDDEN rules)
-    const isLocalhostOrigin = origin.includes('localhost') || origin.includes('127.0.0.1');
-    const pixelHtml = isLocalhostOrigin
-      ? `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`
-      : `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`;
+    // Standard 1x1 invisible GIF tracking pixel without spam-triggering display:none
+    const pixelHtml = `<img src="${origin}/api/track/open/${pixelId}.gif" width="1" height="1" alt="" style="border:0;width:1px;height:1px;" />`;
 
     // Prepare attachments (MIME attachments + Attachment Store + Google Drive links)
     const incomingAttachments: any[] = Array.isArray(attachments) ? attachments : [];
@@ -10119,18 +10108,20 @@ async function startServer() {
     process.env.NODE_ENV !== 'production';
   const isProdServer = !isDevTsx;
 
-  // Refresh prebuilt assets on dev startup so any code changes are immediately compiled into prebuilt/app.js
+  // Refresh prebuilt assets on dev startup without delaying initial port binding
   if (isDevTsx) {
-    try {
-      const cp = await import('child_process');
-      cp.execSync('node scripts/sync-prebuilt.cjs', { cwd: process.cwd(), stdio: 'inherit' });
-      if (fs.existsSync(runtimeAppJsCandidate)) {
-        try {
-          fs.unlinkSync(runtimeAppJsCandidate);
-        } catch {}
+    if (!fs.existsSync(prebuiltAppJsPath) || !fs.existsSync(path.join(prebuiltCandidate, 'index.html'))) {
+      try {
+        const cp = await import('child_process');
+        cp.execSync('node scripts/sync-prebuilt.cjs', { cwd: process.cwd(), stdio: 'inherit' });
+      } catch (e) {
+        console.warn('[Server Startup] sync-prebuilt warning:', e);
       }
-    } catch (e) {
-      console.warn('[Server Startup] sync-prebuilt warning:', e);
+    } else {
+      // Run non-blocking background refresh so app.listen binds port 3000 immediately
+      import('child_process').then(cp => {
+        cp.exec('node scripts/sync-prebuilt.cjs', { cwd: process.cwd() }, () => {});
+      }).catch(() => {});
     }
   }
 
