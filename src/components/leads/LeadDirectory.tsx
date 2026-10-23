@@ -57,7 +57,9 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
     setSearchQuery,
     addNotification,
     setActiveTab,
-    sentEmails
+    sentEmails,
+    setLeads,
+    persistResourceDirectly
   } = useApp();
 
   // Active Filter
@@ -684,19 +686,112 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
     }
   };
 
-  const handleConfirmUpload = (allowDuplicates: boolean = false) => {
+  const handleConfirmUpload = (
+    mode: 'skip_and_import_unique' | 'reject_all' | 'overwrite_existing' | 'keep_both' = 'skip_and_import_unique'
+  ) => {
     if (parsedLeadsPreview.length === 0) return;
     const tagToAssign = uploadSelectedTag || leadTags[0]?.name || 'Imported Leads';
 
-    // If duplicate emails exist and permission is NOT granted, import only the unique leads
-    const leadsToImport = (!allowDuplicates && duplicateAnalysis.duplicateCount > 0)
-      ? duplicateAnalysis.uniqueLeads
-      : parsedLeadsPreview;
-
-    if (leadsToImport.length === 0) {
+    // 1. REJECT ALL: User chooses not to upload anything because duplicates exist
+    if (mode === 'reject_all') {
+      setShowUploadModal(false);
+      setParsedLeadsPreview([]);
+      setUploadedFileName('');
+      setShowDuplicateDetails(false);
       addNotification({
-        title: 'No New Leads to Import',
-        message: 'All leads in this file already exist in your directory. Upload was skipped.',
+        title: 'আপলোড বাতিল করা হয়েছে 🚫',
+        message: 'ডুপ্লিকেট ইমেইল শনাক্ত হওয়ায় কোনো নতুন লিড আপলোড করা হয়নি। আপনার পূর্বের সমস্ত ডেটা অক্ষত ও অপরিবর্তিত রয়েছে।',
+        type: 'warning',
+        linkTab: 'leads'
+      });
+      return;
+    }
+
+    // 2. OVERWRITE / UPDATE: Permission granted to update existing leads with newly uploaded data
+    if (mode === 'overwrite_existing') {
+      const uploadEmailMap = new Map<string, Partial<Lead>>();
+      parsedLeadsPreview.forEach(item => {
+        if (item.email) {
+          uploadEmailMap.set(item.email.trim().toLowerCase(), item);
+        }
+      });
+
+      let overwrittenCount = 0;
+      const updatedExistingLeads = leads.map(l => {
+        const cleanEmail = (l.email || '').trim().toLowerCase();
+        if (cleanEmail && uploadEmailMap.has(cleanEmail)) {
+          overwrittenCount++;
+          const newItem = uploadEmailMap.get(cleanEmail)!;
+          return {
+            ...l,
+            name: newItem.name || l.name,
+            company: newItem.company || l.company,
+            title: newItem.title || l.title,
+            phone: newItem.phone ? newItem.phone.trim() : l.phone,
+            website: newItem.website || l.website,
+            tags: Array.from(new Set([...(l.tags || []), tagToAssign])),
+            lastActivityDate: new Date().toISOString()
+          };
+        }
+        return l;
+      });
+
+      // Also append the unique leads that didn't exist before
+      if (duplicateAnalysis.uniqueCount > 0) {
+        const uniqueWithTag = duplicateAnalysis.uniqueLeads.map(l => ({
+          ...l,
+          tags: [tagToAssign]
+        }));
+        setLeads(updatedExistingLeads);
+        persistResourceDirectly('leads', updatedExistingLeads);
+        addLeads(uniqueWithTag, tagToAssign);
+      } else {
+        setLeads(updatedExistingLeads);
+        persistResourceDirectly('leads', updatedExistingLeads);
+      }
+
+      setShowUploadModal(false);
+      setParsedLeadsPreview([]);
+      setUploadedFileName('');
+      setShowDuplicateDetails(false);
+
+      addNotification({
+        title: 'অনুমতি অনুযায়ী ডেটা আপডেট সম্পন্ন 🔄',
+        message: `পূর্বের ${overwrittenCount}টি ডুপ্লিকেট লিডের তথ্য নতুন ডেটা দিয়ে আপডেট করা হয়েছে এবং ${duplicateAnalysis.uniqueCount}টি নতুন লিড যোগ করা হয়েছে।`,
+        type: 'lead',
+        linkTab: 'leads'
+      });
+      confetti({ particleCount: 60, spread: 70 });
+      return;
+    }
+
+    // 3. KEEP BOTH: Permission granted to add all as new records (including duplicates)
+    if (mode === 'keep_both') {
+      const leadsWithTag = parsedLeadsPreview.map(lead => ({
+        ...lead,
+        tags: [tagToAssign]
+      }));
+      addLeads(leadsWithTag, tagToAssign);
+      setShowUploadModal(false);
+      setParsedLeadsPreview([]);
+      setUploadedFileName('');
+      setShowDuplicateDetails(false);
+
+      addNotification({
+        title: `Imported ${parsedLeadsPreview.length} Leads (Duplicates Allowed) ✨`,
+        message: `অনুমতি নিয়ে ডুপ্লিকেট ${duplicateAnalysis.duplicateCount}টি সহ মোট ${parsedLeadsPreview.length}টি লিড যোগ করা হয়েছে।`,
+        type: 'lead',
+        linkTab: 'leads'
+      });
+      confetti({ particleCount: 60, spread: 70 });
+      return;
+    }
+
+    // 4. SKIP DUPLICATES: Keep old records 100% as they were, import only unique new leads
+    if (duplicateAnalysis.uniqueCount === 0) {
+      addNotification({
+        title: 'নতুন কোনো লিড নেই',
+        message: 'ফাইলের সব লিডই ডুপ্লিকেট। পূর্বে যা ছিল সেটাই রাখা হয়েছে, কোনো নতুন লিড যোগ করা হয়নি।',
         type: 'warning'
       });
       setShowUploadModal(false);
@@ -706,40 +801,22 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
       return;
     }
 
-    const leadsWithTag = leadsToImport.map(lead => ({
+    const uniqueWithTag = duplicateAnalysis.uniqueLeads.map(lead => ({
       ...lead,
       tags: [tagToAssign]
     }));
-
-    addLeads(leadsWithTag, tagToAssign);
+    addLeads(uniqueWithTag, tagToAssign);
     setShowUploadModal(false);
     setParsedLeadsPreview([]);
     setUploadedFileName('');
     setShowDuplicateDetails(false);
 
-    if (allowDuplicates && duplicateAnalysis.duplicateCount > 0) {
-      addNotification({
-        title: `Imported ${leadsToImport.length} Leads (Duplicates Allowed) ✨`,
-        message: `Imported with permission, including ${duplicateAnalysis.duplicateCount} duplicate email(s).`,
-        type: 'lead',
-        linkTab: 'leads'
-      });
-    } else if (duplicateAnalysis.duplicateCount > 0) {
-      addNotification({
-        title: `Imported ${leadsToImport.length} Unique Leads ✨`,
-        message: `Skipped ${duplicateAnalysis.duplicateCount} duplicate email(s) that already exist in your directory.`,
-        type: 'lead',
-        linkTab: 'leads'
-      });
-    } else {
-      addNotification({
-        title: `Imported ${leadsToImport.length} Leads ✨`,
-        message: `All ${leadsToImport.length} leads successfully imported with tag "${tagToAssign}".`,
-        type: 'lead',
-        linkTab: 'leads'
-      });
-    }
-
+    addNotification({
+      title: `Imported ${duplicateAnalysis.uniqueCount} Unique Leads ✨`,
+      message: `পূর্বে যা ছিল হুবহু সেটাই রাখা হয়েছে। ${duplicateAnalysis.duplicateCount}টি ডুপ্লিকেট মেইল বাদ দিয়ে শুধু নতুনগুলো আপলোড হয়েছে।`,
+      type: 'lead',
+      linkTab: 'leads'
+    });
     confetti({ particleCount: 60, spread: 70 });
   };
 
@@ -1832,19 +1909,19 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
 
                     {/* ⚠️ DUPLICATE EMAIL DETECTION & PERMISSION BLOCK */}
                     {duplicateAnalysis.duplicateCount > 0 ? (
-                      <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/50 space-y-2.5">
+                      <div className="p-4 rounded-2xl bg-amber-950/30 border border-amber-500/50 space-y-3">
                         <div className="flex items-start justify-between gap-2">
                           <div className="space-y-1">
                             <div className="flex items-center gap-2">
                               <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-amber-500 text-slate-950">
-                                ⚠️ Duplicate Warning
+                                ⚠️ Duplicate Warning & Permission
                               </span>
                               <span className="text-xs font-bold text-amber-200">
                                 {duplicateAnalysis.duplicateCount}টি ডুপ্লিকেট ইমেইল পাওয়া গেছে
                               </span>
                             </div>
                             <p className="text-[11px] text-slate-300 leading-relaxed">
-                              ফাইলের <strong className="text-amber-300">{duplicateAnalysis.duplicateCount}টি</strong> ইমেইল ইতিমধ্যে পূর্বের লিড লিস্টে বিদ্যমান। অনুমতি ছাড়া ডুপ্লিকেট আপলোড হবে না।
+                              ফাইলের <strong className="text-amber-300">{duplicateAnalysis.duplicateCount}টি ইমেইল</strong> ইতিপূর্বে ডিরেক্টরিতে আপলোড করা লিস্টে বিদ্যমান। ডুপ্লিকেট সংক্রান্ত আপনার পছন্দ নির্বাচন করুন:
                             </p>
                           </div>
                           <button
@@ -1857,14 +1934,14 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                         </div>
 
                         {showDuplicateDetails && (
-                          <div className="max-h-32 overflow-y-auto space-y-1 pr-1 bg-slate-950/80 p-2.5 rounded-xl border border-amber-500/20">
+                          <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 bg-slate-950/80 p-2.5 rounded-xl border border-amber-500/20">
                             {duplicateAnalysis.duplicateLeads.map((dup, i) => (
-                              <div key={i} className="flex items-center justify-between text-[11px] py-1 px-2.5 rounded bg-slate-900/90 border border-slate-800">
+                              <div key={i} className="flex items-center justify-between text-[11px] py-1.5 px-2.5 rounded bg-slate-900/90 border border-slate-800">
                                 <div className="flex items-center gap-1.5 truncate">
-                                  <span className="font-mono text-amber-300 truncate">{dup.item.email}</span>
+                                  <span className="font-mono text-amber-300 font-bold truncate">{dup.item.email}</span>
                                   <span className="text-[10px] text-slate-400 truncate">({dup.item.name || 'Lead'})</span>
                                 </div>
-                                <span className="text-[10px] font-bold text-amber-400 shrink-0 ml-2">
+                                <span className="text-[10px] font-semibold text-amber-400 shrink-0 ml-2">
                                   {dup.existingMatch ? `আগে ছিল: ${dup.existingMatch.company || dup.existingMatch.name}` : dup.reason}
                                 </span>
                               </div>
@@ -1872,22 +1949,71 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                           </div>
                         )}
 
-                        <div className="flex items-center gap-2 pt-1 flex-wrap">
-                          {duplicateAnalysis.uniqueCount > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => handleConfirmUpload(false)}
-                              className="flex-1 min-w-[220px] py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-600/30 transition cursor-pointer flex items-center justify-center gap-1.5"
-                            >
-                              <span>✓ ডুপ্লিকেট বাদ দিয়ে শুধু নতুন {duplicateAnalysis.uniqueCount}টি আপলোড করুন (নিরাপদ)</span>
-                            </button>
-                          )}
+                        {/* Interactive Permission Action Buttons */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
+                          {/* Option 1: Keep Old, upload unique */}
                           <button
                             type="button"
-                            onClick={() => handleConfirmUpload(true)}
-                            className="py-2 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold text-xs transition cursor-pointer"
+                            onClick={() => handleConfirmUpload('skip_and_import_unique')}
+                            disabled={duplicateAnalysis.uniqueCount === 0}
+                            className="p-2.5 rounded-xl bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-500/40 disabled:opacity-40 text-left transition cursor-pointer group"
                           >
-                            অনুমতি দিন: ডুপ্লিকেট সহ সবগুলো ({parsedLeadsPreview.length}টি) আপলোড করুন
+                            <div className="text-[11px] font-extrabold text-emerald-300 flex items-center justify-between">
+                              <span>✓ পূর্বে যা ছিল সেটাই রাখুন</span>
+                              <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded">
+                                +{duplicateAnalysis.uniqueCount} নতুন
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-slate-400 mt-0.5 group-hover:text-slate-300">
+                              আগের ডেটা অক্ষত থাকবে, শুধু নতুন {duplicateAnalysis.uniqueCount}টি ইউনিক লিড আপলোড হবে।
+                            </div>
+                          </button>
+
+                          {/* Option 2: Reject All / Strict No-Upload if duplicate */}
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmUpload('reject_all')}
+                            className="p-2.5 rounded-xl bg-rose-950/30 hover:bg-rose-900/40 border border-rose-500/40 text-left transition cursor-pointer group"
+                          >
+                            <div className="text-[11px] font-extrabold text-rose-300 flex items-center justify-between">
+                              <span>🚫 পুরো আপলোড বাতিল রাখুন</span>
+                              <span className="text-[10px] bg-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded">0 আপলোড</span>
+                            </div>
+                            <div className="text-[10px] text-slate-400 mt-0.5 group-hover:text-slate-300">
+                              ডুপ্লিকেট পাওয়ায় কোনো কিছুই আপলোড হবে না। পূর্বে যা ছিল হুবহু সেটাই থাকবে।
+                            </div>
+                          </button>
+
+                          {/* Option 3: Overwrite with new data (Permission granted) */}
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmUpload('overwrite_existing')}
+                            className="p-2.5 rounded-xl bg-cyan-950/30 hover:bg-cyan-900/40 border border-cyan-500/40 text-left transition cursor-pointer group"
+                          >
+                            <div className="text-[11px] font-extrabold text-cyan-300 flex items-center justify-between">
+                              <span>🔄 অনুমতি: নতুন তথ্য দিয়ে আপডেট</span>
+                              <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded">আপডেট</span>
+                            </div>
+                            <div className="text-[10px] text-slate-400 mt-0.5 group-hover:text-slate-300">
+                              পূর্বের লিডের নাম, কোম্পানি, ফোন ইত্যাদি নতুন ফাইলের ডেটা দিয়ে প্রতিস্থাপন হবে।
+                            </div>
+                          </button>
+
+                          {/* Option 4: Keep Both / Allow duplicates */}
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmUpload('keep_both')}
+                            className="p-2.5 rounded-xl bg-amber-950/30 hover:bg-amber-900/40 border border-amber-500/40 text-left transition cursor-pointer group"
+                          >
+                            <div className="text-[11px] font-extrabold text-amber-300 flex items-center justify-between">
+                              <span>➕ অনুমতি: ডুপ্লিকেট সহ সব আপলোড</span>
+                              <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded">
+                                {parsedLeadsPreview.length}টি
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-slate-400 mt-0.5 group-hover:text-slate-300">
+                              পূর্বের রেকর্ডও থাকবে এবং নতুনগুলোকেও অতিরিক্ত রেকর্ড হিসেবে সিস্টেমে যোগ করবে।
+                            </div>
                           </button>
                         </div>
                       </div>
@@ -1912,30 +2038,11 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                 >
                   Cancel
                 </button>
-                {duplicateAnalysis.duplicateCount > 0 ? (
-                  <>
-                    {duplicateAnalysis.uniqueCount > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => handleConfirmUpload(false)}
-                        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer"
-                      >
-                        Import {duplicateAnalysis.uniqueCount} Unique Leads
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleConfirmUpload(true)}
-                      className="px-4 py-2 rounded-xl bg-amber-500/30 hover:bg-amber-500/40 text-amber-300 border border-amber-500/40 font-bold text-xs transition cursor-pointer"
-                    >
-                      Allow All ({parsedLeadsPreview.length})
-                    </button>
-                  </>
-                ) : (
+                {duplicateAnalysis.duplicateCount === 0 && (
                   <button
                     type="button"
                     disabled={parsedLeadsPreview.length === 0}
-                    onClick={() => handleConfirmUpload(false)}
+                    onClick={() => handleConfirmUpload('skip_and_import_unique')}
                     className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer"
                   >
                     Import {parsedLeadsPreview.length} Leads
@@ -2222,14 +2329,81 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                   const pasteDuplicates = validItems.filter(i => pasteExistingSet.has(i.email.trim().toLowerCase()));
                   const pasteUniqueValid = validItems.filter(i => !pasteExistingSet.has(i.email.trim().toLowerCase()));
 
-                  const doImportPaste = (allowDuplicates: boolean) => {
+                  const doImportPaste = (mode: 'skip_and_import_unique' | 'reject_all' | 'overwrite_existing' | 'keep_both') => {
                     const tagToAssign = uploadSelectedTag || leadTags[0]?.name || 'Verified Leads';
-                    const itemsToImport = allowDuplicates ? validItems : pasteUniqueValid;
 
+                    if (mode === 'reject_all') {
+                      setShowPasteVerifyModal(false);
+                      setRawPasteText('');
+                      setPastedItems([]);
+                      addNotification({
+                        title: 'আপলোড বাতিল করা হয়েছে 🚫',
+                        message: 'ডুপ্লিকেট ইমেইল পাওয়ায় পেস্ট করা কোনো লিড আপলোড করা হয়নি। পূর্বের সব ডেটা অক্ষত রয়েছে।',
+                        type: 'warning',
+                        linkTab: 'leads'
+                      });
+                      return;
+                    }
+
+                    if (mode === 'overwrite_existing') {
+                      const pasteMap = new Map<string, typeof validItems[0]>();
+                      validItems.forEach(i => pasteMap.set(i.email.trim().toLowerCase(), i));
+
+                      let overwritten = 0;
+                      const updatedExisting = leads.map(l => {
+                        const cleanE = (l.email || '').trim().toLowerCase();
+                        if (cleanE && pasteMap.has(cleanE)) {
+                          overwritten++;
+                          const item = pasteMap.get(cleanE)!;
+                          return {
+                            ...l,
+                            name: item.name || l.name,
+                            company: item.company || l.company,
+                            tags: Array.from(new Set([...(l.tags || []), tagToAssign])),
+                            lastActivityDate: new Date().toISOString()
+                          };
+                        }
+                        return l;
+                      });
+
+                      if (pasteUniqueValid.length > 0) {
+                        const newClean = pasteUniqueValid.map(item => ({
+                          name: item.name,
+                          email: item.email,
+                          company: item.company,
+                          title: 'Decision Maker',
+                          phone: '',
+                          website: `https://${item.email.split('@')[1] || 'example.com'}`,
+                          niche: 'Verified Outreach Target',
+                          location: 'United States',
+                          tags: [tagToAssign],
+                        }));
+                        setLeads(updatedExisting);
+                        persistResourceDirectly('leads', updatedExisting);
+                        addLeads(newClean, tagToAssign);
+                      } else {
+                        setLeads(updatedExisting);
+                        persistResourceDirectly('leads', updatedExisting);
+                      }
+
+                      setShowPasteVerifyModal(false);
+                      setRawPasteText('');
+                      setPastedItems([]);
+                      addNotification({
+                        title: 'অনুমতি অনুযায়ী ডেটা আপডেট সম্পন্ন 🔄',
+                        message: `পূর্বের ${overwritten}টি ডুপ্লিকেট লিডের তথ্য আপডেট করা হয়েছে এবং ${pasteUniqueValid.length}টি নতুন লিড যোগ হয়েছে।`,
+                        type: 'lead',
+                        linkTab: 'leads'
+                      });
+                      confetti({ particleCount: 55, spread: 65 });
+                      return;
+                    }
+
+                    const itemsToImport = mode === 'keep_both' ? validItems : pasteUniqueValid;
                     if (itemsToImport.length === 0) {
                       addNotification({
-                        title: 'No New Leads to Import',
-                        message: 'All pasted emails already exist in your directory.',
+                        title: 'নতুন কোনো লিড নেই',
+                        message: 'পেস্ট করা সব লিডই পূর্বে বিদ্যমান। পূর্বে যা ছিল সেটাই রাখা হয়েছে।',
                         type: 'warning'
                       });
                       setShowPasteVerifyModal(false);
@@ -2254,24 +2428,17 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                     setRawPasteText('');
                     setPastedItems([]);
 
-                    if (allowDuplicates && pasteDuplicates.length > 0) {
+                    if (mode === 'keep_both' && pasteDuplicates.length > 0) {
                       addNotification({
                         title: `Imported ${itemsToImport.length} Leads (Duplicates Allowed) ✨`,
-                        message: `Imported with permission, including ${pasteDuplicates.length} duplicate email(s).`,
-                        type: 'lead',
-                        linkTab: 'leads'
-                      });
-                    } else if (pasteDuplicates.length > 0) {
-                      addNotification({
-                        title: `Imported ${itemsToImport.length} Unique Leads ✨`,
-                        message: `Skipped ${pasteDuplicates.length} duplicate email(s) that already exist in your directory.`,
+                        message: `অনুমতি নিয়ে ডুপ্লিকেট ${pasteDuplicates.length}টি সহ মোট ${itemsToImport.length}টি লিড যোগ করা হয়েছে।`,
                         type: 'lead',
                         linkTab: 'leads'
                       });
                     } else {
                       addNotification({
-                        title: `Imported ${itemsToImport.length} Leads ✨`,
-                        message: `All ${itemsToImport.length} leads imported with tag "${tagToAssign}".`,
+                        title: `Imported ${itemsToImport.length} Unique Leads ✨`,
+                        message: `পূর্বে যা ছিল হুবহু সেটাই রাখা হয়েছে। ডুপ্লিকেট বাদ দিয়ে ${itemsToImport.length}টি ইউনিক লিড যোগ হয়েছে।`,
                         type: 'lead',
                         linkTab: 'leads'
                       });
@@ -2283,28 +2450,46 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                     <div className="flex items-center gap-2 flex-wrap justify-end">
                       {pasteDuplicates.length > 0 ? (
                         <>
+                          <button
+                            type="button"
+                            onClick={() => doImportPaste('reject_all')}
+                            className="px-3 py-2 rounded-xl bg-rose-950/40 hover:bg-rose-900/50 border border-rose-500/40 text-rose-300 font-bold text-xs transition cursor-pointer"
+                            title="ডুপ্লিকেট পাওয়ায় কোনো কিছুই আপলোড হবে না"
+                          >
+                            🚫 নতুনগুলোও আপলোড করবেন না (বাতিল)
+                          </button>
                           {pasteUniqueValid.length > 0 && (
                             <button
                               type="button"
-                              onClick={() => doImportPaste(false)}
-                              className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs shadow-lg transition cursor-pointer"
+                              onClick={() => doImportPaste('skip_and_import_unique')}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg transition cursor-pointer"
+                              title="পূর্বের ডেটা অপরিবর্তিত থাকবে, শুধু নতুনগুলো যোগ হবে"
                             >
-                              ✓ ডুপ্লিকেট বাদ দিয়ে নতুন {pasteUniqueValid.length}টি আপলোড করুন
+                              ✓ পূর্বেরটি রাখুন (নতুন {pasteUniqueValid.length}টি যোগ)
                             </button>
                           )}
                           <button
                             type="button"
-                            onClick={() => doImportPaste(true)}
-                            className="px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold text-xs transition cursor-pointer"
+                            onClick={() => doImportPaste('overwrite_existing')}
+                            className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-extrabold text-xs shadow-lg transition cursor-pointer"
+                            title="অনুমতি দিন: পূর্বের তথ্য নতুন দিয়ে আপডেট করুন"
                           >
-                            অনুমতি দিন: ডুপ্লিকেট সহ সবগুলো ({validItems.length}টি) আপলোড করুন
+                            🔄 অনুমতি: তথ্য আপডেট
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => doImportPaste('keep_both')}
+                            className="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold text-xs transition cursor-pointer"
+                            title="অনুমতি দিন: ডুপ্লিকেট সহ সবগুলো যোগ করুন"
+                          >
+                            ➕ অনুমতি: সব যোগ ({validItems.length})
                           </button>
                         </>
                       ) : (
                         <button
                           type="button"
                           disabled={validItems.length === 0}
-                          onClick={() => doImportPaste(false)}
+                          onClick={() => doImportPaste('skip_and_import_unique')}
                           className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer"
                         >
                           Import {validItems.length} Verified Valid Leads (নষ্ট মেইল বাদে)
