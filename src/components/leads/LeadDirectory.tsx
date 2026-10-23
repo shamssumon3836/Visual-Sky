@@ -63,7 +63,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
   } = useApp();
 
   // Active Filter
-  const [activeFilter, setActiveFilter] = useState<'all' | 'replied' | 'opened' | 'inactive_7d' | 'inactive_14d' | 'inactive_30d' | 'new' | 'invalid_email'>('all');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'replied' | 'opened' | 'inactive_3d' | 'inactive_7d' | 'inactive_14d' | 'inactive_30d' | 'new' | 'invalid_email'>('all');
   const [selectedTagFilter, setSelectedTagFilter] = useState<string>('all');
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
   const [showColumnModal, setShowColumnModal] = useState<boolean>(false);
@@ -374,6 +374,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
         );
       }
       if (activeFilter === 'new') return lead.status === 'new';
+      if (activeFilter === 'inactive_3d') return inactiveDays >= 3 && inactiveDays < 7;
       if (activeFilter === 'inactive_7d') return inactiveDays >= 7 && inactiveDays < 14;
       if (activeFilter === 'inactive_14d') return inactiveDays >= 14 && inactiveDays < 30;
       if (activeFilter === 'inactive_30d') return inactiveDays >= 30;
@@ -1021,6 +1022,12 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
+              onClick={() => launchQuickFollowUp('3d')}
+              className="px-3 py-1.5 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+            >
+              <span>⚡ 3-Day Follow-Up</span>
+            </button>
+            <button
               onClick={() => launchQuickFollowUp('7d')}
               className="px-3 py-1.5 rounded-lg bg-amber-950/40 hover:bg-amber-900/60 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
             >
@@ -1109,6 +1116,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
               { id: 'opened', label: '👁️ Opened' },
               { id: 'new', label: '✨ New' },
               { id: 'invalid_email', label: `🚫 নষ্ট মেইল (${emailHealthSummary.invalidLeads.length})` },
+              { id: 'inactive_3d', label: '⏳ Inactive 3d+' },
               { id: 'inactive_7d', label: '⏳ Inactive 7d+' },
               { id: 'inactive_14d', label: '⏳ Inactive 14d+' },
               { id: 'inactive_30d', label: '⏳ Inactive 30d+' },

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { useApp, getSMTPAccountMetrics, getLeadInactiveDays } from '../../context/AppContext';
+import { useApp, getSMTPAccountMetrics, getLeadInactiveDays, getLeadOriginalSmtp, LeadOriginalSmtpResult } from '../../context/AppContext';
 import { Campaign, CampaignStep, Lead, SMTPAccount, EmailTemplate } from '../../types';
 import { SMTPConnectModal } from '../smtp/SMTPConnectModal';
 import { safeParseResponse } from '../../lib/safeFetch';
@@ -93,18 +93,19 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
   const [campaignToDelete, setCampaignToDelete] = useState<Campaign | null>(null);
 
-  // Quick Follow-up modal (7d / 14d / 30d Cohorts)
+  // Quick Follow-up modal (3d / 7d / 14d / 30d Cohorts with Multi-SMTP Auto-Routing)
   const [showFollowUpModal, setShowFollowUpModal] = useState<boolean>(false);
-  const [followUpDays, setFollowUpDays] = useState<'7d' | '14d' | '30d'>('7d');
+  const [followUpDays, setFollowUpDays] = useState<'3d' | '7d' | '14d' | '30d'>('3d');
   const [followUpIncludeAllUnreplied, setFollowUpIncludeAllUnreplied] = useState<boolean>(false);
   const [followUpError, setFollowUpError] = useState<string>('');
-  const [followUpSubject, setFollowUpSubject] = useState<string>('Quick follow-up regarding our conversation last week');
+  const [followUpSubject, setFollowUpSubject] = useState<string>('Quick touch base regarding my note earlier this week');
   const [followUpBody, setFollowUpBody] = useState<string>(
-    'Hi {{name}},\n\nFollowing up on my message from about a week ago regarding {{company}}\'s outbound growth stack.\n\nDid you have a quick moment to review?\n\nBest regards,\n' + (currentUser.name || 'Outreach Manager')
+    'Hi {{name}},\n\nWanted to quickly circle back on my note from a few days ago regarding {{company}}\'s outbound growth stack.\n\nDid you have a brief moment to take a look?\n\nBest regards,\n' + (currentUser.name || 'Outreach Specialist')
   );
   const [followUpSelectedLeadIds, setFollowUpSelectedLeadIds] = useState<string[]>([]);
   const [followUpLeadSearch, setFollowUpLeadSearch] = useState<string>('');
   const [followUpSmtpId, setFollowUpSmtpId] = useState<string>('');
+  const [followUpSmtpTab, setFollowUpSmtpTab] = useState<string>('all'); // 'all' | smtpId | 'unassigned'
   const [followUpSendMode, setFollowUpSendMode] = useState<'instant' | 'scheduled'>('instant');
   const [followUpInterval, setFollowUpInterval] = useState<number>(15);
 
@@ -907,11 +908,12 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     setShowWizardModal(true);
   };
 
-  // Open 7d / 14d / 30d Cohort Follow-up Suite
-  const handleOpenFollowUpCohort = (days: '7d' | '14d' | '30d') => {
+  // Open 3d / 7d / 14d / 30d Cohort Follow-up Suite
+  const handleOpenFollowUpCohort = (days: '3d' | '7d' | '14d' | '30d') => {
     setFollowUpDays(days);
     setFollowUpError('');
-    const dayCount = days === '7d' ? 7 : days === '14d' ? 14 : 30;
+    setFollowUpSmtpTab('all');
+    const dayCount = days === '3d' ? 3 : days === '7d' ? 7 : days === '14d' ? 14 : 30;
     const dormant = getDormantLeads(dayCount);
     const allUnreplied = activeLeads.filter(l => !l.isReplied && l.status !== 'replied');
     const useAllUnreplied = dormant.length === 0 && allUnreplied.length > 0;
@@ -922,7 +924,10 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     setFollowUpInterval(15);
     setFollowUpSendMode('instant');
 
-    if (days === '7d') {
+    if (days === '3d') {
+      setFollowUpSubject('Quick touch base regarding my note earlier this week');
+      setFollowUpBody(`Hi {{name}},\n\nWanted to quickly circle back on my note from a few days ago regarding {{company}}'s outbound growth stack.\n\nDid you have a brief moment to take a look?\n\nBest regards,\n${currentUser.name || 'Outreach Specialist'}`);
+    } else if (days === '7d') {
       setFollowUpSubject('Quick follow-up regarding our conversation last week');
       setFollowUpBody(`Hi {{name}},\n\nFollowing up on my message from about a week ago regarding {{company}}'s cold outreach stack.\n\nDid you have a quick 2 minutes to review?\n\nBest regards,\n${currentUser.name || 'Outreach Specialist'}`);
     } else if (days === '14d') {
@@ -937,7 +942,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
   // Filtered leads in the Follow-up Cohort modal
   const cohortDormantLeads = useMemo(() => {
-    const dayCount = followUpDays === '7d' ? 7 : followUpDays === '14d' ? 14 : 30;
+    const dayCount = followUpDays === '3d' ? 3 : followUpDays === '7d' ? 7 : followUpDays === '14d' ? 14 : 30;
     const strictDormant = getDormantLeads(dayCount);
     const base =
       followUpIncludeAllUnreplied || strictDormant.length === 0
@@ -953,6 +958,63 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     );
   }, [activeLeads, followUpDays, followUpIncludeAllUnreplied, followUpLeadSearch]);
 
+  // Map every dormant lead to its original sending SMTP relay (via sentEmails log and inbox threads)
+  const leadSmtpMapping = useMemo(() => {
+    const map = new Map<string, LeadOriginalSmtpResult>();
+    cohortDormantLeads.forEach(lead => {
+      const res = getLeadOriginalSmtp(lead, sentEmails, threads, activeSmtps);
+      map.set(lead.id, res);
+    });
+    return map;
+  }, [cohortDormantLeads, sentEmails, threads, activeSmtps]);
+
+  // Group leads by detected original SMTP relay
+  const smtpGroupsSummary = useMemo(() => {
+    const groupsMap = new Map<string, { smtp: SMTPAccount; leads: Lead[]; count: number }>();
+    const unassignedLeads: Lead[] = [];
+
+    cohortDormantLeads.forEach(lead => {
+      const mapped = leadSmtpMapping.get(lead.id);
+      if (mapped?.hasPreviousSend && mapped.smtpId && mapped.smtpAccount) {
+        const existing = groupsMap.get(mapped.smtpId);
+        if (existing) {
+          existing.leads.push(lead);
+          existing.count++;
+        } else {
+          groupsMap.set(mapped.smtpId, {
+            smtp: mapped.smtpAccount,
+            leads: [lead],
+            count: 1
+          });
+        }
+      } else {
+        unassignedLeads.push(lead);
+      }
+    });
+
+    const groups = Array.from(groupsMap.values());
+    const totalMapped = groups.reduce((acc, g) => acc + g.count, 0);
+
+    return {
+      groups,
+      unassignedLeads,
+      unassignedCount: unassignedLeads.length,
+      totalMapped,
+      totalLeads: cohortDormantLeads.length
+    };
+  }, [cohortDormantLeads, leadSmtpMapping]);
+
+  // Displayed leads inside the follow-up modal, honoring the active SMTP tab
+  const displayedFollowUpLeads = useMemo(() => {
+    if (followUpSmtpTab === 'all') {
+      return cohortDormantLeads;
+    }
+    if (followUpSmtpTab === 'unassigned') {
+      return cohortDormantLeads.filter(l => !leadSmtpMapping.get(l.id)?.hasPreviousSend);
+    }
+    return cohortDormantLeads.filter(l => leadSmtpMapping.get(l.id)?.smtpId === followUpSmtpTab);
+  }, [cohortDormantLeads, followUpSmtpTab, leadSmtpMapping]);
+
   const toggleFollowUpLead = (id: string) => {
     setFollowUpError('');
     if (followUpSelectedLeadIds.includes(id)) {
@@ -962,14 +1024,23 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     }
   };
 
-  const handleExecuteFollowUpModal = () => {
+  const handleExecuteFollowUpModal = (onlyTargetSmtpId?: string) => {
     setFollowUpError('');
-    if (followUpSelectedLeadIds.length === 0) {
-      setFollowUpError('⚠️ Please select at least 1 lead recipient to launch the follow-up sequence.');
-      return;
-    }
     if (activeSmtps.length === 0) {
       setFollowUpError('⚠️ No active Outbound SMTP Relay connected. Click "+ Connect New Relay" first.');
+      return;
+    }
+
+    const fallbackSmtp = activeSmtps.find(s => s.id === followUpSmtpId) || activeSmtps[0];
+    const candidateIds = onlyTargetSmtpId
+      ? followUpSelectedLeadIds.filter(id => {
+          if (onlyTargetSmtpId === 'unassigned') return !leadSmtpMapping.get(id)?.hasPreviousSend;
+          return leadSmtpMapping.get(id)?.smtpId === onlyTargetSmtpId;
+        })
+      : followUpSelectedLeadIds;
+
+    if (candidateIds.length === 0) {
+      setFollowUpError('⚠️ Please select at least 1 lead recipient to launch the follow-up sequence.');
       return;
     }
     if (!followUpSubject.trim() || !followUpBody.trim()) {
@@ -977,15 +1048,26 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       return;
     }
 
+    // Build the per-lead SMTP mapping so each lead gets dispatched strictly via the SMTP that emailed it
+    const leadToSmtpMap: Record<string, string> = {};
+    candidateIds.forEach(id => {
+      const mapped = leadSmtpMapping.get(id);
+      if (mapped?.hasPreviousSend && mapped.smtpId && activeSmtps.some(s => s.id === mapped.smtpId)) {
+        leadToSmtpMap[id] = mapped.smtpId;
+      } else {
+        leadToSmtpMap[id] = fallbackSmtp.id;
+      }
+    });
+
     const newCamp = createCampaign({
       name: `${followUpDays.toUpperCase()} Follow-Up Cohort Sequence`,
       niche: 'Automated Dormant Re-engagement',
       status: followUpSendMode === 'instant' ? 'running' : 'draft',
-      totalLeads: followUpSelectedLeadIds.length,
-      leadIds: followUpSelectedLeadIds,
+      totalLeads: candidateIds.length,
+      leadIds: candidateIds,
       sendMode: followUpSendMode,
       sendingIntervalSec: followUpInterval,
-      assignedSmtpId: followUpSmtpId || activeSmtps[0]?.id,
+      assignedSmtpId: fallbackSmtp.id,
       steps: [
         {
           stepNumber: 1,
@@ -998,7 +1080,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     });
 
     // Update leads activity
-    followUpSelectedLeadIds.forEach(id => {
+    candidateIds.forEach(id => {
       updateLead(id, {
         daysAgo: 0,
         lastActivityDate: new Date().toISOString()
@@ -1008,9 +1090,9 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     setShowFollowUpModal(false);
 
     if (followUpSendMode === 'instant') {
-      // Launch live dispatcher for these leads
-      setSelectedLeadIds(followUpSelectedLeadIds);
-      setSelectedSmtpId(followUpSmtpId || activeSmtps[0]?.id);
+      // Launch live dispatcher for these leads with per-lead mapped SMTP routing!
+      setSelectedLeadIds(candidateIds);
+      setSelectedSmtpId(fallbackSmtp.id);
       setWizardSteps([
         {
           stepNumber: 1,
@@ -1021,19 +1103,30 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         }
       ]);
       setSendingInterval(followUpInterval);
-      startLiveDispatcher(newCamp, followUpSelectedLeadIds, [
-        {
-          stepNumber: 1,
-          delayDays: 0,
-          subject: followUpSubject,
-          body: followUpBody,
-          triggerCondition: 'all'
-        }
-      ], followUpSmtpId || activeSmtps[0]?.id, followUpInterval);
+      startLiveDispatcher(
+        newCamp, 
+        candidateIds, 
+        [
+          {
+            stepNumber: 1,
+            delayDays: 0,
+            subject: followUpSubject,
+            body: followUpBody,
+            triggerCondition: 'all'
+          }
+        ], 
+        fallbackSmtp.id, 
+        followUpInterval,
+        undefined,
+        undefined,
+        undefined,
+        0,
+        leadToSmtpMap
+      );
     } else {
       addNotification({
         title: `Follow-Up Cohort Scheduled (${followUpDays.toUpperCase()}) 📅`,
-        message: `Automated sequence enrolled for ${followUpSelectedLeadIds.length} recipients.`,
+        message: `Multi-SMTP automated sequence enrolled for ${candidateIds.length} recipients.`,
         type: 'campaign'
       });
     }
@@ -1376,7 +1469,8 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     overrideSmtpIds?: string[],
     overrideSenderName?: string,
     overrideSenderEmail?: string,
-    stepIndexToRun = 0
+    stepIndexToRun = 0,
+    overrideLeadToSmtpMap?: Record<string, string>
   ) => {
     setShowWizardModal(false);
     setShowLiveDispatcher(true); // Open live dispatcher engine modal so user sees real-time progress!
@@ -1525,7 +1619,11 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       }
 
       const lead = targetLeads[i];
-      const smtp = isRoundRobin
+      const mappedSmtpId = overrideLeadToSmtpMap?.[lead.id];
+      const mappedSmtp = mappedSmtpId ? (smtpAccounts.find(s => s.id === mappedSmtpId) || activeSmtps.find(s => s.id === mappedSmtpId)) : undefined;
+      const smtp = mappedSmtp
+        ? mappedSmtp
+        : isRoundRobin
         ? (activePool[i % (activePool.length || 1)] || fixedSmtp)
         : fixedSmtp;
 
@@ -1554,12 +1652,14 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         lead.icebreaker ||
         `came across ${lead.company || 'your team'} and loved your recent work in ${lead.niche || campaignNiche || 'your space'}`;
       const effectiveSenderName =
+        (mappedSmtp && mappedSmtp.fromName) ||
         overrideSenderName ||
         targetCampaign?.senderName ||
         smtp?.fromName ||
         senderName ||
         'Visual Sky Outreach';
       const effectiveSenderEmail =
+        (mappedSmtp && (mappedSmtp.fromEmail || mappedSmtp.username)) ||
         smtp?.fromEmail ||
         smtp?.username ||
         overrideSenderEmail ||
@@ -1960,6 +2060,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   }, [activeCampaigns, isDispatching]);
 
   // Dormant counts (calculated accurately from lastActivityDate and daysAgo)
+  const dormant3d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 3 && l.status !== 'replied').length;
   const dormant7d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 7 && l.status !== 'replied').length;
   const dormant14d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 14 && l.status !== 'replied').length;
   const dormant30d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 30 && l.status !== 'replied').length;
@@ -2373,7 +2474,27 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <button
+            type="button"
+            onClick={() => handleOpenFollowUpCohort('3d')}
+            className="p-4 rounded-2xl bg-emerald-950/20 hover:bg-emerald-950/40 border border-emerald-500/30 hover:border-emerald-400 transition text-left flex flex-col justify-between cursor-pointer group"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-extrabold text-xs text-emerald-300">3-Day Touch Base Follow-Up</span>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 font-mono text-[11px] font-bold">
+                {dormant3d} Leads
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-2 line-clamp-2">
+              High-context check-in within 72 hours while proposal is top-of-mind.
+            </p>
+            <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-400 mt-3 group-hover:underline">
+              <span>Select Leads & Launch Cohort</span>
+              <ArrowRight className="w-3 h-3" />
+            </div>
+          </button>
+
           <button
             type="button"
             onClick={() => handleOpenFollowUpCohort('7d')}
@@ -2436,55 +2557,206 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         </div>
       </div>
 
-      {/* FULL-FEATURED 1-CLICK FOLLOW-UP COHORT MODAL (Explicit User Request) */}
+      {/* DEDICATED SMART MULTI-SMTP FOLLOW-UP COMMAND CENTER MODAL */}
       {showFollowUpModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
-          <div className="bg-[#090d16] border border-purple-500/40 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 my-auto max-h-[92vh] flex flex-col">
+          <div className="bg-[#090d16] border border-cyan-500/40 w-full max-w-3xl rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 my-auto max-h-[94vh] flex flex-col">
+            {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
-                <Sparkles className="w-5 h-5 text-purple-400" />
-                <h3 className="font-bold text-slate-100 text-base">
-                  Launch {followUpDays.toUpperCase()} Unreplied Follow-Up Cohort Sequence
-                </h3>
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-300 shrink-0">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-100 text-base flex items-center gap-2 flex-wrap">
+                    <span>Smart Follow-Up Command Center</span>
+                    <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 text-[10px] font-black uppercase border border-cyan-500/40">
+                      {followUpDays.toUpperCase()} Cohort
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    পূর্বের প্রেরক SMTP স্বয়ংক্রিয়ভাবে ম্যাপ করা হয়েছে • Auto-routes replies through the exact SMTP that sent the initial mail
+                  </p>
+                </div>
               </div>
               <button 
                 onClick={() => setShowFollowUpModal(false)}
-                className="text-slate-400 hover:text-white cursor-pointer"
+                className="w-8 h-8 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer transition"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto space-y-4 pr-1">
-              {/* Cohort Summary Bar */}
-              <div className="p-3.5 bg-purple-950/20 border border-purple-500/30 rounded-2xl flex items-center justify-between text-xs">
-                <span className="text-purple-300 font-medium">
-                  Target Cohort: Leads unreplied for &gt;= {followUpDays}
-                </span>
-                <span className="px-2.5 py-1 bg-purple-500/20 text-purple-200 font-mono font-extrabold rounded-lg">
-                  {followUpSelectedLeadIds.length} / {cohortDormantLeads.length} Leads Selected
-                </span>
+              {/* Quick Cohort Switcher Tabs (3d, 7d, 14d, 30d) */}
+              <div className="p-3 bg-slate-950/80 border border-slate-800/80 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Select Follow-Up Window:</span>
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {[
+                    { id: '3d', label: '⚡ 3-Day (৩ দিন)', count: dormant3d, color: 'emerald' },
+                    { id: '7d', label: '⚡ 7-Day (৭ দিন)', count: dormant7d, color: 'purple' },
+                    { id: '14d', label: '⚡ 14-Day (১৪ দিন)', count: dormant14d, color: 'blue' },
+                    { id: '30d', label: '⚡ 30-Day (৩০ দিন)', count: dormant30d, color: 'amber' }
+                  ].map(c => {
+                    const isActive = followUpDays === c.id;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => handleOpenFollowUpCohort(c.id as any)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                          isActive
+                            ? 'bg-cyan-500 text-black shadow-md font-black'
+                            : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
+                        }`}
+                      >
+                        <span>{c.label}</span>
+                        <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${isActive ? 'bg-black/25 text-black' : 'bg-slate-800 text-slate-400'}`}>
+                          {c.count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
-              {/* Lead Search & Select All Controls */}
+              {/* Multi-SMTP Auto-Routing Status Banner */}
+              <div className="p-3.5 bg-gradient-to-r from-cyan-950/40 via-blue-950/30 to-purple-950/30 border border-cyan-500/30 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                    <span className="text-xs font-bold text-cyan-200">
+                      Multi-SMTP Auto-Routing Engine
+                    </span>
+                    <span className="px-2 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-extrabold text-[10px] border border-emerald-500/40">
+                      ✓ Active
+                    </span>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-slate-300">
+                    {followUpSelectedLeadIds.length} / {cohortDormantLeads.length} Leads Selected
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  সিস্টেম আপনার পাঠানো পূর্ববর্তী আউটরিচ লগ (`sentEmails` &amp; `threads`) বিশ্লেষণ করে প্রতিটি লিডের জন্য তার মূল প্রেরক SMTP অ্যাকাউন্টটি স্বয়ংক্রিয়ভাবে নির্বাচন করেছে। এতে প্রতিটি রিপ্লাই বা ফলো-আপ একই থ্রেড ও মেইলবক্স বজায় রাখবে।
+                </p>
+                <div className="flex items-center gap-3 pt-1 text-[11px] font-mono text-slate-400 flex-wrap">
+                  <span className="text-emerald-300">● {smtpGroupsSummary.totalMapped} leads auto-mapped to original SMTPs</span>
+                  {smtpGroupsSummary.unassignedCount > 0 && (
+                    <span className="text-amber-300">● {smtpGroupsSummary.unassignedCount} new/unassigned leads route via fallback relay</span>
+                  )}
+                  <span className="text-cyan-300">● {activeSmtps.length} connected SMTP relay(s) in pool</span>
+                </div>
+              </div>
+
+              {/* Multi-SMTP Filter Tabs Bar */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-300">
+                  <div className="flex items-center gap-1.5">
+                    <Server className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Filter Leads by Sender SMTP Relay:</span>
+                  </div>
+                  {activeSmtps.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowSmtpModalInWizard(true)}
+                      className="text-cyan-400 hover:underline text-[11px] font-bold cursor-pointer"
+                    >
+                      + Connect Another SMTP Relay
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setFollowUpSmtpTab('all')}
+                    className={`px-3 py-1.5 rounded-xl font-bold transition whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                      followUpSmtpTab === 'all'
+                        ? 'bg-cyan-500 text-black shadow-md font-black'
+                        : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    <span>🌐 All Mapped Relays</span>
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${followUpSmtpTab === 'all' ? 'bg-black/25 text-black' : 'bg-slate-800 text-slate-400'}`}>
+                      {cohortDormantLeads.length}
+                    </span>
+                  </button>
+
+                  {smtpGroupsSummary.groups.map(group => {
+                    const isTabActive = followUpSmtpTab === group.id;
+                    const name = group.smtp?.name || 'SMTP Relay';
+                    const from = group.smtp?.fromEmail || group.smtp?.username || '';
+                    return (
+                      <button
+                        key={group.id}
+                        type="button"
+                        onClick={() => setFollowUpSmtpTab(group.id)}
+                        className={`px-3 py-1.5 rounded-xl font-bold transition whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                          isTabActive
+                            ? 'bg-emerald-500 text-slate-950 shadow-md font-black'
+                            : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
+                        }`}
+                      >
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                        <span className="truncate max-w-[140px]">{name}</span>
+                        {from && <span className="text-[10px] opacity-75 font-mono truncate max-w-[100px]">({from.split('@')[0]})</span>}
+                        <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${isTabActive ? 'bg-black/25 text-black' : 'bg-slate-800 text-slate-400'}`}>
+                          {group.count}
+                        </span>
+                      </button>
+                    );
+                  })}
+
+                  {smtpGroupsSummary.unassignedCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setFollowUpSmtpTab('unassigned')}
+                      className={`px-3 py-1.5 rounded-xl font-bold transition whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                        followUpSmtpTab === 'unassigned'
+                          ? 'bg-amber-500 text-black shadow-md font-black'
+                          : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+                      <span>Unassigned / New Leads</span>
+                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${followUpSmtpTab === 'unassigned' ? 'bg-black/25 text-black' : 'bg-slate-800 text-slate-400'}`}>
+                        {smtpGroupsSummary.unassignedCount}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Lead Search & Select Controls */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2 text-xs">
-                  <span className="font-bold text-slate-300">Enrolled Inactive Leads</span>
+                  <span className="font-bold text-slate-300">
+                    Showing {displayedFollowUpLeads.length} leads {followUpSmtpTab !== 'all' ? `for selected tab` : ''}
+                  </span>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setFollowUpSelectedLeadIds(cohortDormantLeads.map(l => l.id))}
-                      className="text-cyan-400 hover:underline font-bold"
+                      onClick={() => {
+                        const newIds = Array.from(new Set([...followUpSelectedLeadIds, ...displayedFollowUpLeads.map(l => l.id)]));
+                        setFollowUpSelectedLeadIds(newIds);
+                      }}
+                      className="text-cyan-400 hover:underline font-bold cursor-pointer"
                     >
-                      Select All ({cohortDormantLeads.length})
+                      Select Displayed ({displayedFollowUpLeads.length})
                     </button>
                     <span className="text-slate-700">&bull;</span>
                     <button
                       type="button"
-                      onClick={() => setFollowUpSelectedLeadIds([])}
-                      className="text-rose-400 hover:underline font-bold"
+                      onClick={() => {
+                        const displayedSet = new Set(displayedFollowUpLeads.map(l => l.id));
+                        setFollowUpSelectedLeadIds(prev => prev.filter(id => !displayedSet.has(id)));
+                      }}
+                      className="text-rose-400 hover:underline font-bold cursor-pointer"
                     >
-                      Deselect All
+                      Deselect Displayed
                     </button>
                   </div>
                 </div>
@@ -2496,25 +2768,33 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                     value={followUpLeadSearch}
                     onChange={(e) => setFollowUpLeadSearch(e.target.value)}
                     placeholder="Search dormant leads by name, company, email, tag..."
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-purple-400"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-400"
                   />
                 </div>
 
-                {/* Lead List Checkboxes */}
-                <div className="max-h-48 overflow-y-auto divide-y divide-slate-800/60 border border-slate-800 rounded-2xl bg-slate-900/60">
-                  {cohortDormantLeads.length === 0 ? (
+                {/* Lead List with Real-time SMTP Auto-Routing Badges */}
+                <div className="max-h-52 overflow-y-auto divide-y divide-slate-800/60 border border-slate-800 rounded-2xl bg-slate-900/60">
+                  {displayedFollowUpLeads.length === 0 ? (
                     <div className="p-6 text-center text-xs text-slate-400">
-                      No dormant leads matching search criteria
+                      No leads matching search or active SMTP filter criteria.
                     </div>
                   ) : (
-                    cohortDormantLeads.map(lead => {
+                    displayedFollowUpLeads.map(lead => {
                       const isSelected = followUpSelectedLeadIds.includes(lead.id);
+                      const mapped = leadSmtpMapping.get(lead.id);
+                      const hasMappedSmtp = Boolean(mapped?.hasPreviousSend && mapped?.smtpAccount);
+                      const fallbackSmtp = activeSmtps.find(s => s.id === followUpSmtpId) || activeSmtps[0];
+                      const assignedSmtpName = hasMappedSmtp ? mapped!.smtpAccount!.name : fallbackSmtp?.name || 'Default Relay';
+                      const assignedFromEmail = hasMappedSmtp 
+                        ? (mapped!.senderEmail || mapped!.smtpAccount!.fromEmail || mapped!.smtpAccount!.username)
+                        : (fallbackSmtp?.fromEmail || fallbackSmtp?.username || '');
+
                       return (
                         <div
                           key={lead.id}
                           onClick={() => toggleFollowUpLead(lead.id)}
-                          className={`p-2.5 flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/50 transition ${
-                            isSelected ? 'bg-purple-950/20' : ''
+                          className={`p-3 flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/50 transition gap-2 ${
+                            isSelected ? 'bg-cyan-950/20' : ''
                           }`}
                         >
                           <div className="flex items-center gap-2.5 min-w-0 pr-2">
@@ -2522,7 +2802,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                               type="checkbox"
                               checked={isSelected}
                               onChange={() => {}}
-                              className="rounded border-slate-700 text-purple-500 focus:ring-purple-500 shrink-0"
+                              className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500 shrink-0"
                             />
                             <div className="min-w-0">
                               <div className="flex items-center gap-1.5 flex-wrap">
@@ -2534,13 +2814,30 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                                   </span>
                                 ))}
                               </div>
-                              <div className="text-[11px] text-slate-500 font-mono truncate">{lead.email}</div>
+                              <div className="text-[11px] text-slate-400 font-mono truncate">{lead.email}</div>
+
+                              {/* Prominent Auto-Selected SMTP Indicator */}
+                              <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                                {hasMappedSmtp ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono text-[10px] font-bold">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                                    <span>অটো-সিলেক্টেড: {assignedSmtpName} &lt;{assignedFromEmail}&gt;</span>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 text-slate-300 font-mono text-[10px]">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                                    <span>ফলব্যাক রিলে: {assignedSmtpName} &lt;{assignedFromEmail}&gt;</span>
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
 
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 shrink-0">
-                            {getLeadInactiveDays(lead)}d inactive
-                          </span>
+                          <div className="text-right shrink-0">
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 block">
+                              {getLeadInactiveDays(lead)}d inactive
+                            </span>
+                          </div>
                         </div>
                       );
                     })
@@ -2548,14 +2845,17 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                 </div>
               </div>
 
-              {/* SMTP Relay Selection */}
-              <div className="space-y-1 text-xs">
+              {/* Fallback SMTP Relay Selection (For New / Unassigned Leads) */}
+              <div className="space-y-1 text-xs p-3 bg-slate-950 rounded-2xl border border-slate-800">
                 <div className="flex items-center justify-between">
-                  <label className="block font-bold text-slate-300">Outbound SMTP Relay</label>
+                  <label className="block font-bold text-slate-300 flex items-center gap-1.5">
+                    <Server className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>নতুন বা রেকর্ডবিহীন লিডের জন্য ফলব্যাক SMTP রিলে (Fallback Relay)</span>
+                  </label>
                   <button
                     type="button"
                     onClick={() => setShowSmtpModalInWizard(true)}
-                    className="text-cyan-400 hover:underline font-bold text-[11px]"
+                    className="text-cyan-400 hover:underline font-bold text-[11px] cursor-pointer"
                   >
                     + Connect New Relay
                   </button>
@@ -2563,35 +2863,38 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                 <select
                   value={followUpSmtpId}
                   onChange={(e) => setFollowUpSmtpId(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-purple-400 font-mono text-xs"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400 font-mono text-xs"
                 >
                   {activeSmtps.map(smtp => (
                     <option key={smtp.id} value={smtp.id}>
-                      {smtp.name} ({smtp.username} - {smtp.host}:{smtp.port})
+                      {smtp.name} ({smtp.fromEmail || smtp.username} - {smtp.host}:{smtp.port})
                     </option>
                   ))}
                 </select>
+                <p className="text-[10px] text-slate-400">
+                  যেসব লিডে পূর্বে কোনো ইমেইল পাঠানো হয়নি, সেগুলো এই রিলে দিয়ে স্বয়ংক্রিয়ভাবে ডিসপ্যাচ হবে।
+                </p>
               </div>
 
               {/* Subject & Body */}
               <div className="space-y-3 text-xs">
                 <div className="space-y-1">
-                  <label className="block font-bold text-slate-300">Follow-up Subject Line</label>
+                  <label className="block font-bold text-slate-300">Follow-Up Subject Line</label>
                   <input
                     type="text"
                     value={followUpSubject}
                     onChange={(e) => setFollowUpSubject(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 font-medium focus:outline-none focus:border-purple-400"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 font-medium focus:outline-none focus:border-cyan-400"
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-bold text-slate-300">Follow-up Message Template</label>
+                  <label className="block font-bold text-slate-300">Follow-Up Message Template</label>
                   <textarea
                     rows={4}
                     value={followUpBody}
                     onChange={(e) => setFollowUpBody(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-100 font-sans focus:outline-none focus:border-purple-400"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-100 font-sans focus:outline-none focus:border-cyan-400"
                   />
                 </div>
               </div>
@@ -2603,7 +2906,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                   <select
                     value={followUpSendMode}
                     onChange={(e) => setFollowUpSendMode(e.target.value as any)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-purple-400"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400"
                   >
                     <option value="instant">⚡ Instant Live Dispatch</option>
                     <option value="scheduled">📅 Scheduled Sequence</option>
@@ -2615,7 +2918,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                   <select
                     value={followUpInterval}
                     onChange={(e) => setFollowUpInterval(Number(e.target.value))}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-purple-400 font-mono"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400 font-mono"
                   >
                     <option value="5">5 seconds</option>
                     <option value="10">10 seconds</option>
@@ -2625,11 +2928,18 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                   </select>
                 </div>
               </div>
+
+              {followUpError && (
+                <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/50 text-rose-300 text-xs font-bold">
+                  {followUpError}
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
-              <span className="text-[11px] text-slate-400">Tokens: &#123;&#123;name&#125;&#125;, &#123;&#123;company&#125;&#125;</span>
-              <div className="flex items-center gap-2">
+            {/* Modal Footer Controls */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800 flex-wrap gap-2">
+              <span className="text-[11px] text-slate-400 font-mono">Tokens: &#123;&#123;name&#125;&#125;, &#123;&#123;company&#125;&#125;, &#123;&#123;first_name&#125;&#125;</span>
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
                   onClick={() => setShowFollowUpModal(false)}
@@ -2637,12 +2947,25 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                 >
                   Cancel
                 </button>
+
+                {followUpSmtpTab !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => handleExecuteFollowUpModal(followUpSmtpTab)}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-md shadow-emerald-600/20 cursor-pointer"
+                    title="Send only the leads in the currently selected SMTP tab"
+                  >
+                    ⚡ Send Only Current Tab ({displayedFollowUpLeads.filter(l => followUpSelectedLeadIds.includes(l.id)).length})
+                  </button>
+                )}
+
                 <button
                   type="button"
-                  onClick={handleExecuteFollowUpModal}
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-extrabold text-xs shadow-lg shadow-purple-500/25 cursor-pointer"
+                  onClick={() => handleExecuteFollowUpModal()}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:via-blue-500 hover:to-indigo-500 text-white font-extrabold text-xs shadow-lg shadow-cyan-500/25 cursor-pointer flex items-center gap-1.5"
                 >
-                  🚀 Launch Follow-Up Cohort ({followUpSelectedLeadIds.length})
+                  <Send className="w-3.5 h-3.5" />
+                  <span>🚀 Launch Multi-SMTP Auto-Routing ({followUpSelectedLeadIds.length})</span>
                 </button>
               </div>
             </div>

@@ -77,7 +77,8 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
   const activeSmtps = smtpAccounts.filter(s => !s.isTrash);
   const connectedSmtps = activeSmtps.filter(s => s.isConnected);
 
-  // Inactive leads for 7d, 14d, 30d cohorts
+  // Inactive leads for 3d, 7d, 14d, 30d cohorts
+  const dormant3d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 3 && !l.isReplied && l.status !== 'replied').length;
   const dormant7d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 7 && !l.isReplied && l.status !== 'replied').length;
   const dormant14d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 14 && !l.isReplied && l.status !== 'replied').length;
   const dormant30d = leads.filter(l => !l.isTrash && getLeadInactiveDays(l) >= 30 && !l.isReplied && l.status !== 'replied').length;
@@ -103,7 +104,7 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
     ? Math.min(100, (positiveRepliesLogged / totalEmailsDispatched) * 100).toFixed(1) 
     : '0.0';
 
-  const handleLaunchFollowUp = (days: '7d' | '14d' | '30d') => {
+  const handleLaunchFollowUp = (days: '3d' | '7d' | '14d' | '30d') => {
     openFollowUpCohortModal(days);
     confetti({ particleCount: 55, spread: 65, origin: { y: 0.25 } });
   };
@@ -640,7 +641,32 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
           </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* 3-Day Box */}
+          <div className="p-5 rounded-2xl bg-slate-950 border border-emerald-500/30 flex flex-col justify-between space-y-3 shadow-lg">
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  3+ Days Inactive
+                </span>
+                <span className="px-2.5 py-0.5 text-xs font-black bg-emerald-500/20 text-emerald-300 rounded-lg border border-emerald-500/30">
+                  {dormant3d} Leads
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+                Contacted 3+ days ago with no response. High-impact early touch base while initial outreach is fresh.
+              </p>
+            </div>
+            <button
+              onClick={() => handleLaunchFollowUp('3d')}
+              className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-slate-950 font-black rounded-xl text-xs transition shadow-md shadow-emerald-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <Zap className="w-3.5 h-3.5" />
+              Launch 3-Day Follow-Up ({dormant3d})
+            </button>
+          </div>
+
           {/* 7-Day Box */}
           <div className="p-5 rounded-2xl bg-slate-950 border border-amber-500/30 flex flex-col justify-between space-y-3 shadow-lg">
             <div>

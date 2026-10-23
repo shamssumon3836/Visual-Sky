@@ -286,6 +286,68 @@ export const getLeadInactiveDays = (lead?: Partial<Lead> | null): number => {
   return Math.max(storedDays, elapsedDays);
 };
 
+// Helper to detect which Outbound SMTP Account previously emailed a specific lead
+export interface LeadOriginalSmtpResult {
+  smtpId?: string;
+  smtpAccount?: SMTPAccount;
+  senderEmail?: string;
+  senderName?: string;
+  lastSentAt?: string;
+  campaignName?: string;
+  subject?: string;
+  hasPreviousSend: boolean;
+}
+
+export const getLeadOriginalSmtp = (
+  lead: Partial<Lead> | null | undefined,
+  sentEmails: SentEmailLog[] = [],
+  threads: EmailThread[] = [],
+  smtpAccounts: SMTPAccount[] = []
+): LeadOriginalSmtpResult => {
+  if (!lead?.email) {
+    return { hasPreviousSend: false };
+  }
+  const cleanEmail = lead.email.trim().toLowerCase();
+
+  // 1. Check sentEmails log (sorted newest first)
+  const matchedSent = sentEmails.find(
+    s => !s.isTrash && s.recipientEmail && s.recipientEmail.trim().toLowerCase() === cleanEmail
+  );
+
+  // 2. Check inbox threads
+  const matchedThread = threads.find(
+    t => !t.isTrash && t.leadEmail && t.leadEmail.trim().toLowerCase() === cleanEmail
+  );
+
+  const candidateSmtpId = matchedSent?.smtpAccountId || matchedThread?.smtpAccountId;
+  const candidateSenderEmail = matchedSent?.senderEmail || matchedThread?.smtpEmail;
+
+  // Match against active SMTP accounts
+  const activeSmtps = smtpAccounts.filter(s => s && !s.isTrash);
+  let matchedSmtp = activeSmtps.find(s => s.id === candidateSmtpId);
+  if (!matchedSmtp && candidateSenderEmail) {
+    const cleanSender = candidateSenderEmail.trim().toLowerCase();
+    matchedSmtp = activeSmtps.find(
+      s => (s.fromEmail || '').trim().toLowerCase() === cleanSender || (s.username || '').trim().toLowerCase() === cleanSender
+    );
+  }
+
+  if (matchedSent || matchedThread || matchedSmtp) {
+    return {
+      smtpId: matchedSmtp?.id || candidateSmtpId,
+      smtpAccount: matchedSmtp,
+      senderEmail: matchedSmtp?.fromEmail || matchedSmtp?.username || candidateSenderEmail,
+      senderName: matchedSmtp?.fromName || matchedSent?.senderName,
+      lastSentAt: matchedSent?.sentAt || matchedThread?.lastMessageDate,
+      campaignName: matchedSent?.campaignName || (matchedThread?.labels?.includes('Campaign Sent') ? 'Cold Outreach' : undefined),
+      subject: matchedSent?.subject || matchedThread?.subject,
+      hasPreviousSend: true
+    };
+  }
+
+  return { hasPreviousSend: false };
+};
+
 export interface WizardLaunchRequest {
   open: boolean;
   templateId?: string;
@@ -297,9 +359,9 @@ interface AppContextType {
   // Navigation & View
   activeTab: string;
   setActiveTab: (tab: string) => void;
-  activeFollowUpCohort: '7d' | '14d' | '30d' | null;
-  setActiveFollowUpCohort: (cohort: '7d' | '14d' | '30d' | null) => void;
-  openFollowUpCohortModal: (cohort: '7d' | '14d' | '30d') => void;
+  activeFollowUpCohort: '3d' | '7d' | '14d' | '30d' | null;
+  setActiveFollowUpCohort: (cohort: '3d' | '7d' | '14d' | '30d' | null) => void;
+  openFollowUpCohortModal: (cohort: '3d' | '7d' | '14d' | '30d') => void;
   wizardLaunchRequest: WizardLaunchRequest | null;
   setWizardLaunchRequest: (req: WizardLaunchRequest | null) => void;
   openCampaignWizard: (options?: { templateId?: string; leadIds?: string[]; initialStep?: number }) => void;
@@ -366,7 +428,7 @@ interface AppContextType {
   permanentDeleteCampaign: (id: string) => void;
   bulkRestoreCampaigns: (ids: string[]) => void;
   bulkPermanentDeleteCampaigns: (ids: string[]) => void;
-  launchQuickFollowUp: (days: '7d' | '14d' | '30d') => void;
+  launchQuickFollowUp: (days: '3d' | '7d' | '14d' | '30d') => void;
   getDormantLeads: (days: number) => Lead[];
 
   // Templates & Categories
@@ -966,12 +1028,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return 'dashboard';
     }
   });
-  const [activeFollowUpCohort, setActiveFollowUpCohort] = useState<'7d' | '14d' | '30d' | null>(null);
+  const [activeFollowUpCohort, setActiveFollowUpCohort] = useState<'3d' | '7d' | '14d' | '30d' | null>(null);
   const [wizardLaunchRequest, setWizardLaunchRequest] = useState<WizardLaunchRequest | null>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  const openFollowUpCohortModal = (cohort: '7d' | '14d' | '30d') => {
+  const openFollowUpCohortModal = (cohort: '3d' | '7d' | '14d' | '30d') => {
     setActiveFollowUpCohort(cohort);
     setActiveTabState('campaigns');
     try { localStorage.setItem('visualsky_active_tab', 'campaigns'); } catch {}
@@ -3657,7 +3719,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     persistResourceDirectly('campaigns', immediateUpdated);
   };
 
-  const launchQuickFollowUp = (days: '7d' | '14d' | '30d') => {
+  const launchQuickFollowUp = (days: '3d' | '7d' | '14d' | '30d') => {
     openFollowUpCohortModal(days);
   };
 

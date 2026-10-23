@@ -127,7 +127,7 @@ export interface CampaignStep {
   delayDays: number;
   subject: string;
   body: string;
-  triggerCondition: 'all' | 'opened_no_reply' | 'not_opened_7d' | 'not_opened_14d' | 'not_opened_30d' | 'no_reply_7d' | 'no_reply_14d' | 'no_reply_30d';
+  triggerCondition: 'all' | 'opened_no_reply' | 'not_opened_3d' | 'not_opened_7d' | 'not_opened_14d' | 'not_opened_30d' | 'no_reply_3d' | 'no_reply_7d' | 'no_reply_14d' | 'no_reply_30d';
 }
 
 export interface Campaign {
@@ -334,6 +334,7 @@ export interface SentEmailLog {
   attachments?: EmailAttachment[];
   smtpAccountId?: string;
   senderEmail?: string;
+  senderName?: string;
   smtpAccountName: string;
   smtpHost: string;
   sentAt: string;
