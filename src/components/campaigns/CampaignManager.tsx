@@ -330,7 +330,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
   // Step 3: Recipients & Manage Tag Filter (Multi-tag Selection)
   const activeLeads = useMemo(() => leads.filter(l => !l.isTrash), [leads]);
-  const [recipientFilter, setRecipientFilter] = useState<'all' | '7d' | '14d' | '30d' | 'new' | 'unreplied' | 'custom'>('all');
+  const [recipientFilter, setRecipientFilter] = useState<'all' | '3d' | '7d' | '14d' | '30d' | 'new' | 'unreplied' | 'custom'>('all');
   const [selectedLeadTags, setSelectedLeadTags] = useState<string[]>([]);
   const [wizardLeadSearch, setWizardLeadSearch] = useState<string>('');
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>(activeLeads.map(l => l.id));
@@ -474,6 +474,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       // Cohort filter
       const inactiveDays = getLeadInactiveDays(lead);
       const isUnreplied = !lead.isReplied && lead.status !== 'replied';
+      if (recipientFilter === '3d' && !(inactiveDays >= 3 && isUnreplied)) return false;
       if (recipientFilter === '7d' && !(inactiveDays >= 7 && isUnreplied)) return false;
       if (recipientFilter === '14d' && !(inactiveDays >= 14 && isUnreplied)) return false;
       if (recipientFilter === '30d' && !(inactiveDays >= 30 && isUnreplied)) return false;
@@ -492,13 +493,14 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   }, [activeLeads, wizardLeadSearch, recipientFilter, selectedLeadTags]);
 
   const filterLeadsByCohortAndTags = (
-    cohort: 'all' | '7d' | '14d' | '30d' | 'new' | 'unreplied' | 'custom',
+    cohort: 'all' | '3d' | '7d' | '14d' | '30d' | 'new' | 'unreplied' | 'custom',
     tags: string[]
   ) => {
     return activeLeads
       .filter(lead => {
         const inactiveDays = getLeadInactiveDays(lead);
         const isUnreplied = !lead.isReplied && lead.status !== 'replied';
+        if (cohort === '3d' && !(inactiveDays >= 3 && isUnreplied)) return false;
         if (cohort === '7d' && !(inactiveDays >= 7 && isUnreplied)) return false;
         if (cohort === '14d' && !(inactiveDays >= 14 && isUnreplied)) return false;
         if (cohort === '30d' && !(inactiveDays >= 30 && isUnreplied)) return false;
@@ -1291,7 +1293,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     }
   };
 
-  const handleRecipientFilterChange = (type: 'all' | '7d' | '14d' | '30d' | 'new' | 'unreplied' | 'custom') => {
+  const handleRecipientFilterChange = (type: 'all' | '3d' | '7d' | '14d' | '30d' | 'new' | 'unreplied' | 'custom') => {
     setRecipientFilter(type);
     setSelectedLeadIds(filterLeadsByCohortAndTags(type, selectedLeadTags));
     setStepValidationError('');
@@ -3616,6 +3618,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                       {[
                         { id: 'all', label: 'All' },
                         { id: 'new', label: 'New' },
+                        { id: '3d', label: '3d+ Inactive' },
                         { id: '7d', label: '7d+ Inactive' },
                         { id: '14d', label: '14d+ Inactive' },
                         { id: '30d', label: '30d+ Inactive' },
@@ -4342,10 +4345,12 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                                 }}
                                 className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-[11px] font-bold text-cyan-300 focus:outline-none focus:border-cyan-500"
                               >
+                                <option value="no_reply_3d">If recipient has not replied (3d+)</option>
                                 <option value="no_reply_7d">If recipient has not replied (7d+)</option>
                                 <option value="no_reply_14d">If recipient has not replied (14d+)</option>
                                 <option value="no_reply_30d">If recipient has not replied (30d+)</option>
                                 <option value="opened_no_reply">If email opened &amp; no reply</option>
+                                <option value="not_opened_3d">If email not opened (3d+)</option>
                                 <option value="not_opened_7d">If email not opened (7d+)</option>
                                 <option value="not_opened_14d">If email not opened (14d+)</option>
                                 <option value="not_opened_30d">If email not opened (30d+)</option>

@@ -76,7 +76,7 @@ export const BDT_CLIENT_PLANS = [
       '10,000 Verified Outbound Leads',
       '10 SMTP Multi-Domain Relays',
       'AI Outreach Copilot (2,500 Credits)',
-      '7d / 14d / 30d Automated Sequences',
+      '3d / 7d / 14d / 30d Automated Sequences',
       'Primary Inbox Deliverability Radar'
     ]
   },

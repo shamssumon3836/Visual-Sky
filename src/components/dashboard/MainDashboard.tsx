@@ -624,16 +624,16 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
         </div>
       </div>
 
-      {/* ⚡ 1-CLICK SMART FOLLOW-UP COMMAND CENTER (7d, 14d, 30d) */}
+      {/* ⚡ 1-CLICK SMART FOLLOW-UP COMMAND CENTER (3d, 7d, 14d, 30d) */}
       <div className="bg-slate-900/90 rounded-3xl border border-blue-500/30 p-6 space-y-4 shadow-xl">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
           <div>
             <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
               <Clock className="w-4 h-4 text-cyan-400" />
-              1-Click Smart Follow-Up Automation Engine
+              1-Click Smart Follow-Up Automation Engine (3d / 7d / 14d / 30d)
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Instantly isolate leads who haven't opened or replied and dispatch personalized sequences:
+              Instantly isolate leads who haven't opened or replied and dispatch personalized sequences (3-Day, 7-Day, 14-Day, 30-Day):
             </p>
           </div>
           <span className="text-[11px] font-bold text-cyan-400 bg-cyan-950/60 px-3 py-1 rounded-xl border border-cyan-800/60 self-start sm:self-auto">

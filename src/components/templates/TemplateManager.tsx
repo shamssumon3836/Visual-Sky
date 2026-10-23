@@ -32,6 +32,7 @@ interface TemplateCategoryItem {
 const DEFAULT_CATEGORIES: TemplateCategoryItem[] = [
   { id: 'all', name: 'all', label: 'All Templates' },
   { id: 'cold_outreach', name: 'cold_outreach', label: 'Cold Outreach' },
+  { id: 'followup_3d', name: 'followup_3d', label: '3-Day Follow-Up' },
   { id: 'followup_7d', name: 'followup_7d', label: '7-Day Follow-Up' },
   { id: 'followup_14d', name: 'followup_14d', label: '14-Day Follow-Up' },
   { id: 'breakup_30d', name: 'breakup_30d', label: '30-Day Breakup' },
@@ -271,7 +272,7 @@ export const TemplateManager: React.FC = () => {
           </div>
           <h1 className="text-2xl font-black text-slate-100 mt-2">Email Templates & Copy Hub</h1>
           <p className="text-xs text-slate-400 mt-1">
-            Pre-tested, spam-proof cold email templates & automated 7d/14d/30d follow-up frameworks.
+            Pre-tested, spam-proof cold email templates & automated 3d/7d/14d/30d follow-up frameworks.
           </p>
         </div>
 

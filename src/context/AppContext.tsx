@@ -556,6 +556,7 @@ export const DEFAULT_USER_SIGNATURE = '';
 const INITIAL_TAGS: LeadTag[] = [
   { id: 'tag-saas', name: 'B2B SaaS Founders', color: 'cyan', description: 'Tech founders and software leaders', createdAt: '2026-09-01' },
   { id: 'tag-vip', name: 'VIP Decision Makers', color: 'emerald', description: 'C-Level & VP Outreach targets', createdAt: '2026-09-01' },
+  { id: 'tag-followup-3d', name: '3-Day Follow Up', color: 'emerald', description: 'Quick 72hr bump follow-up sequence', createdAt: '2026-09-01' },
   { id: 'tag-followup', name: '7-Day Follow Up', color: 'amber', description: 'Active sequence follow-ups', createdAt: '2026-09-01' },
   { id: 'tag-partners', name: 'Agency Partners', color: 'purple', description: 'Strategic growth partners', createdAt: '2026-09-01' },
 ];
@@ -926,6 +927,7 @@ const filterLiveUsersClient = (users: UserAccount[]): UserAccount[] => {
 // Initial Email Templates & Categories
 export const INITIAL_TEMPLATE_CATEGORIES: TemplateCategory[] = [
   { id: 'cold_outreach', name: 'cold_outreach', label: 'Cold Outreach', color: 'cyan' },
+  { id: 'followup_3d', name: 'followup_3d', label: '3-Day Follow-Up', color: 'emerald' },
   { id: 'followup_7d', name: 'followup_7d', label: '7-Day Follow-Up', color: 'amber' },
   { id: 'followup_14d', name: 'followup_14d', label: '14-Day Value Add', color: 'orange' },
   { id: 'breakup_30d', name: 'breakup_30d', label: '30-Day Breakup', color: 'rose' },
@@ -934,6 +936,18 @@ export const INITIAL_TEMPLATE_CATEGORIES: TemplateCategory[] = [
 ];
 
 export const INITIAL_TEMPLATES: EmailTemplate[] = [
+  {
+    id: 'tmpl-builtin-3d',
+    title: '3-Day Quick Bump Follow-Up (High Intent)',
+    category: 'followup_3d',
+    subject: 're: quick question regarding {{company}}',
+    body: `Hi {{name}},\n\nWanted to quickly circle back on my note from earlier this week regarding {{company}}.\n\nDid you have a brief moment to take a look?\n\nBest regards,`,
+    tags: ['FollowUp', '3-Day', 'TouchBase'],
+    isCustom: false,
+    usageCount: 112,
+    replyRatePercent: 38.6,
+    createdAt: '2026-08-03'
+  },
   {
     id: 'tmpl-builtin-1',
     title: 'Executive Cold Outreach (High Deliverability)',

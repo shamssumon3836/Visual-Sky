@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useApp } from '../../context/AppContext';
+import { useApp, getLeadInactiveDays } from '../../context/AppContext';
 import { isNotificationGranted } from '../../utils/safeBrowser';
 import { VisualSkyLogo } from '../brand/VisualSkyLogo';
 import { ProfileModal } from '../profile/ProfileModal';
@@ -111,7 +111,13 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleQuickFollowupClick = (days: '7d' | '14d' | '30d') => {
+  // Cohort dormant lead counts for 1-Click Follow-Up dropdown
+  const dormant3d = (leads || []).filter(l => !l.isTrash && getLeadInactiveDays(l) >= 3 && !l.isReplied && l.status !== 'replied').length;
+  const dormant7d = (leads || []).filter(l => !l.isTrash && getLeadInactiveDays(l) >= 7 && !l.isReplied && l.status !== 'replied').length;
+  const dormant14d = (leads || []).filter(l => !l.isTrash && getLeadInactiveDays(l) >= 14 && !l.isReplied && l.status !== 'replied').length;
+  const dormant30d = (leads || []).filter(l => !l.isTrash && getLeadInactiveDays(l) >= 30 && !l.isReplied && l.status !== 'replied').length;
+
+  const handleQuickFollowupClick = (days: '3d' | '7d' | '14d' | '30d') => {
     setShowFollowUpMenu(false);
     openFollowUpCohortModal(days);
     confetti({
@@ -535,18 +541,45 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
                 <div className="text-[11px] text-slate-400">Target dormant leads with 1 click:</div>
               </div>
               <div className="py-1 space-y-1">
+                {/* 3-Day Follow-Up (৩ দিন) */}
+                <button
+                  onClick={() => handleQuickFollowupClick('3d')}
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-800 flex items-center justify-between text-xs text-slate-200 transition group"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    <div>
+                      <div className="font-semibold text-emerald-300 group-hover:text-emerald-200 flex items-center gap-1.5">
+                        <span>3+ Days Inactive (৩ দিন)</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-mono">
+                          {dormant3d}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-400">High-intent 72hr touch base</div>
+                    </div>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 bg-emerald-500/10 text-emerald-300 rounded border border-emerald-500/20 font-bold group-hover:bg-emerald-500/20">
+                    Launch
+                  </span>
+                </button>
+
                 <button
                   onClick={() => handleQuickFollowupClick('7d')}
                   className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-800 flex items-center justify-between text-xs text-slate-200 transition group"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                    <span className="w-2 h-2 rounded-full bg-purple-400"></span>
                     <div>
-                      <div className="font-medium group-hover:text-amber-300">7+ Days Inactive Leads</div>
+                      <div className="font-medium group-hover:text-purple-300 flex items-center gap-1.5">
+                        <span>7+ Days Inactive Leads (৭ দিন)</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 font-mono">
+                          {dormant7d}
+                        </span>
+                      </div>
                       <div className="text-[10px] text-slate-400">Opened or contacted &gt; 7 days ago</div>
                     </div>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.5 bg-amber-500/10 text-amber-300 rounded border border-amber-500/20">
+                  <span className="text-[10px] px-2 py-0.5 bg-purple-500/10 text-purple-300 rounded border border-purple-500/20 font-bold group-hover:bg-purple-500/20">
                     Launch
                   </span>
                 </button>
@@ -556,13 +589,18 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
                   className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-800 flex items-center justify-between text-xs text-slate-200 transition group"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-orange-500"></span>
+                    <span className="w-2 h-2 rounded-full bg-blue-500"></span>
                     <div>
-                      <div className="font-medium group-hover:text-orange-300">14+ Days Inactive Leads</div>
+                      <div className="font-medium group-hover:text-blue-300 flex items-center gap-1.5">
+                        <span>14+ Days Inactive Leads (১৪ দিন)</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-300 font-mono">
+                          {dormant14d}
+                        </span>
+                      </div>
                       <div className="text-[10px] text-slate-400">No reply for 2 weeks</div>
                     </div>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.5 bg-orange-500/10 text-orange-300 rounded border border-orange-500/20">
+                  <span className="text-[10px] px-2 py-0.5 bg-blue-500/10 text-blue-300 rounded border border-blue-500/20 font-bold group-hover:bg-blue-500/20">
                     Launch
                   </span>
                 </button>
@@ -572,13 +610,18 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
                   className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-800 flex items-center justify-between text-xs text-slate-200 transition group"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                    <span className="w-2 h-2 rounded-full bg-amber-500"></span>
                     <div>
-                      <div className="font-medium group-hover:text-rose-300">30+ Days Dormant Leads</div>
+                      <div className="font-medium group-hover:text-amber-300 flex items-center gap-1.5">
+                        <span>30+ Days Dormant Leads (৩০ দিন)</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono">
+                          {dormant30d}
+                        </span>
+                      </div>
                       <div className="text-[10px] text-slate-400">Reactivation sequences</div>
                     </div>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.5 bg-rose-500/10 text-rose-300 rounded border border-rose-500/20">
+                  <span className="text-[10px] px-2 py-0.5 bg-amber-500/10 text-amber-300 rounded border border-amber-500/20 font-bold group-hover:bg-amber-500/20">
                     Launch
                   </span>
                 </button>
