@@ -22,7 +22,8 @@ import {
   Mail,
   User as UserIcon,
   Search,
-  FolderOpen
+  FolderOpen,
+  Clock
 } from 'lucide-react';
 
 interface MobileNavDrawerProps {
@@ -51,7 +52,8 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
     smtpAccounts,
     currentUser,
     totalTrashCount,
-    driveStorageSettings
+    driveStorageSettings,
+    openFollowUpCohortModal
   } = useApp();
 
   if (!isOpen) return null;
@@ -140,6 +142,18 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
       icon: Send,
       badge: isServiceDisabled('campaigns') ? '🔒 Disabled' : (runningCampaignsCount > 0 ? `${runningCampaignsCount} Live` : undefined),
       badgeColor: isServiceDisabled('campaigns') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+    },
+    {
+      id: 'followup_cohorts',
+      label: '⚡ ৩/৭/১৪ দিন ফলো-আপ',
+      description: 'Multi-SMTP অটোমেটিক ফলো-আপ ইঞ্জিন (৩, ৭, ১৪, ৩০ দিন)',
+      icon: Clock,
+      tag: 'Auto-SMTP',
+      tagColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold',
+      onClick: () => {
+        onClose();
+        openFollowUpCohortModal('3d');
+      }
     },
     {
       id: 'inbox',
@@ -284,7 +298,7 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
               return (
                 <button
                   key={item.id}
-                  onClick={() => handleItemClick(item.id)}
+                  onClick={() => (item as any).onClick ? (item as any).onClick() : handleItemClick(item.id)}
                   className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-semibold transition-all text-left ${
                     isActive
                       ? 'bg-gradient-to-r from-blue-600/20 via-cyan-500/10 to-transparent text-cyan-300 border border-cyan-500/30 shadow-md font-bold'

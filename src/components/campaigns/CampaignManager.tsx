@@ -2096,6 +2096,128 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         </div>
       </div>
 
+      {/* 1-CLICK FOLLOW-UP COHORTS SECTION (Prominently placed at the top for immediate access) */}
+      <div className="p-5 rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border-2 border-cyan-500/30 space-y-4 shadow-xl">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-2xl bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-300 shrink-0">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-base font-black text-slate-100">
+                  ⚡ 1-Click Smart Follow-Up Engine (৩ দিন / ৭ দিন / ১৪ দিন / ৩০ দিন)
+                </h2>
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-black uppercase">
+                  Multi-SMTP Auto-Routing
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 mt-0.5">
+                যে লিডকে যে SMTP দিয়ে মেইল পাঠানো হয়েছিল, সিস্টেম স্বয়ংক্রিয়ভাবে সেই একই SMTP দিয়ে ৩ দিন, ৭ দিন, ১৪ দিন বা ৩০ দিনের ফলো-আপ পাঠাবে।
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* 3-Day Follow-Up Card */}
+          <button
+            type="button"
+            onClick={() => handleOpenFollowUpCohort('3d')}
+            className="p-4 rounded-2xl bg-emerald-950/30 hover:bg-emerald-950/60 border-2 border-emerald-500/40 hover:border-emerald-400 transition text-left flex flex-col justify-between cursor-pointer group shadow-lg"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-black text-xs text-emerald-300 flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                ⚡ ৩ দিনের ফলো-আপ (3-Day)
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 font-mono text-xs font-black border border-emerald-500/40">
+                {dormant3d} Leads
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-300 mt-2 line-clamp-2">
+              High-context 72-hour touch base while initial outreach is still fresh.
+            </p>
+            <div className="flex items-center gap-1 text-[11px] font-black text-emerald-400 mt-3 group-hover:underline">
+              <span>চালু করুন &rarr; Auto Multi-SMTP</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </div>
+          </button>
+
+          {/* 7-Day Follow-Up Card */}
+          <button
+            type="button"
+            onClick={() => handleOpenFollowUpCohort('7d')}
+            className="p-4 rounded-2xl bg-purple-950/20 hover:bg-purple-950/50 border border-purple-500/30 hover:border-purple-400 transition text-left flex flex-col justify-between cursor-pointer group shadow-lg"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-xs text-purple-300 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-purple-400"></span>
+                ⚡ ৭ দিনের ফলো-আপ (7-Day)
+              </span>
+              <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-200 font-mono text-[11px] font-bold">
+                {dormant7d} Leads
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-2 line-clamp-2">
+              Gentle check-in touching base on initial proposal with zero friction.
+            </p>
+            <div className="flex items-center gap-1 text-[11px] font-bold text-purple-400 mt-3 group-hover:underline">
+              <span>চালু করুন &rarr; Auto Multi-SMTP</span>
+              <ArrowRight className="w-3 h-3" />
+            </div>
+          </button>
+
+          {/* 14-Day Follow-Up Card */}
+          <button
+            type="button"
+            onClick={() => handleOpenFollowUpCohort('14d')}
+            className="p-4 rounded-2xl bg-blue-950/20 hover:bg-blue-950/50 border border-blue-500/30 hover:border-blue-400 transition text-left flex flex-col justify-between cursor-pointer group shadow-lg"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-xs text-blue-300 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+                ⚡ ১৪ দিনের ফলো-আপ (14-Day)
+              </span>
+              <span className="px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-200 font-mono text-[11px] font-bold">
+                {dormant14d} Leads
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-2 line-clamp-2">
+              Share deliverability case studies, proof benchmarks, and value audit.
+            </p>
+            <div className="flex items-center gap-1 text-[11px] font-bold text-blue-400 mt-3 group-hover:underline">
+              <span>চালু করুন &rarr; Auto Multi-SMTP</span>
+              <ArrowRight className="w-3 h-3" />
+            </div>
+          </button>
+
+          {/* 30-Day Follow-Up Card */}
+          <button
+            type="button"
+            onClick={() => handleOpenFollowUpCohort('30d')}
+            className="p-4 rounded-2xl bg-amber-950/20 hover:bg-amber-950/50 border border-amber-500/30 hover:border-amber-400 transition text-left flex flex-col justify-between cursor-pointer group shadow-lg"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-xs text-amber-300 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                ⚡ ৩০ দিনের ফলো-আপ (30-Day)
+              </span>
+              <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-200 font-mono text-[11px] font-bold">
+                {dormant30d} Leads
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-2 line-clamp-2">
+              Clean close-out message that triggers reverse psychology replies.
+            </p>
+            <div className="flex items-center gap-1 text-[11px] font-bold text-amber-400 mt-3 group-hover:underline">
+              <span>চালু করুন &rarr; Auto Multi-SMTP</span>
+              <ArrowRight className="w-3 h-3" />
+            </div>
+          </button>
+        </div>
+      </div>
+
       {/* ACTIVE REAL-TIME DISPATCHING BANNER */}
       {isDispatching && (
         <div className="p-5 rounded-3xl bg-gradient-to-r from-cyan-950/90 via-blue-950/90 to-slate-900 border-2 border-cyan-500/60 shadow-2xl shadow-cyan-950/60 flex flex-col md:flex-row md:items-center justify-between gap-4 animate-in fade-in">
@@ -2462,101 +2584,6 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
               })}
           </div>
         )}
-      </div>
-
-      {/* 1-CLICK FOLLOW-UP COHORTS SECTION */}
-      <div className="p-5 rounded-3xl bg-slate-900/60 border border-slate-800 space-y-4 shadow-lg">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-purple-400" />
-            <div>
-              <h2 className="text-sm font-bold text-slate-100">1-Click Smart Follow-Up Automation Engine</h2>
-              <p className="text-xs text-slate-400">Re-engage inactive leads who have not replied in 7, 14, or 30 days.</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <button
-            type="button"
-            onClick={() => handleOpenFollowUpCohort('3d')}
-            className="p-4 rounded-2xl bg-emerald-950/20 hover:bg-emerald-950/40 border border-emerald-500/30 hover:border-emerald-400 transition text-left flex flex-col justify-between cursor-pointer group"
-          >
-            <div className="flex items-center justify-between">
-              <span className="font-extrabold text-xs text-emerald-300">3-Day Touch Base Follow-Up</span>
-              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 font-mono text-[11px] font-bold">
-                {dormant3d} Leads
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-400 mt-2 line-clamp-2">
-              High-context check-in within 72 hours while proposal is top-of-mind.
-            </p>
-            <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-400 mt-3 group-hover:underline">
-              <span>Select Leads & Launch Cohort</span>
-              <ArrowRight className="w-3 h-3" />
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleOpenFollowUpCohort('7d')}
-            className="p-4 rounded-2xl bg-purple-950/20 hover:bg-purple-950/40 border border-purple-500/30 hover:border-purple-400 transition text-left flex flex-col justify-between cursor-pointer group"
-          >
-            <div className="flex items-center justify-between">
-              <span className="font-extrabold text-xs text-purple-300">7-Day Inactive Follow-Up</span>
-              <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-200 font-mono text-[11px] font-bold">
-                {dormant7d} Leads
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-400 mt-2 line-clamp-2">
-              Gentle check-in touching base on initial proposal with zero friction.
-            </p>
-            <div className="flex items-center gap-1 text-[11px] font-bold text-purple-400 mt-3 group-hover:underline">
-              <span>Select Leads & Launch Cohort</span>
-              <ArrowRight className="w-3 h-3" />
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleOpenFollowUpCohort('14d')}
-            className="p-4 rounded-2xl bg-blue-950/20 hover:bg-blue-950/40 border border-blue-500/30 hover:border-blue-400 transition text-left flex flex-col justify-between cursor-pointer group"
-          >
-            <div className="flex items-center justify-between">
-              <span className="font-extrabold text-xs text-blue-300">14-Day Value-Add Follow-Up</span>
-              <span className="px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-200 font-mono text-[11px] font-bold">
-                {dormant14d} Leads
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-400 mt-2 line-clamp-2">
-              Share concrete deliverability case studies and industry benchmarks.
-            </p>
-            <div className="flex items-center gap-1 text-[11px] font-bold text-blue-400 mt-3 group-hover:underline">
-              <span>Select Leads & Launch Cohort</span>
-              <ArrowRight className="w-3 h-3" />
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleOpenFollowUpCohort('30d')}
-            className="p-4 rounded-2xl bg-amber-950/20 hover:bg-amber-950/40 border border-amber-500/30 hover:border-amber-400 transition text-left flex flex-col justify-between cursor-pointer group"
-          >
-            <div className="flex items-center justify-between">
-              <span className="font-extrabold text-xs text-amber-300">30-Day Breakup Follow-Up</span>
-              <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-200 font-mono text-[11px] font-bold">
-                {dormant30d} Leads
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-400 mt-2 line-clamp-2">
-              Clean close-out message that triggers reverse psychology replies.
-            </p>
-            <div className="flex items-center gap-1 text-[11px] font-bold text-amber-400 mt-3 group-hover:underline">
-              <span>Select Leads & Launch Cohort</span>
-              <ArrowRight className="w-3 h-3" />
-            </div>
-          </button>
-        </div>
       </div>
 
       {/* DEDICATED SMART MULTI-SMTP FOLLOW-UP COMMAND CENTER MODAL */}
@@ -4312,50 +4339,119 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
                         {/* Follow-up Wait Days & Trigger Condition Configurator (for Step 2+) */}
                         {idx > 0 && (
-                          <div className="p-2.5 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-wrap items-center justify-between gap-3 text-xs">
-                            <div className="flex items-center gap-2">
-                              <Clock className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                              <span className="text-slate-300 font-semibold">Wait</span>
-                              <input
-                                type="number"
-                                min={0}
-                                max={90}
-                                value={step.delayDays ?? 3}
-                                onChange={(e) => {
-                                  const raw = Number(e.target.value);
-                                  const days = Number.isNaN(raw) ? 3 : Math.max(0, Math.min(90, raw));
-                                  setWizardSteps(prev =>
-                                    prev.map((s, i) => (i === idx ? { ...s, delayDays: days } : s))
-                                  );
-                                }}
-                                className="w-14 bg-slate-900 border border-purple-500/40 rounded-lg px-2 py-1 text-center font-mono font-bold text-purple-300 focus:outline-none focus:border-purple-400"
-                              />
-                              <span className="text-slate-300 font-semibold">days after previous step</span>
+                          <div className="p-3 rounded-2xl bg-slate-950/90 border border-slate-800/90 space-y-2.5 text-xs">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div className="flex items-center gap-2">
+                                <Clock className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                                <span className="text-slate-300 font-semibold">Wait</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={90}
+                                  value={step.delayDays ?? 3}
+                                  onChange={(e) => {
+                                    const raw = Number(e.target.value);
+                                    const days = Number.isNaN(raw) ? 3 : Math.max(0, Math.min(90, raw));
+                                    setWizardSteps(prev =>
+                                      prev.map((s, i) => (i === idx ? { ...s, delayDays: days } : s))
+                                    );
+                                  }}
+                                  className="w-14 bg-slate-900 border border-purple-500/40 rounded-lg px-2 py-1 text-center font-mono font-bold text-purple-300 focus:outline-none focus:border-purple-400"
+                                />
+                                <span className="text-slate-300 font-semibold">days after previous step</span>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-400 text-[11px]">Condition:</span>
+                                <select
+                                  value={step.triggerCondition || 'no_reply_3d'}
+                                  onChange={(e) => {
+                                    const cond = e.target.value as any;
+                                    setWizardSteps(prev =>
+                                      prev.map((s, i) => (i === idx ? { ...s, triggerCondition: cond } : s))
+                                    );
+                                  }}
+                                  className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-[11px] font-bold text-cyan-300 focus:outline-none focus:border-cyan-500"
+                                >
+                                  <option value="no_reply_3d">If recipient has not replied (3d+)</option>
+                                  <option value="no_reply_7d">If recipient has not replied (7d+)</option>
+                                  <option value="no_reply_14d">If recipient has not replied (14d+)</option>
+                                  <option value="no_reply_30d">If recipient has not replied (30d+)</option>
+                                  <option value="opened_no_reply">If email opened &amp; no reply</option>
+                                  <option value="not_opened_3d">If email not opened (3d+)</option>
+                                  <option value="not_opened_7d">If email not opened (7d+)</option>
+                                  <option value="not_opened_14d">If email not opened (14d+)</option>
+                                  <option value="not_opened_30d">If email not opened (30d+)</option>
+                                  <option value="all">Always send to all leads</option>
+                                </select>
+                              </div>
                             </div>
 
-                            <div className="flex items-center gap-2">
-                              <span className="text-slate-400 text-[11px]">Condition:</span>
-                              <select
-                                value={step.triggerCondition || 'no_reply_7d'}
-                                onChange={(e) => {
-                                  const cond = e.target.value as any;
+                            {/* 1-Click Follow-Up Day Preset Buttons (3d, 7d, 14d, 30d) */}
+                            <div className="flex items-center gap-1.5 pt-2 border-t border-slate-800/80 flex-wrap">
+                              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mr-1">
+                                ফলো-আপ দিন নির্বাচন (Preset Days):
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
                                   setWizardSteps(prev =>
-                                    prev.map((s, i) => (i === idx ? { ...s, triggerCondition: cond } : s))
+                                    prev.map((s, i) => (i === idx ? { ...s, delayDays: 3, triggerCondition: 'no_reply_3d' } : s))
                                   );
                                 }}
-                                className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-[11px] font-bold text-cyan-300 focus:outline-none focus:border-cyan-500"
+                                className={`px-2.5 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1 ${
+                                  (step.delayDays ?? 3) === 3
+                                    ? 'bg-emerald-500 text-black shadow-sm font-black ring-2 ring-emerald-400/50'
+                                    : 'bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-500/30'
+                                }`}
                               >
-                                <option value="no_reply_3d">If recipient has not replied (3d+)</option>
-                                <option value="no_reply_7d">If recipient has not replied (7d+)</option>
-                                <option value="no_reply_14d">If recipient has not replied (14d+)</option>
-                                <option value="no_reply_30d">If recipient has not replied (30d+)</option>
-                                <option value="opened_no_reply">If email opened &amp; no reply</option>
-                                <option value="not_opened_3d">If email not opened (3d+)</option>
-                                <option value="not_opened_7d">If email not opened (7d+)</option>
-                                <option value="not_opened_14d">If email not opened (14d+)</option>
-                                <option value="not_opened_30d">If email not opened (30d+)</option>
-                                <option value="all">Always send to all leads</option>
-                              </select>
+                                <span>⚡ ৩ দিন (3-Day Follow-Up)</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setWizardSteps(prev =>
+                                    prev.map((s, i) => (i === idx ? { ...s, delayDays: 7, triggerCondition: 'no_reply_7d' } : s))
+                                  );
+                                }}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1 ${
+                                  step.delayDays === 7
+                                    ? 'bg-purple-500 text-black shadow-sm font-black ring-2 ring-purple-400/50'
+                                    : 'bg-purple-950/60 hover:bg-purple-900/80 text-purple-300 border border-purple-500/30'
+                                }`}
+                              >
+                                <span>⚡ ৭ দিন (7-Day Follow-Up)</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setWizardSteps(prev =>
+                                    prev.map((s, i) => (i === idx ? { ...s, delayDays: 14, triggerCondition: 'no_reply_14d' } : s))
+                                  );
+                                }}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1 ${
+                                  step.delayDays === 14
+                                    ? 'bg-blue-500 text-black shadow-sm font-black ring-2 ring-blue-400/50'
+                                    : 'bg-blue-950/60 hover:bg-blue-900/80 text-blue-300 border border-blue-500/30'
+                                }`}
+                              >
+                                <span>⚡ ১৪ দিন (14-Day Follow-Up)</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setWizardSteps(prev =>
+                                    prev.map((s, i) => (i === idx ? { ...s, delayDays: 30, triggerCondition: 'no_reply_30d' } : s))
+                                  );
+                                }}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1 ${
+                                  step.delayDays === 30
+                                    ? 'bg-amber-500 text-black shadow-sm font-black ring-2 ring-amber-400/50'
+                                    : 'bg-amber-950/60 hover:bg-amber-900/80 text-amber-300 border border-amber-500/30'
+                                }`}
+                              >
+                                <span>⚡ ৩০ দিন (30-Day Follow-Up)</span>
+                              </button>
                             </div>
                           </div>
                         )}

@@ -14,7 +14,8 @@ import {
   Zap,
   BarChart3,
   FileText,
-  FolderOpen
+  FolderOpen,
+  Clock
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -31,7 +32,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
     smtpAccounts,
     currentUser,
     totalTrashCount,
-    driveStorageSettings
+    driveStorageSettings,
+    openFollowUpCohortModal
   } = useApp();
 
   const activeLeadsCount = leads.filter(l => !l.isTrash).length;
@@ -119,6 +121,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
       badgeColor: isServiceDisabled('campaigns') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
     },
     {
+      id: 'followup_cohorts',
+      label: '⚡ ৩/৭/১৪ দিন ফলো-আপ',
+      icon: Clock,
+      tag: 'Auto-SMTP',
+      tagColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold',
+      onClick: () => openFollowUpCohortModal('3d')
+    },
+    {
       id: 'inbox',
       label: 'Smart Inbox',
       icon: Inbox,
@@ -170,7 +180,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => (item as any).onClick ? (item as any).onClick() : setActiveTab(item.id)}
               className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all group ${
                 isActive
                   ? 'bg-gradient-to-r from-blue-600/20 via-cyan-500/10 to-transparent text-cyan-300 border border-cyan-500/30 shadow-md shadow-cyan-500/5 font-bold'

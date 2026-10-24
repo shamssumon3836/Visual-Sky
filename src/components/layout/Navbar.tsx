@@ -527,10 +527,11 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
         <div className="relative" ref={followUpRef}>
           <button
             onClick={() => setShowFollowUpMenu(!showFollowUpMenu)}
-            className="hidden lg:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-cyan-300 text-xs font-semibold shadow-sm transition cursor-pointer"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-emerald-950/50 via-cyan-950/40 to-slate-900 hover:bg-slate-800 border border-cyan-500/40 text-cyan-300 text-xs font-black shadow-sm transition cursor-pointer"
+            title="৩ দিন, ৭ দিন, ১৪ দিন ও ৩০ দিনের অটোমেটিক ফলো-আপ চালান"
           >
-            <Clock className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="whitespace-nowrap">1-Click Follow-Up</span>
+            <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span className="whitespace-nowrap">⚡ ৩/৭/১৪ দিন ফলো-আপ</span>
             <ChevronDown className="w-3 h-3 ml-0.5 opacity-70" />
           </button>
 

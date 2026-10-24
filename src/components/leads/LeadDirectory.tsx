@@ -30,7 +30,8 @@ import {
   ShieldAlert,
   ShieldCheck,
   AlertTriangle,
-  ClipboardPaste
+  ClipboardPaste,
+  Clock
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -1023,27 +1024,35 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               onClick={() => launchQuickFollowUp('3d')}
-              className="px-3 py-1.5 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+              className="px-3 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900 border-2 border-emerald-500/50 text-emerald-300 font-black text-xs flex items-center gap-1.5 transition cursor-pointer shadow-md"
+              title="৩ দিন ধরে রেসপন্স না পাওয়া লিডগুলোতে ফলো-আপ পাঠান"
             >
-              <span>⚡ 3-Day Follow-Up</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>⚡ ৩ দিনের ফলো-আপ (3-Day)</span>
             </button>
             <button
               onClick={() => launchQuickFollowUp('7d')}
-              className="px-3 py-1.5 rounded-lg bg-amber-950/40 hover:bg-amber-900/60 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+              className="px-3 py-1.5 rounded-lg bg-purple-950/40 hover:bg-purple-900/60 border border-purple-500/40 text-purple-300 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+              title="৭ দিন ধরে রেসপন্স না পাওয়া লিডগুলোতে ফলো-আপ পাঠান"
             >
-              <span>⚡ 7-Day Follow-Up</span>
+              <span className="w-2 h-2 rounded-full bg-purple-400"></span>
+              <span>⚡ ৭ দিনের ফলো-আপ (7-Day)</span>
             </button>
             <button
               onClick={() => launchQuickFollowUp('14d')}
-              className="px-3 py-1.5 rounded-lg bg-orange-950/40 hover:bg-orange-900/60 border border-orange-500/30 text-orange-300 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+              className="px-3 py-1.5 rounded-lg bg-blue-950/40 hover:bg-blue-900/60 border border-blue-500/40 text-blue-300 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+              title="১৪ দিন ধরে রেসপন্স না পাওয়া লিডগুলোতে ফলো-আপ পাঠান"
             >
-              <span>⚡ 14-Day Value Add</span>
+              <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+              <span>⚡ ১৪ দিনের ফলো-আপ (14-Day)</span>
             </button>
             <button
               onClick={() => launchQuickFollowUp('30d')}
-              className="px-3 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/30 text-rose-300 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+              className="px-3 py-1.5 rounded-lg bg-amber-950/40 hover:bg-amber-900/60 border border-amber-500/40 text-amber-300 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+              title="৩০ দিন ধরে রেসপন্স না পাওয়া লিডগুলোতে ব্রেকআপ ফলো-আপ পাঠান"
             >
-              <span>⚡ 30-Day Breakup</span>
+              <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+              <span>⚡ ৩০ দিনের ফলো-আপ (30-Day)</span>
             </button>
           </div>
         </div>
@@ -1116,10 +1125,10 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
               { id: 'opened', label: '👁️ Opened' },
               { id: 'new', label: '✨ New' },
               { id: 'invalid_email', label: `🚫 নষ্ট মেইল (${emailHealthSummary.invalidLeads.length})` },
-              { id: 'inactive_3d', label: '⏳ Inactive 3d+' },
-              { id: 'inactive_7d', label: '⏳ Inactive 7d+' },
-              { id: 'inactive_14d', label: '⏳ Inactive 14d+' },
-              { id: 'inactive_30d', label: '⏳ Inactive 30d+' },
+              { id: 'inactive_3d', label: '⏳ ৩ দিন+ নিষ্ক্রিয় (3d+)' },
+              { id: 'inactive_7d', label: '⏳ ৭ দিন+ নিষ্ক্রিয় (7d+)' },
+              { id: 'inactive_14d', label: '⏳ ১৪ দিন+ নিষ্ক্রিয় (14d+)' },
+              { id: 'inactive_30d', label: '⏳ ৩০ দিন+ নিষ্ক্রিয় (30d+)' },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -1138,13 +1147,22 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
 
         {/* Bulk Action Bar (When rows selected) */}
         {selectedLeadIds.length > 0 && (
-          <div className="p-3 bg-cyan-950/40 border border-cyan-500/40 rounded-2xl flex items-center justify-between animate-in fade-in">
+          <div className="p-3 bg-cyan-950/40 border border-cyan-500/40 rounded-2xl flex items-center justify-between animate-in fade-in flex-wrap gap-2">
             <div className="flex items-center gap-2 text-xs font-bold text-cyan-300">
               <CheckSquare className="w-4 h-4 text-cyan-400" />
               <span>{selectedLeadIds.length} leads selected</span>
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => launchQuickFollowUp('3d')}
+                className="px-3 py-1.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border-2 border-emerald-500/50 text-emerald-300 text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer"
+                title="৩ দিনের ফলো-আপ চালান"
+              >
+                <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                <span>⚡ ৩ দিনের ফলো-আপ ({selectedLeadIds.length})</span>
+              </button>
+
               <button
                 onClick={() => openCampaignWizard({ leadIds: selectedLeadIds, step: 1 })}
                 className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-md cursor-pointer"

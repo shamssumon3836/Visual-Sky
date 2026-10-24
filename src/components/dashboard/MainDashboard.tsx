@@ -643,19 +643,19 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* 3-Day Box */}
-          <div className="p-5 rounded-2xl bg-slate-950 border border-emerald-500/30 flex flex-col justify-between space-y-3 shadow-lg">
+          <div className="p-5 rounded-2xl bg-slate-950 border-2 border-emerald-500/40 flex flex-col justify-between space-y-3 shadow-lg">
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                <span className="text-xs font-black text-emerald-300 flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  3+ Days Inactive
+                  ⚡ ৩+ দিন নিষ্ক্রিয় (3-Day Follow-Up)
                 </span>
                 <span className="px-2.5 py-0.5 text-xs font-black bg-emerald-500/20 text-emerald-300 rounded-lg border border-emerald-500/30">
                   {dormant3d} Leads
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-                Contacted 3+ days ago with no response. High-impact early touch base while initial outreach is fresh.
+                ৩ দিন পূর্বে মেইল পাঠানো হয়েছে কিন্তু কোনো উত্তর আসেনি। উচ্চ-অগ্রাধিকার ৭২ ঘণ্টা টাচ-বেস ফলো-আপ।
               </p>
             </div>
             <button
@@ -663,82 +663,82 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
               className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-slate-950 font-black rounded-xl text-xs transition shadow-md shadow-emerald-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Zap className="w-3.5 h-3.5" />
-              Launch 3-Day Follow-Up ({dormant3d})
+              ⚡ ৩ দিনের ফলো-আপ পাঠান ({dormant3d})
             </button>
           </div>
 
           {/* 7-Day Box */}
-          <div className="p-5 rounded-2xl bg-slate-950 border border-amber-500/30 flex flex-col justify-between space-y-3 shadow-lg">
+          <div className="p-5 rounded-2xl bg-slate-950 border border-purple-500/30 flex flex-col justify-between space-y-3 shadow-lg">
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
-                  7+ Days Inactive
+                <span className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-purple-400 animate-pulse"></span>
+                  ⚡ ৭+ দিন নিষ্ক্রিয় (7-Day Follow-Up)
                 </span>
-                <span className="px-2.5 py-0.5 text-xs font-black bg-amber-500/20 text-amber-300 rounded-lg border border-amber-500/30">
+                <span className="px-2.5 py-0.5 text-xs font-black bg-purple-500/20 text-purple-300 rounded-lg border border-purple-500/30">
                   {dormant7d} Leads
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-                Contacted 7+ days ago with no response. Perfect timing for a quick friendly value-bump.
+                ৭ দিন পূর্বে মেইল পাঠানো হয়েছে কিন্তু উত্তর নেই। বন্ধুসুলভ রিমাইন্ডার এবং ভ্যালু-এড ফলো-আপ।
               </p>
             </div>
             <button
               onClick={() => handleLaunchFollowUp('7d')}
-              className="w-full py-2.5 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-black rounded-xl text-xs transition shadow-md shadow-amber-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2.5 bg-gradient-to-r from-purple-600 to-indigo-500 hover:from-purple-500 hover:to-indigo-400 text-white font-black rounded-xl text-xs transition shadow-md shadow-purple-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Zap className="w-3.5 h-3.5" />
-              Launch 7-Day Follow-Up ({dormant7d})
+              ⚡ ৭ দিনের ফলো-আপ পাঠান ({dormant7d})
             </button>
           </div>
 
           {/* 14-Day Box */}
-          <div className="p-5 rounded-2xl bg-slate-950 border border-orange-500/30 flex flex-col justify-between space-y-3 shadow-lg">
+          <div className="p-5 rounded-2xl bg-slate-950 border border-blue-500/30 flex flex-col justify-between space-y-3 shadow-lg">
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-orange-300 flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-orange-500 animate-pulse"></span>
-                  14+ Days Inactive
+                <span className="text-xs font-bold text-blue-300 flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse"></span>
+                  ⚡ ১৪+ দিন নিষ্ক্রিয় (14-Day Follow-Up)
                 </span>
-                <span className="px-2.5 py-0.5 text-xs font-black bg-orange-500/20 text-orange-300 rounded-lg border border-orange-500/30">
+                <span className="px-2.5 py-0.5 text-xs font-black bg-blue-500/20 text-blue-300 rounded-lg border border-blue-500/30">
                   {dormant14d} Leads
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-                No reply for 2 weeks. Dispatch case study and deliverability proof audit to revive interest.
+                ২ সপ্তাহ ধরে কোনো রেসপন্স নেই। কেস স্টাডি, ফলাফল ও ডেলিভারেবিলিটি মেট্রিক্স পাঠিয়ে মনোযোগ ফিরিয়ে আনুন।
               </p>
             </div>
             <button
               onClick={() => handleLaunchFollowUp('14d')}
-              className="w-full py-2.5 bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 text-white font-black rounded-xl text-xs transition shadow-md shadow-orange-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black rounded-xl text-xs transition shadow-md shadow-blue-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Zap className="w-3.5 h-3.5" />
-              Launch 14-Day Follow-Up ({dormant14d})
+              ⚡ ১৪ দিনের ফলো-আপ পাঠান ({dormant14d})
             </button>
           </div>
 
           {/* 30-Day Box */}
-          <div className="p-5 rounded-2xl bg-slate-950 border border-rose-500/30 flex flex-col justify-between space-y-3 shadow-lg">
+          <div className="p-5 rounded-2xl bg-slate-950 border border-amber-500/30 flex flex-col justify-between space-y-3 shadow-lg">
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse"></span>
-                  30+ Days Dormant
+                <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
+                  ⚡ ৩০+ দিন সুপ্ত (30-Day Breakup)
                 </span>
-                <span className="px-2.5 py-0.5 text-xs font-black bg-rose-500/20 text-rose-300 rounded-lg border border-rose-500/30">
+                <span className="px-2.5 py-0.5 text-xs font-black bg-amber-500/20 text-amber-300 rounded-lg border border-amber-500/30">
                   {dormant30d} Leads
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-                Send psychological breakup email to cleanly close the loop or trigger high-conversion reactivations.
+                সাইকোলজিক্যাল ব্রেকআপ ইমেইল পাঠিয়ে ফাইল ক্লোজ করার অনুমতি চেয়ে চূড়ান্ত কনভার্সন রি-অ্যাক্টিভেশন ট্রিগার করুন।
               </p>
             </div>
             <button
               onClick={() => handleLaunchFollowUp('30d')}
-              className="w-full py-2.5 bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white font-black rounded-xl text-xs transition shadow-md shadow-rose-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2.5 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-black rounded-xl text-xs transition shadow-md shadow-amber-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Zap className="w-3.5 h-3.5" />
-              Launch 30-Day Follow-Up ({dormant30d})
+              ⚡ ৩০ দিনের ফলো-আপ পাঠান ({dormant30d})
             </button>
           </div>
         </div>
