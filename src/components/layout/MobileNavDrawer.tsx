@@ -145,7 +145,7 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
     },
     {
       id: 'followup_cohorts',
-      label: '⚡ ৩/৭/১৪ দিন ফলো-আপ',
+      label: '⚡ ৩/৭/১৪/৩০ দিন ফলো-আপ',
       description: 'Multi-SMTP অটোমেটিক ফলো-আপ ইঞ্জিন (৩, ৭, ১৪, ৩০ দিন)',
       icon: Clock,
       tag: 'Auto-SMTP',

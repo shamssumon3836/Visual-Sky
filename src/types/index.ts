@@ -219,6 +219,7 @@ export interface AppNotification {
   message: string;
   type: 'reply' | 'open' | 'bounce' | 'lead' | 'campaign' | 'smtp' | 'system';
   timestamp: string;
+  createdAtMs?: number;
   isRead: boolean;
   linkTab?: string;
   leadEmail?: string;

@@ -38,32 +38,54 @@ export const FloatingNotificationCorner: React.FC = () => {
   const [nativePermission, setNativePermission] = useState<NotificationPermission>(() =>
     getSafeNotificationPermission()
   );
-  const seenIdsRef = useRef<Set<string>>(new Set());
-  const initializedRef = useRef<boolean>(false);
+  const sessionMountTimeRef = useRef<number>(Date.now());
+  const seenIdsRef = useRef<Set<string>>((() => {
+    try {
+      const stored = sessionStorage.getItem('visualsky_seen_toast_ids');
+      if (stored) {
+        const arr = JSON.parse(stored);
+        if (Array.isArray(arr)) return new Set(arr);
+      }
+    } catch {}
+    return new Set<string>();
+  })());
 
   // Sync native permission status
   useEffect(() => {
     setNativePermission(getSafeNotificationPermission());
   }, [notificationSettings.desktopPushEnabled]);
 
-  // Pre-populate existing notifications on first mount so only new live events pop up
+  // Pre-populate all existing notifications on mount/hydration during quiet boot period
+  // This guarantees that reloading or reopening the page NEVER pops up old unreplied emails!
   useEffect(() => {
-    if (!initializedRef.current) {
+    const isInitialPeriod = Date.now() - sessionMountTimeRef.current < 3500;
+    if (isInitialPeriod) {
       notifications.forEach(n => seenIdsRef.current.add(n.id));
-      initializedRef.current = true;
+      try {
+        sessionStorage.setItem(
+          'visualsky_seen_toast_ids',
+          JSON.stringify(Array.from(seenIdsRef.current).slice(-300))
+        );
+      } catch {}
       return;
     }
 
-    // Strictly allow only the 3 core email events: reply (incoming mail), open (mail opened), bounce (blocked/bounced)
-    const newOnes = notifications.filter(
-      n =>
-        !seenIdsRef.current.has(n.id) &&
-        !n.isRead &&
-        (n.type === 'reply' || n.type === 'open' || n.type === 'bounce')
-    );
+    // Strictly allow only fresh real-time events that occur during the live active session
+    const newOnes = notifications.filter(n => {
+      if (seenIdsRef.current.has(n.id)) return false;
+      if (n.isRead) return false;
+      if (n.createdAtMs && n.createdAtMs < sessionMountTimeRef.current) return false;
+      return n.type === 'reply' || n.type === 'open' || n.type === 'bounce';
+    });
 
     if (newOnes.length > 0) {
       newOnes.forEach(n => seenIdsRef.current.add(n.id));
+      try {
+        sessionStorage.setItem(
+          'visualsky_seen_toast_ids',
+          JSON.stringify(Array.from(seenIdsRef.current).slice(-300))
+        );
+      } catch {}
       setVisibleToasts(prev => [...newOnes, ...prev].slice(0, 3));
     }
   }, [notifications]);

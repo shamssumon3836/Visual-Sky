@@ -2695,12 +2695,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const recentInAppNotifTagsRef = useRef<Map<string, number>>(new Map());
+  const appMountTimeRef = useRef<number>(Date.now());
+  const persistentFiredTagsRef = useRef<Set<string>>((() => {
+    try {
+      const stored = localStorage.getItem('visualsky_fired_notif_tags');
+      if (stored) {
+        const arr = JSON.parse(stored);
+        if (Array.isArray(arr)) return new Set(arr);
+      }
+    } catch {}
+    return new Set<string>();
+  })());
 
   // Notification helper — STRICTLY fires ONLY for:
   // 1. Incoming Mail / Reply ('reply')
   // 2. Email Opened ('open')
   // 3. Mail Blocked / Bounced ('bounce')
+  // Note: Old historical or unreplied emails NEVER re-fire on page reload
   const addNotification = (notif: Omit<AppNotification, 'id' | 'timestamp' | 'isRead'>) => {
     const titleStr = String(notif.title || '');
     const msgStr = String(notif.message || '');
@@ -2731,16 +2742,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // Deduplicate by tag within 45s so background tab polling + Web Push never create duplicate bell items
+    // Deduplicate by tag permanently so background tab polling + Web Push + page reloads NEVER re-fire duplicate notifications for the same email
     if (notif.tag) {
-      const nowMs = Date.now();
-      for (const [k, ts] of recentInAppNotifTagsRef.current.entries()) {
-        if (nowMs - ts > 45000) recentInAppNotifTagsRef.current.delete(k);
-      }
-      if (recentInAppNotifTagsRef.current.has(notif.tag)) {
+      if (persistentFiredTagsRef.current.has(notif.tag)) {
         return;
       }
-      recentInAppNotifTagsRef.current.set(notif.tag, nowMs);
+      persistentFiredTagsRef.current.add(notif.tag);
+      try {
+        const tagArr = Array.from(persistentFiredTagsRef.current).slice(-500);
+        localStorage.setItem('visualsky_fired_notif_tags', JSON.stringify(tagArr));
+      } catch {}
     }
 
     const newNotif: AppNotification = {
@@ -2748,11 +2759,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: resolvedType,
       id: `notif-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      createdAtMs: Date.now(),
       isRead: false,
     };
     setNotifications(prev => [newNotif, ...prev.slice(0, 79)]);
-    playNotificationSound(resolvedType === 'bounce' ? 'radar' : 'chime');
-    sendDesktopNotification(newNotif);
+
+    // Only play audio sound and send desktop notification if past initial boot grace period
+    const isPastBootGrace = Date.now() - appMountTimeRef.current > 3000;
+    if (isPastBootGrace) {
+      playNotificationSound(resolvedType === 'bounce' ? 'radar' : 'chime');
+      sendDesktopNotification(newNotif);
+    }
   };
 
   const markNotificationRead = (id: string) => {
@@ -5077,20 +5094,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           newestArrivedThreadId = targetThreadId;
 
           const isReplyToSent = Boolean(matchingSentLog || isReplySubjectOrHeader);
-          notificationsToFire.push({
-            tag: msgUniqueId,
-            title: isReplyToSent
-              ? `📩 ${leadName} replied to your email`
-              : `📩 New Mail from ${leadName}`,
-            message: `${replyText.slice(0, 110)}${replyText.length > 110 ? '...' : ''}`,
-            type: 'reply',
-            linkTab: 'inbox',
-            leadEmail: threadLeadEmail,
-            threadId: targetThreadId,
-            senderName: leadName,
-            senderCompany: leadCompany,
-            subject: msgSubject
-          } as any);
+          if (!persistentFiredTagsRef.current.has(msgUniqueId)) {
+            notificationsToFire.push({
+              tag: msgUniqueId,
+              title: isReplyToSent
+                ? `📩 ${leadName} replied to your email`
+                : `📩 New Mail from ${leadName}`,
+              message: `${replyText.slice(0, 110)}${replyText.length > 110 ? '...' : ''}`,
+              type: 'reply',
+              linkTab: 'inbox',
+              leadEmail: threadLeadEmail,
+              threadId: targetThreadId,
+              senderName: leadName,
+              senderCompany: leadCompany,
+              subject: msgSubject
+            } as any);
+          }
         }
       }
 

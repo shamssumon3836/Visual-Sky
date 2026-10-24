@@ -122,7 +122,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
     },
     {
       id: 'followup_cohorts',
-      label: '⚡ ৩/৭/১৪ দিন ফলো-আপ',
+      label: '⚡ ৩/৭/১৪/৩০ দিন ফলো-আপ',
       icon: Clock,
       tag: 'Auto-SMTP',
       tagColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold',

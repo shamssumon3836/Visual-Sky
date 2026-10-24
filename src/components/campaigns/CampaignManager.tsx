@@ -1136,7 +1136,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
   const handleAddStep = () => {
     const nextNum = wizardSteps.length + 1;
-    const delay = nextNum === 2 ? 3 : nextNum === 3 ? 7 : 14;
+    const delay = nextNum === 2 ? 3 : nextNum === 3 ? 7 : nextNum === 4 ? 14 : 30;
     const newStepIdx = wizardSteps.length;
     setWizardSteps([
       ...wizardSteps,
@@ -1145,7 +1145,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         delayDays: delay,
         subject: `Re: ${wizardSteps[0]?.subject || 'Quick question regarding {{company}}'}`,
         body: `Hi {{first_name}},\n\nFollowing up on my earlier note regarding {{company}}. Would you be open to a quick 3-minute chat this week?\n\nBest regards,\n${senderName || '{{sender_name}}'}`,
-        triggerCondition: nextNum === 2 ? 'no_reply_7d' : nextNum === 3 ? 'no_reply_14d' : 'no_reply_30d'
+        triggerCondition: nextNum === 2 ? 'no_reply_3d' : nextNum === 3 ? 'no_reply_7d' : nextNum === 4 ? 'no_reply_14d' : 'no_reply_30d'
       }
     ]);
     setActiveTemplateTargetStep(newStepIdx);
@@ -1547,7 +1547,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     // Filter leads by step triggerCondition if running a follow-up step (stepNumber > 1)
     let eligibleLeads = allEnrolledLeads;
     if (chosenStepIndex > 0) {
-      const cond = initialStep.triggerCondition || 'no_reply_7d';
+      const cond = initialStep.triggerCondition || 'no_reply_3d';
       if (cond.startsWith('no_reply')) {
         eligibleLeads = allEnrolledLeads.filter(l => !l.isReplied && l.status !== 'replied');
       } else if (cond === 'opened_no_reply') {

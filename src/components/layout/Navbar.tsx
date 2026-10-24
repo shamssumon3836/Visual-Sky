@@ -531,7 +531,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
             title="৩ দিন, ৭ দিন, ১৪ দিন ও ৩০ দিনের অটোমেটিক ফলো-আপ চালান"
           >
             <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            <span className="whitespace-nowrap">⚡ ৩/৭/১৪ দিন ফলো-আপ</span>
+            <span className="whitespace-nowrap">⚡ ৩/৭/১৪/৩০ দিন ফলো-আপ</span>
             <ChevronDown className="w-3 h-3 ml-0.5 opacity-70" />
           </button>
 

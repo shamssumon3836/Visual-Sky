@@ -118,49 +118,46 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-7 animate-in fade-in duration-200">
       
-      {/* 🌟 LUXURY EXECUTIVE HERO BANNER */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#0b1120] via-[#09152e] to-[#120e28] border border-cyan-500/25 p-6 sm:p-8 shadow-2xl shadow-cyan-950/20">
-        {/* Glow ambient background lights */}
-        <div className="absolute -top-32 -right-32 w-96 h-96 bg-cyan-500/15 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-32 -left-32 w-96 h-96 bg-indigo-500/15 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute top-1/2 right-1/4 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-cyan-900/10 via-transparent to-transparent pointer-events-none" />
+      {/* 🌟 EXECUTIVE DASHBOARD HEADER */}
+      <div className="relative overflow-hidden rounded-2xl bg-slate-900/95 border border-slate-800 p-6 sm:p-7 shadow-lg">
+        {/* Subtle top accent line */}
+        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600" />
 
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div className="space-y-3.5 max-w-3xl">
-            {/* Live System Status Badges */}
+          <div className="space-y-3 max-w-3xl">
+            {/* Live Status Badges */}
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="px-3 py-1 text-xs font-black bg-gradient-to-r from-blue-600/30 to-cyan-500/30 text-cyan-300 border border-cyan-500/40 rounded-xl flex items-center gap-1.5 shadow-sm shadow-cyan-500/10">
+              <span className="px-2.5 py-1 text-xs font-bold bg-slate-800 text-cyan-300 border border-slate-700 rounded-lg flex items-center gap-1.5">
                 <Radio className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
                 <span>Visual Sky v3.2 Enterprise Hub</span>
               </span>
 
-              <span className="px-2.5 py-1 text-xs font-extrabold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded-xl flex items-center gap-1.5 shadow-sm shadow-emerald-500/10">
+              <span className="px-2.5 py-1 text-xs font-bold bg-slate-800 text-emerald-300 border border-slate-700 rounded-lg flex items-center gap-1.5">
                 <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
                 <span>100% Primary Inbox Shield</span>
               </span>
 
-              <span className="px-2.5 py-1 text-xs font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 rounded-xl flex items-center gap-1.5">
+              <span className="px-2.5 py-1 text-xs font-bold bg-slate-800 text-purple-300 border border-slate-700 rounded-lg flex items-center gap-1.5">
                 <Server className="w-3 h-3 text-purple-400" />
                 <span>{connectedSmtps.length} Active Relays Synced</span>
               </span>
             </div>
 
             <div>
-              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black text-slate-100 tracking-tight leading-tight">
-                Welcome, <span className="bg-gradient-to-r from-cyan-400 via-blue-400 to-indigo-300 bg-clip-text text-transparent">{currentUser.name || 'Outreach Director'}</span>
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-100 tracking-tight leading-tight">
+                Welcome, <span className="text-cyan-400">{currentUser.name || 'Outreach Director'}</span>
               </h1>
-              <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed mt-1.5">
-                Enterprise outbound pipeline is active with <strong>{deliveryEngineHealth} deliverability rating</strong>, intelligent round-robin dynamic rotation, and automated lead re-engagement.
+              <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed mt-1">
+                Enterprise outbound pipeline is active with <strong className="text-emerald-400">{deliveryEngineHealth} deliverability rating</strong>, intelligent round-robin dynamic rotation, and automated lead re-engagement.
               </p>
             </div>
           </div>
 
-          {/* Quick Primary Actions with Cyber Neomorphism */}
+          {/* Quick Primary Actions */}
           <div className="flex items-center gap-2.5 flex-wrap shrink-0">
             <button
               onClick={() => openCampaignWizard()}
-              className="flex items-center gap-2 px-5 py-3.5 bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:via-blue-500 hover:to-indigo-500 text-white rounded-2xl text-xs font-black shadow-xl shadow-cyan-500/25 transition transform hover:-translate-y-0.5 cursor-pointer border border-cyan-400/30"
+              className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/20 transition cursor-pointer"
             >
               <Zap className="w-4 h-4 fill-white" />
               <span>Launch Sequence Wizard</span>
@@ -168,7 +165,7 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
 
             <button
               onClick={onOpenSendMail}
-              className="flex items-center gap-2 px-4.5 py-3.5 bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-slate-100 rounded-2xl text-xs font-bold transition transform hover:-translate-y-0.5 cursor-pointer shadow-lg"
+              className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 rounded-xl text-xs font-bold transition cursor-pointer"
             >
               <Send className="w-4 h-4 text-cyan-400" />
               <span>Direct Cold Mailer</span>
@@ -176,16 +173,16 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
 
             <button
               onClick={() => setActiveTab('apollo')}
-              className="flex items-center gap-2 px-4.5 py-3.5 bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-amber-600/20 hover:from-amber-500/30 hover:to-orange-500/30 border border-amber-500/50 text-amber-300 rounded-2xl text-xs font-black transition transform hover:-translate-y-0.5 cursor-pointer shadow-lg shadow-amber-500/10"
+              className="flex items-center gap-2 px-4 py-2.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/40 text-amber-300 rounded-xl text-xs font-bold transition cursor-pointer"
             >
               <Target className="w-4 h-4 text-amber-400" />
               <span>Apollo.io Intelligence</span>
-              <span className="px-1.5 py-0.5 text-[9px] bg-amber-500/30 text-amber-200 rounded-md font-mono">275M+</span>
+              <span className="px-1.5 py-0.2 text-[9px] bg-amber-500/30 text-amber-200 rounded font-mono">275M+</span>
             </button>
 
             <button
               onClick={() => setActiveTab('generator')}
-              className="flex items-center gap-2 px-4 py-3.5 bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-slate-200 rounded-2xl text-xs font-bold transition cursor-pointer"
+              className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
             >
               <Sparkles className="w-4 h-4 text-purple-400" />
               <span>AI Lead Miner</span>
@@ -194,22 +191,21 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
         </div>
       </div>
 
-      {/* 🚀 EXECUTIVE KPI METRIC COCKPIT (4 Glassmorphic Glow Cards) */}
+      {/* 🚀 EXECUTIVE KPI METRIC COCKPIT (4 Clean Structured Cards) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         
         {/* Metric 1: Total Outbound Dispatched */}
         <div 
           onClick={() => setActiveTab('sent')}
-          className="bg-gradient-to-b from-slate-900/90 to-slate-950/90 hover:from-slate-800/90 hover:to-slate-900/90 p-5 rounded-3xl border border-blue-500/30 hover:border-blue-400 transition-all duration-200 cursor-pointer group shadow-xl relative overflow-hidden"
+          className="bg-slate-900/90 hover:bg-slate-800/80 p-5 rounded-2xl border border-slate-800 hover:border-slate-700 transition cursor-pointer group shadow-sm flex flex-col justify-between"
         >
-          <div className="absolute top-0 right-0 w-28 h-28 bg-blue-500/10 rounded-full blur-2xl pointer-events-none group-hover:scale-125 transition duration-500" />
           <div className="flex items-center justify-between">
-            <span className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Total Dispatched</span>
-            <div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-inner">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Dispatched</span>
+            <div className="w-9 h-9 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center justify-center">
               <Send className="w-4 h-4" />
             </div>
           </div>
-          <div className="text-3xl font-black text-blue-400 mt-3 tracking-tight">{totalEmailsDispatched.toLocaleString()}</div>
+          <div className="text-3xl font-black text-slate-100 mt-3 tracking-tight">{totalEmailsDispatched.toLocaleString()}</div>
           <div className="flex items-center justify-between text-[11px] text-slate-400 mt-3 pt-3 border-t border-slate-800/80">
             <span className="text-cyan-400 font-bold flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
@@ -222,12 +218,11 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
         {/* Metric 2: Deliverability Health Gauge */}
         <div 
           onClick={() => setActiveTab('smtp')}
-          className="bg-gradient-to-b from-slate-900/90 to-slate-950/90 hover:from-slate-800/90 hover:to-slate-900/90 p-5 rounded-3xl border border-emerald-500/30 hover:border-emerald-400 transition-all duration-200 cursor-pointer group shadow-xl relative overflow-hidden"
+          className="bg-slate-900/90 hover:bg-slate-800/80 p-5 rounded-2xl border border-slate-800 hover:border-slate-700 transition cursor-pointer group shadow-sm flex flex-col justify-between"
         >
-          <div className="absolute top-0 right-0 w-28 h-28 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none group-hover:scale-125 transition duration-500" />
           <div className="flex items-center justify-between">
-            <span className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Inbox Placement</span>
-            <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-inner">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Inbox Placement</span>
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center">
               <ShieldCheck className="w-4 h-4" />
             </div>
           </div>
@@ -244,12 +239,11 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
         {/* Metric 3: Unique Opens Tracked */}
         <div 
           onClick={() => setActiveTab('analytics')}
-          className="bg-gradient-to-b from-slate-900/90 to-slate-950/90 hover:from-slate-800/90 hover:to-slate-900/90 p-5 rounded-3xl border border-cyan-500/30 hover:border-cyan-400 transition-all duration-200 cursor-pointer group shadow-xl relative overflow-hidden"
+          className="bg-slate-900/90 hover:bg-slate-800/80 p-5 rounded-2xl border border-slate-800 hover:border-slate-700 transition cursor-pointer group shadow-sm flex flex-col justify-between"
         >
-          <div className="absolute top-0 right-0 w-28 h-28 bg-cyan-500/10 rounded-full blur-2xl pointer-events-none group-hover:scale-125 transition duration-500" />
           <div className="flex items-center justify-between">
-            <span className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Open Velocity</span>
-            <div className="w-10 h-10 rounded-2xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-inner">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Open Velocity</span>
+            <div className="w-9 h-9 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 flex items-center justify-center">
               <Eye className="w-4 h-4" />
             </div>
           </div>
@@ -263,12 +257,11 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
         {/* Metric 4: Positive Warm Replies */}
         <div 
           onClick={() => setActiveTab('inbox')}
-          className="bg-gradient-to-b from-slate-900/90 to-slate-950/90 hover:from-slate-800/90 hover:to-slate-900/90 p-5 rounded-3xl border border-purple-500/30 hover:border-purple-400 transition-all duration-200 cursor-pointer group shadow-xl relative overflow-hidden"
+          className="bg-slate-900/90 hover:bg-slate-800/80 p-5 rounded-2xl border border-slate-800 hover:border-slate-700 transition cursor-pointer group shadow-sm flex flex-col justify-between"
         >
-          <div className="absolute top-0 right-0 w-28 h-28 bg-purple-500/10 rounded-full blur-2xl pointer-events-none group-hover:scale-125 transition duration-500" />
           <div className="flex items-center justify-between">
-            <span className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Warm Response Rate</span>
-            <div className="w-10 h-10 rounded-2xl bg-purple-500/10 text-purple-400 border border-purple-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-inner">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Warm Response Rate</span>
+            <div className="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center justify-center">
               <MessageSquare className="w-4 h-4" />
             </div>
           </div>
@@ -625,32 +618,32 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
       </div>
 
       {/* ⚡ 1-CLICK SMART FOLLOW-UP COMMAND CENTER (3d, 7d, 14d, 30d) */}
-      <div className="bg-slate-900/90 rounded-3xl border border-blue-500/30 p-6 space-y-4 shadow-xl">
+      <div className="bg-slate-900/95 rounded-2xl border border-slate-800 p-5 sm:p-6 space-y-4 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
           <div>
             <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
               <Clock className="w-4 h-4 text-cyan-400" />
-              1-Click Smart Follow-Up Automation Engine (3d / 7d / 14d / 30d)
+              <span>⚡ ১-ক্লিক স্মার্ট ফলো-আপ অটোমেশন ইঞ্জিন (৩ দিন / ৭ দিন / ১৪ দিন / ৩০ দিন)</span>
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Instantly isolate leads who haven't opened or replied and dispatch personalized sequences (3-Day, 7-Day, 14-Day, 30-Day):
+              যেসব লিড এখনও ওপেন বা রিপ্লাই করেনি, তাদের ৩ দিন, ৭ দিন, ১৪ দিন বা ৩০ দিনের ব্যবধানে ১-ক্লিকে টার্গেটেড সিকোয়েন্স পাঠান:
             </p>
           </div>
-          <span className="text-[11px] font-bold text-cyan-400 bg-cyan-950/60 px-3 py-1 rounded-xl border border-cyan-800/60 self-start sm:self-auto">
-            ⚡ Zero Manual Filtering Required
+          <span className="text-[11px] font-bold text-cyan-400 bg-slate-800 px-3 py-1 rounded-lg border border-slate-700 self-start sm:self-auto">
+            অটো-ফিল্টারিং সক্রিয়
           </span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* 3-Day Box */}
-          <div className="p-5 rounded-2xl bg-slate-950 border-2 border-emerald-500/40 flex flex-col justify-between space-y-3 shadow-lg">
+          <div className="p-4.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-emerald-500/50 flex flex-col justify-between space-y-3 transition">
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-xs font-black text-emerald-300 flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  ⚡ ৩+ দিন নিষ্ক্রিয় (3-Day Follow-Up)
+                <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  ৩+ দিন নিষ্ক্রিয় (3-Day)
                 </span>
-                <span className="px-2.5 py-0.5 text-xs font-black bg-emerald-500/20 text-emerald-300 rounded-lg border border-emerald-500/30">
+                <span className="px-2 py-0.5 text-xs font-bold bg-emerald-500/15 text-emerald-300 rounded-md border border-emerald-500/30">
                   {dormant3d} Leads
                 </span>
               </div>
@@ -660,22 +653,22 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
             </div>
             <button
               onClick={() => handleLaunchFollowUp('3d')}
-              className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-slate-950 font-black rounded-xl text-xs transition shadow-md shadow-emerald-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-lg text-xs transition shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Zap className="w-3.5 h-3.5" />
-              ⚡ ৩ দিনের ফলো-আপ পাঠান ({dormant3d})
+              <span>⚡ ৩ দিনের ফলো-আপ পাঠান ({dormant3d})</span>
             </button>
           </div>
 
           {/* 7-Day Box */}
-          <div className="p-5 rounded-2xl bg-slate-950 border border-purple-500/30 flex flex-col justify-between space-y-3 shadow-lg">
+          <div className="p-4.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-purple-500/50 flex flex-col justify-between space-y-3 transition">
             <div>
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-purple-400 animate-pulse"></span>
-                  ⚡ ৭+ দিন নিষ্ক্রিয় (7-Day Follow-Up)
+                  <span className="w-2 h-2 rounded-full bg-purple-400"></span>
+                  ৭+ দিন নিষ্ক্রিয় (7-Day)
                 </span>
-                <span className="px-2.5 py-0.5 text-xs font-black bg-purple-500/20 text-purple-300 rounded-lg border border-purple-500/30">
+                <span className="px-2 py-0.5 text-xs font-bold bg-purple-500/15 text-purple-300 rounded-md border border-purple-500/30">
                   {dormant7d} Leads
                 </span>
               </div>
@@ -685,47 +678,47 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
             </div>
             <button
               onClick={() => handleLaunchFollowUp('7d')}
-              className="w-full py-2.5 bg-gradient-to-r from-purple-600 to-indigo-500 hover:from-purple-500 hover:to-indigo-400 text-white font-black rounded-xl text-xs transition shadow-md shadow-purple-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg text-xs transition shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Zap className="w-3.5 h-3.5" />
-              ⚡ ৭ দিনের ফলো-আপ পাঠান ({dormant7d})
+              <span>⚡ ৭ দিনের ফলো-আপ পাঠান ({dormant7d})</span>
             </button>
           </div>
 
           {/* 14-Day Box */}
-          <div className="p-5 rounded-2xl bg-slate-950 border border-blue-500/30 flex flex-col justify-between space-y-3 shadow-lg">
+          <div className="p-4.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-blue-500/50 flex flex-col justify-between space-y-3 transition">
             <div>
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-blue-300 flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse"></span>
-                  ⚡ ১৪+ দিন নিষ্ক্রিয় (14-Day Follow-Up)
+                  <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+                  ১৪+ দিন নিষ্ক্রিয় (14-Day)
                 </span>
-                <span className="px-2.5 py-0.5 text-xs font-black bg-blue-500/20 text-blue-300 rounded-lg border border-blue-500/30">
+                <span className="px-2 py-0.5 text-xs font-bold bg-blue-500/15 text-blue-300 rounded-md border border-blue-500/30">
                   {dormant14d} Leads
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-                ২ সপ্তাহ ধরে কোনো রেসপন্স নেই। কেস স্টাডি, ফলাফল ও ডেলিভারেবিলিটি মেট্রিক্স পাঠিয়ে মনোযোগ ফিরিয়ে আনুন।
+                ২ সপ্তাহ ধরে কোনো রেসপন্স নেই। কেস স্টাডি ও ফলাফল মেট্রিক্স পাঠিয়ে মনোযোগ ফিরিয়ে আনুন।
               </p>
             </div>
             <button
               onClick={() => handleLaunchFollowUp('14d')}
-              className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black rounded-xl text-xs transition shadow-md shadow-blue-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs transition shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Zap className="w-3.5 h-3.5" />
-              ⚡ ১৪ দিনের ফলো-আপ পাঠান ({dormant14d})
+              <span>⚡ ১৪ দিনের ফলো-আপ পাঠান ({dormant14d})</span>
             </button>
           </div>
 
           {/* 30-Day Box */}
-          <div className="p-5 rounded-2xl bg-slate-950 border border-amber-500/30 flex flex-col justify-between space-y-3 shadow-lg">
+          <div className="p-4.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-amber-500/50 flex flex-col justify-between space-y-3 transition">
             <div>
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
-                  ⚡ ৩০+ দিন সুপ্ত (30-Day Breakup)
+                  <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                  ৩০+ দিন সুপ্ত (30-Day Breakup)
                 </span>
-                <span className="px-2.5 py-0.5 text-xs font-black bg-amber-500/20 text-amber-300 rounded-lg border border-amber-500/30">
+                <span className="px-2 py-0.5 text-xs font-bold bg-amber-500/15 text-amber-300 rounded-md border border-amber-500/30">
                   {dormant30d} Leads
                 </span>
               </div>
@@ -735,10 +728,10 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
             </div>
             <button
               onClick={() => handleLaunchFollowUp('30d')}
-              className="w-full py-2.5 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-black rounded-xl text-xs transition shadow-md shadow-amber-500/10 flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Zap className="w-3.5 h-3.5" />
-              ⚡ ৩০ দিনের ফলো-আপ পাঠান ({dormant30d})
+              <span>⚡ ৩০ দিনের ফলো-আপ পাঠান ({dormant30d})</span>
             </button>
           </div>
         </div>
