@@ -3181,6 +3181,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updatedThread: EmailThread = {
         ...target,
         unreadCount: 0,
+        isReplied: true,
         smtpAccountId: activeSmtp?.id || target.smtpAccountId,
         smtpEmail: senderFromEmail || target.smtpEmail,
         lastMessage: (resolvedBody || `📎 Sent ${metadataOnlyAttachments?.length || 1} attachment(s)`).slice(0, 100),
@@ -3188,6 +3189,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         messages: [...target.messages.map(m => ({ ...m, isRead: true })), newMsg]
       };
       const nextThreads = [updatedThread, ...prev.filter(t => t.id !== threadId)];
+      (latestWorkspaceRef.current as any).threads = nextThreads;
+      try {
+        localStorage.setItem('visualsky_threads', JSON.stringify(nextThreads));
+      } catch {}
       persistResourceDirectly('threads', nextThreads);
       return nextThreads;
     });
@@ -3382,6 +3387,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         idsToRecord.push(`thread:${t.id}`);
         idsToRecord.push(`thread:${String(t.id).replace(/-split-\d+$/, '')}`);
         idsToRecord.push(String(t.id));
+      }
+      if (t.leadEmail) {
+        idsToRecord.push(`thread-lead:${t.leadEmail.trim().toLowerCase()}`);
+        idsToRecord.push(t.leadEmail.trim().toLowerCase());
       }
       if (Array.isArray(t.messages)) {
         for (const m of t.messages) {
@@ -4782,7 +4791,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           // Deduplicate strictly by unique IMAP UID / Message-ID and ignore permanently deleted messages
           const permanentlyDeletedSet = getPermanentlyDeletedSet();
 
-          if (permanentlyDeletedSet.has(msgUniqueId)) {
+          if (
+            permanentlyDeletedSet.has(msgUniqueId) ||
+            permanentlyDeletedSet.has(cleanUidPart) ||
+            permanentlyDeletedSet.has(senderEmail) ||
+            permanentlyDeletedSet.has(`thread-lead:${senderEmail}`)
+          ) {
             continue;
           }
 
@@ -5014,9 +5028,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
 
           if (targetThread) {
+            // If the thread was moved to trash by the user or permanently deleted, NEVER resurrect it!
+            if (targetThread.isTrash || permanentlyDeletedSet.has(targetThread.id) || permanentlyDeletedSet.has(`thread:${targetThread.id}`)) {
+              continue;
+            }
+
+            // Check if this incoming message is already in targetThread
+            const isDuplicate = targetThread.messages.some(
+              m => m.id === msgUniqueId || (m.sender === 'lead' && m.body === replyText)
+            );
+            if (isDuplicate) {
+              continue;
+            }
+
             const updatedThread: EmailThread = {
               ...targetThread,
               isTrash: false,
+              isReplied: false,
               smtpAccountId: resolvedSmtpId || targetThread.smtpAccountId,
               smtpEmail: resolvedSmtpEmail || targetThread.smtpEmail,
               subject: msgSubject || targetThread.subject,
@@ -5038,6 +5066,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ...workingThreads.filter(t => t.id !== targetThread.id)
             ];
           } else {
+            // If sender lead was deleted or trashed, do not create a new thread
+            if (
+              permanentlyDeletedSet.has(senderEmail) ||
+              permanentlyDeletedSet.has(`thread-lead:${senderEmail}`) ||
+              workingThreads.some(t => t.leadEmail?.toLowerCase() === senderEmail && t.isTrash)
+            ) {
+              continue;
+            }
+
             const initialMessages: EmailMessage[] = [];
             if (matchingSentLog) {
               initialMessages.push({
@@ -5127,6 +5164,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         persistResourceDirectly('campaigns', workingCampaigns);
       }
       if (threadsChanged) {
+        (latestWorkspaceRef.current as any).threads = workingThreads;
         setThreads(workingThreads);
         persistResourceDirectly('threads', workingThreads);
         if (newestArrivedThreadId && !activeThreadId) {

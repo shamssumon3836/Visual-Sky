@@ -551,10 +551,19 @@ export const SmartInbox: React.FC = () => {
     { name: 'Interested', color: 'bg-purple-500/20 text-purple-300 border-purple-500/30' },
   ];
 
-  // Helper to check if a thread is waiting for user's reply (last message was from lead)
+  // Helper to check if a thread is waiting for user's reply (last message was from lead and user hasn't replied yet)
   const isThreadWaitingReply = (t: EmailThread): boolean => {
     if (!Array.isArray(t.messages) || t.messages.length === 0) return false;
-    return t.messages[t.messages.length - 1]?.sender === 'lead';
+    if (t.isReplied) return false;
+    let lastLeadIdx = -1;
+    let lastUserIdx = -1;
+    for (let i = 0; i < t.messages.length; i++) {
+      if (t.messages[i]?.sender === 'lead') lastLeadIdx = i;
+      if (t.messages[i]?.sender === 'user') lastUserIdx = i;
+    }
+    // If the user sent a reply after the lead's message, it is NOT waiting for reply!
+    if (lastUserIdx > lastLeadIdx) return false;
+    return lastLeadIdx !== -1;
   };
 
   // Active thread details
@@ -656,19 +665,20 @@ export const SmartInbox: React.FC = () => {
         if (thread.isTrash) return false;
       }
 
-      // Folder matching
+      // Folder matching: Strict separation of Primary Inbox (incoming replies) and Sent Mails (outbound)
+      if (selectedFolder === 'inbox' && !(Array.isArray(thread.messages) && thread.messages.some(m => m.sender === 'lead'))) return false;
       if (selectedFolder === 'needs_reply' && !isThreadWaitingReply(thread)) return false;
       if (selectedFolder === 'sent' && !(Array.isArray(thread.messages) && thread.messages.some(m => m.sender === 'user'))) return false;
       if (selectedFolder === 'starred' && !thread.isStarred) return false;
       if (selectedFolder === 'high_intent' && !thread.labels.includes('Hot Lead')) return false;
       if (selectedFolder === 'meetings' && !thread.labels.includes('Meeting Scheduled')) return false;
-      if (selectedFolder === 'unread' && thread.unreadCount === 0) return false;
+      if (selectedFolder === 'unread' && (thread.unreadCount === 0 || !(Array.isArray(thread.messages) && thread.messages.some(m => m.sender === 'lead' && !m.isRead)))) return false;
 
       // Label sidebar filter
       if (selectedLabelFilter && !thread.labels.includes(selectedLabelFilter)) return false;
 
       // Quick status sub-filter
-      if (quickStatusFilter === 'unread' && thread.unreadCount === 0) return false;
+      if (quickStatusFilter === 'unread' && (thread.unreadCount === 0 || !(Array.isArray(thread.messages) && thread.messages.some(m => m.sender === 'lead' && !m.isRead)))) return false;
       if (quickStatusFilter === 'needs_reply' && !isThreadWaitingReply(thread)) return false;
 
       // Primary tab filtering
@@ -1332,9 +1342,9 @@ export const SmartInbox: React.FC = () => {
                   Mailboxes
                 </div>
                 {[
-                  { id: 'inbox', label: 'Primary Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash && t.unreadCount > 0).length },
+                  { id: 'inbox', label: 'Primary Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead')).length },
                   { id: 'needs_reply', label: 'Waiting Reply', icon: Clock, count: waitingReplyCount },
-                  { id: 'unread', label: 'Unread Mail', icon: Mail, count: threads.filter(t => !t.isTrash && t.unreadCount > 0).length },
+                  { id: 'unread', label: 'Unread Mail', icon: Mail, count: threads.filter(t => !t.isTrash && (t.unreadCount || 0) > 0 && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead' && !m.isRead)).length },
                   { id: 'sent', label: 'Sent Mails', icon: Send, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'user')).length },
                   { id: 'starred', label: 'Starred', icon: Star, count: threads.filter(t => t.isStarred && !t.isTrash).length },
                   { id: 'high_intent', label: 'High Intent Leads', icon: Flame, count: threads.filter(t => t.labels.includes('Hot Lead') && !t.isTrash).length },
@@ -1480,9 +1490,9 @@ export const SmartInbox: React.FC = () => {
                 Mailboxes
               </div>
               {[
-                { id: 'inbox', label: 'Primary Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash && t.unreadCount > 0).length },
+                { id: 'inbox', label: 'Primary Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead')).length },
                 { id: 'needs_reply', label: 'Waiting Reply', icon: Clock, count: waitingReplyCount },
-                { id: 'unread', label: 'Unread Mail', icon: Mail, count: threads.filter(t => !t.isTrash && t.unreadCount > 0).length },
+                { id: 'unread', label: 'Unread Mail', icon: Mail, count: threads.filter(t => !t.isTrash && (t.unreadCount || 0) > 0 && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead' && !m.isRead)).length },
                 { id: 'sent', label: 'Sent Mails', icon: Send, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'user')).length },
                 { id: 'starred', label: 'Starred', icon: Star, count: threads.filter(t => t.isStarred && !t.isTrash).length },
                 { id: 'high_intent', label: 'High Intent Leads', icon: Flame, count: threads.filter(t => t.labels.includes('Hot Lead') && !t.isTrash).length },

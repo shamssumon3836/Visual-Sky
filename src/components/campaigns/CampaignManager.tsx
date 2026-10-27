@@ -1592,6 +1592,10 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
     const intervalSec = overrideInterval !== undefined ? overrideInterval : (targetCampaign?.sendingIntervalSec || sendingInterval);
 
+    abortDispatchRef.current = false;
+    isPausedRef.current = false;
+    setIsPaused(false);
+
     addNotification({
       title: `Campaign Started: "${targetCampaign.name}" (Step ${initialStep.stepNumber || chosenStepIndex + 1}) 🚀`,
       message: `Sequenced dispatch started for ${targetLeads.length} leads via ${isRoundRobin ? `${activePool.length} SMTP Relays` : (fixedSmtp?.name || 'Connected Relay')}.`,
@@ -1695,6 +1699,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
           const res = await fetch('/api/smtp/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal: AbortSignal.timeout(22000),
             body: JSON.stringify({
               to: lead.email,
               toName: lead.name,
@@ -1837,24 +1842,28 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         });
       }
 
-      // If not last lead and delay interval is configured, countdown!
+      // If not last lead and delay interval is configured, countdown using resilient wall-clock time!
       if (i < targetLeads.length - 1 && intervalSec > 0) {
         const actualInterval = enableJitter 
-          ? Math.max(2, intervalSec + Math.floor(Math.random() * 5) - 2) 
+          ? Math.max(1, intervalSec + Math.floor(Math.random() * 3) - 1) 
           : intervalSec;
 
-        for (let sec = actualInterval; sec > 0; sec--) {
+        const targetEndTime = Date.now() + actualInterval * 1000;
+        while (Date.now() < targetEndTime) {
           if (abortDispatchRef.current) break;
           while (isPausedRef.current && !abortDispatchRef.current) {
-            await new Promise(r => setTimeout(r, 400));
+            await new Promise(r => setTimeout(r, 200));
           }
           if (abortDispatchRef.current) break;
 
+          const remainingSec = Math.max(0, Math.ceil((targetEndTime - Date.now()) / 1000));
           setDispatchProgress(prev => ({
             ...prev,
-            secondsUntilNext: sec
+            secondsUntilNext: remainingSec
           }));
-          await new Promise(r => setTimeout(r, 1000));
+
+          const sleepMs = Math.min(250, Math.max(10, targetEndTime - Date.now()));
+          await new Promise(r => setTimeout(r, sleepMs));
         }
       }
     }
