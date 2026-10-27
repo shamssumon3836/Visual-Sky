@@ -7457,9 +7457,9 @@ ${textItems.join("\n")}`;
         user: activeSmtp.username,
         pass: authKey
       },
-      connectionTimeout: 4e3,
-      greetingTimeout: 3500,
-      socketTimeout: 5e3,
+      connectionTimeout: 15e3,
+      greetingTimeout: 12e3,
+      socketTimeout: 25e3,
       tls: {
         rejectUnauthorized: false
       }
@@ -7501,7 +7501,7 @@ ${textItems.join("\n")}`;
             const timeoutErr = new Error(`Connection timed out while connecting to ${activeSmtp.host}:${p}.`);
             timeoutErr.code = "ETIMEDOUT";
             reject(timeoutErr);
-          }, 4500);
+          }, 2e4);
         });
         return Promise.race([sendPromise, timeoutPromise]);
       };

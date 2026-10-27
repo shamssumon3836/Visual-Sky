@@ -8333,9 +8333,9 @@ app.post('/api/smtp/send', async (req, res) => {
           user: activeSmtp.username,
           pass: authKey
         },
-        connectionTimeout: 4000,
-        greetingTimeout: 3500,
-        socketTimeout: 5000,
+        connectionTimeout: 15000,
+        greetingTimeout: 12000,
+        socketTimeout: 25000,
         tls: {
           rejectUnauthorized: false
         }
@@ -8383,7 +8383,7 @@ app.post('/api/smtp/send', async (req, res) => {
             const timeoutErr: any = new Error(`Connection timed out while connecting to ${activeSmtp.host}:${p}.`);
             timeoutErr.code = 'ETIMEDOUT';
             reject(timeoutErr);
-          }, 4500);
+          }, 20000);
         });
         return Promise.race([sendPromise, timeoutPromise]);
       };

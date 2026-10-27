@@ -193,24 +193,33 @@ export const SmartInbox: React.FC = () => {
     });
   };
 
+  const isFirstMountSyncRef = useRef<boolean>(true);
+
   // Automatically sync IMAP replies silently in background when SmartInbox opens & every 12s while visible (no manual button or reload needed)
   useEffect(() => {
-    const runSilentSync = () => {
+    const runSilentSync = (isFirst: boolean) => {
       if (document.visibilityState === 'visible') {
         syncInboxReplies(undefined, true)
           .then((res) => {
             setLastAutoSyncTime(
               new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
             );
-            if (res && res.success && res.count > 0 && chimeEnabled) {
+            // CRITICAL: NEVER chime on page load / initial mount! Only chime if live new incoming replies arrive while actively sitting in the Smart Inbox
+            if (!isFirst && res && res.success && res.count > 0 && chimeEnabled) {
               playReplyChime();
             }
           })
           .catch(() => {});
       }
     };
-    const initTimer = setTimeout(runSilentSync, 400);
-    const timer = setInterval(runSilentSync, 12000);
+    const initTimer = setTimeout(() => {
+      runSilentSync(true);
+      isFirstMountSyncRef.current = false;
+    }, 400);
+    const timer = setInterval(() => {
+      runSilentSync(isFirstMountSyncRef.current);
+      isFirstMountSyncRef.current = false;
+    }, 12000);
     return () => {
       clearTimeout(initTimer);
       clearInterval(timer);

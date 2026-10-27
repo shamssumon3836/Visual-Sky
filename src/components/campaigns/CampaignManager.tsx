@@ -1684,67 +1684,76 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       const renderedSubject = replaceAllCampaignTokens(rawSubject);
       const renderedBody = replaceAllCampaignTokens(rawBody);
 
-      // Send via real backend SMTP relay route
+      // Send via real backend SMTP relay route with automatic 1x retry on transient socket timeout
       const trackingPixelId = `px-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       let isSentSuccess = false;
       let sendErrorMessage = '';
 
-      try {
-        const res = await fetch('/api/smtp/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            to: lead.email,
-            toName: lead.name,
-            toCompany: lead.company,
-            from: effectiveSenderEmail,
-            fromName: effectiveSenderName,
-            subject: renderedSubject,
-            text: renderedBody,
-            smtpConfig: smtp,
-            trackingPixelId
-          })
-        });
-        const parsed = await safeParseResponse(res, 'SMTP relay connection failed');
-        const data = parsed.data || {};
-        const hasExplicitErr = Boolean(
-          data.error ||
-          data.errorMessage ||
-          data.code === 'EAUTH' ||
-          data.code === 'ETIMEDOUT' ||
-          data.success === false ||
-          data.status === 'failed'
-        );
-        const isDelivered = Boolean(
-          (parsed.ok || res.ok) &&
-          (data.success === true ||
-            data.status === 'sent' ||
-            Boolean(data.messageId) ||
-            (Array.isArray(data.accepted) && data.accepted.length > 0)) &&
-          !hasExplicitErr
-        );
+      for (let attempt = 1; attempt <= 2 && !isSentSuccess; attempt++) {
+        if (abortDispatchRef.current) break;
+        try {
+          const res = await fetch('/api/smtp/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: lead.email,
+              toName: lead.name,
+              toCompany: lead.company,
+              from: effectiveSenderEmail,
+              fromName: effectiveSenderName,
+              subject: renderedSubject,
+              text: renderedBody,
+              smtpConfig: smtp,
+              trackingPixelId
+            })
+          });
+          const parsed = await safeParseResponse(res, 'SMTP relay connection failed');
+          const data = parsed.data || {};
+          const hasExplicitErr = Boolean(
+            data.error ||
+            data.errorMessage ||
+            data.code === 'EAUTH' ||
+            data.code === 'ETIMEDOUT' ||
+            data.success === false ||
+            data.status === 'failed'
+          );
+          const isDelivered = Boolean(
+            (parsed.ok || res.ok) &&
+            (data.success === true ||
+              data.status === 'sent' ||
+              Boolean(data.messageId) ||
+              (Array.isArray(data.accepted) && data.accepted.length > 0)) &&
+            !hasExplicitErr
+          );
 
-        if (isDelivered) {
-          isSentSuccess = true;
-        } else {
-          isSentSuccess = false;
-          sendErrorMessage =
-            (typeof data.error === 'string' && data.error.trim()) ||
-            (data.error && typeof data.error?.message === 'string' && data.error.message.trim()) ||
-            (data.error && typeof data.error?.error === 'string' && data.error.error.trim()) ||
-            (typeof data.errorMessage === 'string' && data.errorMessage.trim()) ||
-            (typeof data.message === 'string' && data.message.trim()) ||
-            (typeof data.msg === 'string' && data.msg.trim()) ||
-            (typeof data.reason === 'string' && data.reason.trim()) ||
-            (typeof data.details === 'string' && data.details.trim()) ||
-            (data.code && typeof data.code === 'string' ? `SMTP Error (${data.code})` : '') ||
-            (res.status && res.status !== 200
-              ? `HTTP Error ${res.status}`
-              : 'SMTP delivery failed: check relay credentials or provider settings.');
+          if (isDelivered) {
+            isSentSuccess = true;
+            break;
+          } else {
+            sendErrorMessage =
+              (typeof data.error === 'string' && data.error.trim()) ||
+              (data.error && typeof data.error?.message === 'string' && data.error.message.trim()) ||
+              (data.error && typeof data.error?.error === 'string' && data.error.error.trim()) ||
+              (typeof data.errorMessage === 'string' && data.errorMessage.trim()) ||
+              (typeof data.message === 'string' && data.message.trim()) ||
+              (typeof data.msg === 'string' && data.msg.trim()) ||
+              (typeof data.reason === 'string' && data.reason.trim()) ||
+              (typeof data.details === 'string' && data.details.trim()) ||
+              (data.code && typeof data.code === 'string' ? `SMTP Error (${data.code})` : '') ||
+              (res.status && res.status !== 200
+                ? `HTTP Error ${res.status}`
+                : 'SMTP delivery failed: check relay credentials or provider settings.');
+
+            if (attempt === 1 && !abortDispatchRef.current) {
+              await new Promise(r => setTimeout(r, 1500));
+            }
+          }
+        } catch (err: any) {
+          sendErrorMessage = err?.message || 'Network error connecting to SMTP relay';
+          if (attempt === 1 && !abortDispatchRef.current) {
+            await new Promise(r => setTimeout(r, 1500));
+          }
         }
-      } catch (err: any) {
-        isSentSuccess = false;
-        sendErrorMessage = err?.message || 'Network error connecting to SMTP relay';
       }
 
       if (
