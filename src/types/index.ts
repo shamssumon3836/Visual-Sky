@@ -118,6 +118,7 @@ export interface EmailThread {
   labels: string[]; // e.g. "Hot Lead", "Follow Up Needed", "Negotiation", "VIP"
   isStarred: boolean;
   isTrash: boolean;
+  isReplied?: boolean;
   deletedAt?: string;
   messages: EmailMessage[];
 }
