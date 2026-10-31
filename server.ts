@@ -7168,6 +7168,82 @@ Respond ONLY in JSON format:
   }
 });
 
+// Endpoint: Free Website Context Scraper & Gemini 2.0 Icebreaker Generator
+app.post('/api/gemini/generate-icebreaker', async (req, res) => {
+  try {
+    const { company = '', domain = '', website = '', niche = 'video production & creative studio', name = '' } = req.body;
+    const cleanCompany = (company || '').trim() || 'your studio';
+    const cleanDomain = (domain || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+
+    // Skip scraping for generic public webmail providers (gmail, yahoo, etc.)
+    const isPublicDomain = /^(gmail|yahoo|outlook|hotmail|icloud|aol|proton|zoho)\.com$/i.test(cleanDomain);
+
+    let scrapedContext = '';
+    if (cleanDomain && !isPublicDomain) {
+      try {
+        const jinaUrl = `https://r.jina.ai/https://${cleanDomain}`;
+        const scrapeRes = await fetch(jinaUrl, {
+          signal: AbortSignal.timeout(4500),
+          headers: {
+            'Accept': 'text/plain',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+          }
+        });
+        if (scrapeRes.ok) {
+          const rawText = await scrapeRes.text();
+          scrapedContext = rawText.replace(/\s+/g, ' ').slice(0, 800).trim();
+        }
+      } catch {}
+    }
+
+    const promptContext = scrapedContext
+      ? `Website excerpt for ${cleanCompany}: "${scrapedContext}"`
+      : `${cleanCompany} is a ${niche} studio located at ${cleanDomain || website || 'their official portfolio'}.`;
+
+    const systemPrompt = `You are a creative director at Visual Sky (a high-end video editing and post-production agency for UK & international commercial studios).
+Write a genuine, conversational 1-sentence compliment (STRICTLY max 18 words) for a cold outreach email to ${cleanCompany}.
+Context: ${promptContext}
+
+STRICT RULES:
+1. Max 18 words total.
+2. Focus on their visual aesthetic, storytelling pacing, or recent creative portfolio.
+3. Sound like an authentic creative peer, casual and natural.
+4. ABSOLUTELY NEVER use cheesy AI buzzwords like 'cutting-edge', 'beacon', 'testament', 'tapestry', 'dive deep', 'thrilled', or 'masterpiece'.
+5. Output ONLY the single sentence. No quotation marks, no explanations.`;
+
+    if (getGeminiClient()) {
+      try {
+        const geminiResult = await callGemini(systemPrompt, { temperature: 0.7 }, 'gemini-2.0-flash');
+        if (geminiResult && geminiResult.text) {
+          const cleanText = geminiResult.text.replace(/^["']|["']$/g, '').trim();
+          if (cleanText) {
+            return res.json({
+              success: true,
+              icebreaker: cleanText,
+              source: scrapedContext ? 'jina_scraped' : 'industry_fallback'
+            });
+          }
+        }
+      } catch {}
+    }
+
+    // Default authentic creative compliment
+    const fallback = `Loved the visual pacing and clean color grade across ${cleanCompany}'s recent reel.`;
+    return res.json({
+      success: true,
+      icebreaker: fallback,
+      source: 'heuristic_fallback'
+    });
+  } catch (err: any) {
+    return res.json({
+      success: true,
+      icebreaker: `Loved the visual pacing and clean color grade across ${req.body?.company || 'your team'}'s recent reel.`,
+      source: 'error_fallback'
+    });
+  }
+});
+
+
 // Endpoint: Live Website Availability & Domain Health Ping
 app.post('/api/verify/url', async (req, res) => {
   try {
@@ -8168,7 +8244,10 @@ app.post('/api/smtp/send', async (req, res) => {
     // 1. Direct Dispatch: Resend HTTPS API (Port 443)
     if (activeSmtp.provider === 'resend' || authKey.startsWith('re_')) {
       try {
-        const resendHeaders: Record<string, string> = {};
+        const resendHeaders: Record<string, string> = {
+          'List-Unsubscribe': `<mailto:${senderEmail}?subject=Unsubscribe>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+        };
         if (inReplyTo) resendHeaders['In-Reply-To'] = String(inReplyTo);
         if (references) resendHeaders['References'] = String(references);
         const resendAttachments = validBinaryAttachments.map((a: any) => ({
@@ -8236,7 +8315,10 @@ app.post('/api/smtp/send', async (req, res) => {
     // 2. Direct Dispatch: Brevo HTTPS API (Port 443)
     if (activeSmtp.provider === 'brevo' || authKey.startsWith('xkeysib-')) {
       try {
-        const brevoHeaders: Record<string, string> = {};
+        const brevoHeaders: Record<string, string> = {
+          'List-Unsubscribe': `<mailto:${senderEmail}?subject=Unsubscribe>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+        };
         if (inReplyTo) brevoHeaders['In-Reply-To'] = String(inReplyTo);
         if (references) brevoHeaders['References'] = String(references);
 
@@ -8341,9 +8423,11 @@ app.post('/api/smtp/send', async (req, res) => {
         }
       });
 
-    // Clean 1-to-1 personal headers (Zero bulk/marketing X-Mailer or X-Tracking headers!)
+    // Clean 1-to-1 personal headers with standard anti-spam compliance
     const cleanHeaders: Record<string, string> = {
-      'MIME-Version': '1.0'
+      'MIME-Version': '1.0',
+      'List-Unsubscribe': `<mailto:${senderEmail}?subject=Unsubscribe>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
     };
     if (inReplyTo) cleanHeaders['In-Reply-To'] = String(inReplyTo);
     if (references) cleanHeaders['References'] = String(references);

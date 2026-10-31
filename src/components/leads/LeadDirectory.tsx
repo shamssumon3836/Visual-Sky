@@ -2,6 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp, getLeadInactiveDays } from '../../context/AppContext';
 import { Lead, LeadTag } from '../../types';
 import { verifyEmailSync, verifyEmailsWithDns, parseAndVerifyRawEmails, EmailVerificationResult } from '../../utils/emailVerifier';
+import { classifyLeadRole, batchVerifyMx, generateLeadIcebreaker, MxVerificationResult } from '../../utils/outreachEngine';
 import { 
   Users, 
   Search, 
@@ -74,12 +75,15 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
   // Email Verification & Broken Mail Scanner State
   const [dnsVerificationMap, setDnsVerificationMap] = useState<Record<string, EmailVerificationResult>>({});
   const [isScanningDns, setIsScanningDns] = useState<boolean>(false);
+  const [mxVerificationMap, setMxVerificationMap] = useState<Record<string, MxVerificationResult>>({});
+  const [isScanningMx, setIsScanningMx] = useState<boolean>(false);
   const [showPasteVerifyModal, setShowPasteVerifyModal] = useState<boolean>(false);
   const [rawPasteText, setRawPasteText] = useState<string>('');
   const [pastedItems, setPastedItems] = useState<Array<{ email: string; name: string; company: string; verification: EmailVerificationResult }>>([]);
   const [isVerifyingPasteDns, setIsVerifyingPasteDns] = useState<boolean>(false);
   const [uploadVerifications, setUploadVerifications] = useState<Record<string, EmailVerificationResult>>({});
   const [isVerifyingUploadDns, setIsVerifyingUploadDns] = useState<boolean>(false);
+  const [isGeneratingIcebreakers, setIsGeneratingIcebreakers] = useState<boolean>(false);
   
   // Tag Management Modal State
   const [showTagModal, setShowTagModal] = useState<boolean>(false);
@@ -241,6 +245,76 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
       });
     } finally {
       setIsScanningDns(false);
+    }
+  };
+
+  // Run 100% Free Live DNS MX Verification via Google DoH API on all active leads
+  const handleScanAllMx = async () => {
+    if (activeLeads.length === 0 || isScanningMx) return;
+    setIsScanningMx(true);
+    try {
+      const allEmails = activeLeads.map(l => l.email).filter(Boolean);
+      const results = await batchVerifyMx(allEmails);
+      setMxVerificationMap(prev => ({ ...prev, ...results }));
+      const deadCount = Object.values(results).filter(r => r.status === 'DEAD_DOMAIN_NO_MX').length;
+      addNotification({
+        title: deadCount > 0 ? `🛡️ ${deadCount} Dead Domains Detected` : '🛡️ All MX Records Verified',
+        message: deadCount > 0
+          ? `Detected ${deadCount} dead domain(s) with no valid MX mail servers. They will be auto-skipped during campaign dispatch to prevent bounces.`
+          : `Verified ${allEmails.length} domain MX records successfully via Google DNS-over-HTTPS.`,
+        type: 'system'
+      });
+      confetti({ particleCount: 30, spread: 60 });
+    } finally {
+      setIsScanningMx(false);
+    }
+  };
+
+  // Generate casual AI icebreakers via Gemini 2.0 with Jina web context
+  const handleGenerateAllIcebreakers = async () => {
+    if (activeLeads.length === 0 || isGeneratingIcebreakers) return;
+    const targets = selectedLeadIds.length > 0
+      ? activeLeads.filter(l => selectedLeadIds.includes(l.id))
+      : activeLeads.filter(l => !l.icebreaker);
+
+    if (targets.length === 0) {
+      addNotification({
+        title: 'Icebreakers Up to Date ✨',
+        message: 'All leads in your list already have custom AI icebreakers generated.',
+        type: 'system'
+      });
+      return;
+    }
+
+    setIsGeneratingIcebreakers(true);
+    addNotification({
+      title: 'Generating AI Icebreakers ✨',
+      message: `Analyzing websites and generating casual compliments for ${targets.length} lead(s)...`,
+      type: 'system'
+    });
+
+    let generatedCount = 0;
+    try {
+      for (const lead of targets) {
+        try {
+          const icebreaker = await generateLeadIcebreaker(lead);
+          if (icebreaker) {
+            updateLead(lead.id, { icebreaker });
+            generatedCount++;
+          }
+        } catch (e) {
+          console.error('Icebreaker generation error for lead:', lead.email, e);
+        }
+      }
+
+      addNotification({
+        title: `✨ Generated ${generatedCount} AI Icebreakers!`,
+        message: `Tailored compliments for video editing & creative studio outreach created using Gemini 2.0.`,
+        type: 'lead'
+      });
+      confetti({ particleCount: 35, spread: 65 });
+    } finally {
+      setIsGeneratingIcebreakers(false);
     }
   };
 
@@ -878,6 +952,26 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
             </button>
 
             <button
+              onClick={handleScanAllMx}
+              disabled={isScanningMx}
+              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-900/60 to-cyan-900/60 hover:from-emerald-900/80 hover:to-cyan-900/80 border border-emerald-400/50 text-xs font-extrabold text-emerald-300 flex items-center gap-1.5 transition cursor-pointer shadow-md shadow-emerald-900/20"
+              title="100% Free Live DNS MX Verification via Google DNS-over-HTTPS (detects Google Workspace, M365, Zoho & dead domains)"
+            >
+              <ShieldCheck className={`w-3.5 h-3.5 text-emerald-400 ${isScanningMx ? 'animate-spin' : ''}`} />
+              <span>{isScanningMx ? 'Verifying MX...' : '🛡️ Verify All MX (Free)'}</span>
+            </button>
+
+            <button
+              onClick={handleGenerateAllIcebreakers}
+              disabled={isGeneratingIcebreakers}
+              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-purple-900/60 to-indigo-900/60 hover:from-purple-900/80 hover:to-indigo-900/80 border border-purple-400/50 text-xs font-extrabold text-purple-300 flex items-center gap-1.5 transition cursor-pointer shadow-md shadow-purple-900/20"
+              title="Fetch clean studio website text & generate authentic casual compliments via Gemini 2.0"
+            >
+              <Sparkles className={`w-3.5 h-3.5 text-purple-400 ${isGeneratingIcebreakers ? 'animate-spin' : ''}`} />
+              <span>{isGeneratingIcebreakers ? 'Generating AI...' : '✨ Generate AI Icebreakers (Free)'}</span>
+            </button>
+
+            <button
               onClick={() => setShowPasteVerifyModal(true)}
               className="px-3.5 py-2 rounded-xl bg-cyan-950/60 hover:bg-cyan-900/70 border border-cyan-500/40 text-xs font-bold text-cyan-300 flex items-center gap-1.5 transition cursor-pointer shadow-sm"
             >
@@ -1309,38 +1403,82 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
                           </td>
                         )}
 
-                        {/* Email - Strictly Single Line with Live Broken/Valid Signal */}
+                        {/* Email - Strictly Single Line with Live Broken/Valid Signal, Role Badge, and MX Status */}
                         {isColVisible('email') && (() => {
                           const emailCheck = getLeadEmailVerification(lead.email);
+                          const roleClassification = classifyLeadRole(lead.email);
+                          const leadMx = mxVerificationMap[(lead.email || '').trim().toLowerCase()];
+
                           return (
                             <td className="p-3.5">
-                              <div className="font-mono text-[11px] flex items-center gap-1.5 max-w-[260px]">
-                                {!emailCheck.isValid ? (
+                              <div className="font-mono text-[11px] flex items-center gap-1.5 max-w-[320px] flex-wrap">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  {!emailCheck.isValid ? (
+                                    <span
+                                      className="px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-300 text-[9px] font-extrabold shrink-0 flex items-center gap-1"
+                                      title={emailCheck.reasonBn || emailCheck.reason}
+                                    >
+                                      🚫 নষ্ট
+                                    </span>
+                                  ) : emailCheck.status === 'risky' ? (
+                                    <span
+                                      className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[9px] font-extrabold shrink-0"
+                                      title={emailCheck.reasonBn || emailCheck.reason}
+                                    >
+                                      ⚠️ Risky
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"
+                                      title={emailCheck.reasonBn || 'Verified Valid Email'}
+                                    />
+                                  )}
                                   <span
-                                    className="px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-300 text-[9px] font-extrabold shrink-0 flex items-center gap-1"
-                                    title={emailCheck.reasonBn || emailCheck.reason}
+                                    className={`truncate ${!emailCheck.isValid ? 'text-rose-300 line-through' : 'text-slate-200'}`}
+                                    title={`${lead.email} — ${emailCheck.reasonBn || emailCheck.reason}`}
                                   >
-                                    🚫 নষ্ট
+                                    {lead.email}
                                   </span>
-                                ) : emailCheck.status === 'risky' ? (
-                                  <span
-                                    className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[9px] font-extrabold shrink-0"
-                                    title={emailCheck.reasonBn || emailCheck.reason}
-                                  >
-                                    ⚠️ Risky
-                                  </span>
-                                ) : (
-                                  <span
-                                    className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"
-                                    title={emailCheck.reasonBn || 'Verified Valid Email'}
-                                  />
-                                )}
-                                <span
-                                  className={`truncate ${!emailCheck.isValid ? 'text-rose-300 line-through' : 'text-slate-200'}`}
-                                  title={`${lead.email} — ${emailCheck.reasonBn || emailCheck.reason}`}
-                                >
-                                  {lead.email}
+                                </div>
+
+                                {/* Decision Maker vs Studio Role Classifier */}
+                                <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold border shrink-0 ${roleClassification.badgeColor}`}>
+                                  {roleClassification.label}
                                 </span>
+
+                                {/* Live DNS MX Provider Badge */}
+                                {leadMx && (
+                                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold border shrink-0 ${
+                                    leadMx.status === 'VALID_MX'
+                                      ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                                      : 'bg-rose-500/15 border-rose-500/30 text-rose-300 font-black'
+                                  }`}>
+                                    {leadMx.status === 'VALID_MX' ? `🛡️ ${leadMx.provider}` : '❌ Dead Domain / No MX'}
+                                  </span>
+                                )}
+
+                                {/* Bounce / Unsubscribed / OOO Paused Badges */}
+                                {(lead.isBounced || lead.status === 'bounced') && (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 shrink-0">
+                                    🔴 Bounced
+                                  </span>
+                                )}
+                                {(lead.isUnsubscribed || lead.status === 'unsubscribed') && (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-800 text-slate-300 border border-slate-600 shrink-0">
+                                    🚫 Unsubscribed
+                                  </span>
+                                )}
+                                {lead.isOooPaused && lead.oooPausedUntil && new Date(lead.oooPausedUntil).getTime() > Date.now() && (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0" title={`Paused until ${new Date(lead.oooPausedUntil).toLocaleDateString()}`}>
+                                    🕒 OOO Paused
+                                  </span>
+                                )}
+                                {lead.icebreaker && (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40 shrink-0 flex items-center gap-0.5" title={`AI Icebreaker: "${lead.icebreaker}"`}>
+                                    ✨ Icebreaker
+                                  </span>
+                                )}
+
                                 {emailCheck.suggestion && (
                                   <button
                                     onClick={() => updateLead(lead.id, { email: emailCheck.suggestion! })}

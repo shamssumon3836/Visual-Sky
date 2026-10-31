@@ -569,3 +569,16 @@ export function parsePastedEmailsToLeads(
 
   return results;
 }
+
+export {
+  classifyLeadRole,
+  verifyEmailMX,
+  batchVerifyMx,
+  parseTemplate,
+  getUKBusinessHoursStatus
+} from './outreachEngine';
+export type {
+  LeadRoleCategory,
+  LeadRoleClassification,
+  MxVerificationResult
+} from './outreachEngine';

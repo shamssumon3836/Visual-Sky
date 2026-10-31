@@ -4746,6 +4746,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 sentChanged = true;
               }
 
+              if (bouncedAddr) {
+                const matchedLead = workingLeads.find(l => l.email?.toLowerCase() === bouncedAddr);
+                if (matchedLead) {
+                  workingLeads = workingLeads.map(l =>
+                    l.id === matchedLead.id || l.email?.toLowerCase() === bouncedAddr
+                      ? { ...l, status: 'bounced' as const, isBounced: true }
+                      : l
+                  );
+                  leadsChanged = true;
+                }
+              }
+
               addNotification({
                 tag: msgUniqueId,
                 title: `🚫 Mail Blocked / Bounced${matchedSent ? `: ${matchedSent.recipientName}` : ''}`,
@@ -4972,11 +4984,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
           }
 
-          // 2. Update matching lead status to 'replied'
+          // Detect Out of Office (OOO) and Unsubscribe requests
+          const lowerCombined = `${msgSubject} ${replyText}`.toLowerCase();
+          const isOoo = /out of office|annual leave|auto-reply|automatic reply|away from my desk|away from the office|on vacation|maternity leave|paternity leave/i.test(lowerCombined);
+          const isUnsubscribe = /unsubscribe|remove me|stop emailing|please remove|take me off|do not contact|opt out/i.test(lowerCombined);
+          const oooPauseIso = isOoo ? new Date(Date.now() + 7 * 86400000).toISOString() : undefined;
+
+          // 2. Update matching lead status
           if (matchingLead) {
             workingLeads = workingLeads.map(l => {
               if (l.id === matchingLead.id || l.email?.toLowerCase() === senderEmail) {
                 leadsChanged = true;
+                if (isUnsubscribe) {
+                  return {
+                    ...l,
+                    status: 'unsubscribed' as const,
+                    isUnsubscribed: true,
+                    isReplied: true,
+                    lastRepliedAt: msgDateIso,
+                    replySnippet: replyText.slice(0, 120)
+                  };
+                }
+                if (isOoo) {
+                  return {
+                    ...l,
+                    isOooPaused: true,
+                    oooPausedUntil: oooPauseIso,
+                    isReplied: true,
+                    lastRepliedAt: msgDateIso,
+                    replySnippet: replyText.slice(0, 120)
+                  };
+                }
                 return {
                   ...l,
                   status: 'replied' as const,
@@ -5024,8 +5062,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             body: replyText,
             attachments: incomingAttsList,
             isRead: false,
-            status: 'replied'
+            status: 'replied',
+            isOoo,
+            isUnsubscribe
           };
+
+          if (isUnsubscribe) {
+            addNotification({
+              tag: `unsub-${msgUniqueId}`,
+              title: `🚫 Unsubscribed: ${leadName}`,
+              message: `${leadName} requested to be removed. Lead marked as Unsubscribed and excluded from follow-ups.`,
+              type: 'system',
+              linkTab: 'inbox',
+              leadEmail: senderEmail
+            });
+          } else if (isOoo) {
+            addNotification({
+              tag: `ooo-${msgUniqueId}`,
+              title: `🕒 Out of Office: ${leadName}`,
+              message: `Auto-reply detected for ${leadName}. Follow-up queue automatically paused for 7 days.`,
+              type: 'lead',
+              linkTab: 'inbox',
+              leadEmail: senderEmail
+            });
+          }
+
+          const dynamicIntentLabels = [
+            matchingSentLog || isReplySubjectOrHeader ? 'Real Reply' : 'Direct Mail',
+            isUnsubscribe ? 'Unsubscribed' : isOoo ? '🕒 OOO Paused' : 'Hot Lead'
+          ];
 
           if (targetThread) {
             // If the thread was moved to trash by the user or permanently deleted, NEVER resurrect it!
@@ -5055,8 +5120,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               labels: Array.from(
                 new Set([
                   ...(targetThread.labels || []),
-                  matchingSentLog || isReplySubjectOrHeader ? 'Real Reply' : 'Direct Mail',
-                  'Hot Lead'
+                  ...dynamicIntentLabels
                 ])
               ),
               messages: [...targetThread.messages, newMsg]
@@ -5116,10 +5180,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               lastMessageDate: msgTimeFormatted,
               updatedAt: msgTimeFormatted,
               unreadCount: 1,
-              labels: [
-                matchingSentLog || isReplySubjectOrHeader ? 'Real Reply' : 'Direct Mail',
-                'Hot Lead'
-              ],
+              labels: dynamicIntentLabels,
               isStarred: true,
               isTrash: false,
               messages: initialMessages

@@ -6481,6 +6481,71 @@ Respond ONLY in JSON format:
     res.status(500).json({ error: "Optimization failed" });
   }
 });
+app.post("/api/gemini/generate-icebreaker", async (req, res) => {
+  try {
+    const { company = "", domain = "", website = "", niche = "video production & creative studio", name = "" } = req.body;
+    const cleanCompany = (company || "").trim() || "your studio";
+    const cleanDomain = (domain || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    const isPublicDomain = /^(gmail|yahoo|outlook|hotmail|icloud|aol|proton|zoho)\.com$/i.test(cleanDomain);
+    let scrapedContext = "";
+    if (cleanDomain && !isPublicDomain) {
+      try {
+        const jinaUrl = `https://r.jina.ai/https://${cleanDomain}`;
+        const scrapeRes = await fetch(jinaUrl, {
+          signal: AbortSignal.timeout(4500),
+          headers: {
+            "Accept": "text/plain",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+          }
+        });
+        if (scrapeRes.ok) {
+          const rawText = await scrapeRes.text();
+          scrapedContext = rawText.replace(/\s+/g, " ").slice(0, 800).trim();
+        }
+      } catch {
+      }
+    }
+    const promptContext = scrapedContext ? `Website excerpt for ${cleanCompany}: "${scrapedContext}"` : `${cleanCompany} is a ${niche} studio located at ${cleanDomain || website || "their official portfolio"}.`;
+    const systemPrompt = `You are a creative director at Visual Sky (a high-end video editing and post-production agency for UK & international commercial studios).
+Write a genuine, conversational 1-sentence compliment (STRICTLY max 18 words) for a cold outreach email to ${cleanCompany}.
+Context: ${promptContext}
+
+STRICT RULES:
+1. Max 18 words total.
+2. Focus on their visual aesthetic, storytelling pacing, or recent creative portfolio.
+3. Sound like an authentic creative peer, casual and natural.
+4. ABSOLUTELY NEVER use cheesy AI buzzwords like 'cutting-edge', 'beacon', 'testament', 'tapestry', 'dive deep', 'thrilled', or 'masterpiece'.
+5. Output ONLY the single sentence. No quotation marks, no explanations.`;
+    if (getGeminiClient()) {
+      try {
+        const geminiResult = await callGemini(systemPrompt, { temperature: 0.7 }, "gemini-2.0-flash");
+        if (geminiResult && geminiResult.text) {
+          const cleanText = geminiResult.text.replace(/^["']|["']$/g, "").trim();
+          if (cleanText) {
+            return res.json({
+              success: true,
+              icebreaker: cleanText,
+              source: scrapedContext ? "jina_scraped" : "industry_fallback"
+            });
+          }
+        }
+      } catch {
+      }
+    }
+    const fallback = `Loved the visual pacing and clean color grade across ${cleanCompany}'s recent reel.`;
+    return res.json({
+      success: true,
+      icebreaker: fallback,
+      source: "heuristic_fallback"
+    });
+  } catch (err) {
+    return res.json({
+      success: true,
+      icebreaker: `Loved the visual pacing and clean color grade across ${req.body?.company || "your team"}'s recent reel.`,
+      source: "error_fallback"
+    });
+  }
+});
 app.post("/api/verify/url", async (req, res) => {
   try {
     const { url } = req.body;
@@ -7305,7 +7370,10 @@ ${textItems.join("\n")}`;
     const customMessageId = `<${import_crypto.default.randomBytes(8).toString("hex")}.${Date.now()}@${senderDomain}>`;
     if (activeSmtp.provider === "resend" || authKey.startsWith("re_")) {
       try {
-        const resendHeaders = {};
+        const resendHeaders = {
+          "List-Unsubscribe": `<mailto:${senderEmail}?subject=Unsubscribe>`,
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
+        };
         if (inReplyTo) resendHeaders["In-Reply-To"] = String(inReplyTo);
         if (references) resendHeaders["References"] = String(references);
         const resendAttachments = validBinaryAttachments.map((a) => ({
@@ -7368,7 +7436,10 @@ ${textItems.join("\n")}`;
     }
     if (activeSmtp.provider === "brevo" || authKey.startsWith("xkeysib-")) {
       try {
-        const brevoHeaders = {};
+        const brevoHeaders = {
+          "List-Unsubscribe": `<mailto:${senderEmail}?subject=Unsubscribe>`,
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
+        };
         if (inReplyTo) brevoHeaders["In-Reply-To"] = String(inReplyTo);
         if (references) brevoHeaders["References"] = String(references);
         const brevoAttachments = validBinaryAttachments.map((a) => ({
@@ -7465,7 +7536,9 @@ ${textItems.join("\n")}`;
       }
     });
     const cleanHeaders = {
-      "MIME-Version": "1.0"
+      "MIME-Version": "1.0",
+      "List-Unsubscribe": `<mailto:${senderEmail}?subject=Unsubscribe>`,
+      "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
     };
     if (inReplyTo) cleanHeaders["In-Reply-To"] = String(inReplyTo);
     if (references) cleanHeaders["References"] = String(references);

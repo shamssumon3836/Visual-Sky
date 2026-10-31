@@ -53,6 +53,10 @@ export interface Lead {
   isReplied?: boolean;
   lastRepliedAt?: string;
   replySnippet?: string;
+  isOooPaused?: boolean;
+  oooPausedUntil?: string;
+  isUnsubscribed?: boolean;
+  isBounced?: boolean;
   isTrash: boolean;
   deletedAt?: string;
 }
@@ -99,6 +103,12 @@ export interface EmailMessage {
   attachments?: EmailAttachment[];
   isRead: boolean;
   status: 'sent' | 'delivered' | 'opened' | 'replied';
+  messageId?: string;
+  inReplyTo?: string;
+  references?: string;
+  isBounce?: boolean;
+  isOoo?: boolean;
+  isUnsubscribe?: boolean;
 }
 
 export interface EmailThread {
@@ -342,6 +352,10 @@ export interface SentEmailLog {
   sentAt: string;
   status: 'sent' | 'opened' | 'replied' | 'failed' | 'bounced';
   errorMessage?: string;
+  variant?: 'A' | 'B';
+  messageId?: string;
+  inReplyTo?: string;
+  references?: string;
   openCount: number;
   firstOpenedAt?: string;
   lastOpenedAt?: string;

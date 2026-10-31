@@ -4,6 +4,16 @@ import { Campaign, CampaignStep, Lead, SMTPAccount, EmailTemplate } from '../../
 import { SMTPConnectModal } from '../smtp/SMTPConnectModal';
 import { safeParseResponse } from '../../lib/safeFetch';
 import { verifyEmailSync, verifyEmailsWithDns, parseAndVerifyRawEmails, EmailVerificationResult } from '../../utils/emailVerifier';
+import {
+  classifyLeadRole,
+  verifyEmailMX,
+  batchVerifyMx,
+  parseTemplate,
+  getUKBusinessHoursStatus,
+  generateLeadIcebreaker,
+  MxVerificationResult,
+  LeadRoleClassification
+} from '../../utils/outreachEngine';
 import { 
   Send, 
   Activity,
@@ -107,7 +117,22 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   const [followUpSmtpId, setFollowUpSmtpId] = useState<string>('');
   const [followUpSmtpTab, setFollowUpSmtpTab] = useState<string>('all'); // 'all' | smtpId | 'unassigned'
   const [followUpSendMode, setFollowUpSendMode] = useState<'instant' | 'scheduled'>('instant');
-  const [followUpInterval, setFollowUpInterval] = useState<number>(15);
+  const [followUpInterval, setFollowUpInterval] = useState<number | string>(15);
+  const [followUpSortDecisionMakers, setFollowUpSortDecisionMakers] = useState<boolean>(false);
+  const [ukHoursGuardEnabled, setUkHoursGuardEnabled] = useState<boolean>(true);
+  const [leadMxVerificationMap, setLeadMxVerificationMap] = useState<Record<string, MxVerificationResult>>({});
+  const [isVerifyingAllMx, setIsVerifyingAllMx] = useState<boolean>(false);
+  
+  // A/B Testing & AI Icebreaker States
+  const [followUpEnableAbTest, setFollowUpEnableAbTest] = useState<boolean>(false);
+  const [followUpSubjectB, setFollowUpSubjectB] = useState<string>('Quick question regarding {{company}}');
+  const [followUpBodyB, setFollowUpBodyB] = useState<string>(
+    'Hi {{first_name|there}},\n\nWanted to quickly circle back on my note. Would love to share a brief 2-minute breakdown for {{company}}.\n\nBest regards,\n' + (currentUser.name || 'Outreach Specialist')
+  );
+  const [isGeneratingFollowUpIcebreakers, setIsGeneratingFollowUpIcebreakers] = useState<boolean>(false);
+  const [wizardEnableAbTest, setWizardEnableAbTest] = useState<boolean>(false);
+  const [wizardSubjectB, setWizardSubjectB] = useState<string>('');
+  const [wizardBodyB, setWizardBodyB] = useState<string>('');
 
   // Direct SMTP Connect Modal Trigger inside Wizard / FollowUp
   const [showSmtpModalInWizard, setShowSmtpModalInWizard] = useState<boolean>(false);
@@ -942,23 +967,54 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     setShowFollowUpModal(true);
   };
 
-  // Filtered leads in the Follow-up Cohort modal
-  const cohortDormantLeads = useMemo(() => {
+  // Filtered leads in the Follow-up Cohort modal with Cross-Tag Auto-Deduplication
+  const { cohortDormantLeads, duplicatesMergedCount } = useMemo(() => {
     const dayCount = followUpDays === '3d' ? 3 : followUpDays === '7d' ? 7 : followUpDays === '14d' ? 14 : 30;
     const strictDormant = getDormantLeads(dayCount);
     const base =
       followUpIncludeAllUnreplied || strictDormant.length === 0
         ? activeLeads.filter(l => !l.isReplied && l.status !== 'replied')
         : strictDormant;
-    if (!followUpLeadSearch.trim()) return base;
-    const q = followUpLeadSearch.toLowerCase();
-    return base.filter(l => 
-      (l.name || '').toLowerCase().includes(q) ||
-      (l.company || '').toLowerCase().includes(q) ||
-      (l.email || '').toLowerCase().includes(q) ||
-      (Array.isArray(l.tags) && l.tags.some(t => (t || '').toLowerCase().includes(q)))
-    );
-  }, [activeLeads, followUpDays, followUpIncludeAllUnreplied, followUpLeadSearch]);
+
+    // Cross-tag auto-deduplication by lowercase email address
+    const emailMap = new Map<string, Lead>();
+    let mergedCount = 0;
+
+    for (const lead of base) {
+      const emailKey = (lead.email || '').trim().toLowerCase();
+      if (!emailKey) continue;
+      if (emailMap.has(emailKey)) {
+        mergedCount++;
+        const existing = emailMap.get(emailKey)!;
+        const mergedTags = Array.from(new Set([...(existing.tags || []), ...(lead.tags || [])]));
+        emailMap.set(emailKey, {
+          ...existing,
+          tags: mergedTags,
+          name: existing.name || lead.name,
+          company: existing.company || lead.company,
+          title: existing.title || lead.title,
+          website: existing.website || lead.website,
+          icebreaker: existing.icebreaker || lead.icebreaker
+        });
+      } else {
+        emailMap.set(emailKey, { ...lead, tags: [...(lead.tags || [])] });
+      }
+    }
+
+    let result = Array.from(emailMap.values());
+
+    if (followUpLeadSearch.trim()) {
+      const q = followUpLeadSearch.toLowerCase();
+      result = result.filter(l => 
+        (l.name || '').toLowerCase().includes(q) ||
+        (l.company || '').toLowerCase().includes(q) ||
+        (l.email || '').toLowerCase().includes(q) ||
+        (Array.isArray(l.tags) && l.tags.some(t => (t || '').toLowerCase().includes(q)))
+      );
+    }
+
+    return { cohortDormantLeads: result, duplicatesMergedCount: mergedCount };
+  }, [activeLeads, followUpDays, followUpIncludeAllUnreplied, followUpLeadSearch, getDormantLeads]);
 
   // Map every dormant lead to its original sending SMTP relay (via sentEmails log and inbox threads)
   const leadSmtpMapping = useMemo(() => {
@@ -1006,16 +1062,77 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     };
   }, [cohortDormantLeads, leadSmtpMapping]);
 
-  // Displayed leads inside the follow-up modal, honoring the active SMTP tab
+  // Displayed leads inside the follow-up modal, honoring the active SMTP tab and Decision Maker sort
   const displayedFollowUpLeads = useMemo(() => {
+    let list: Lead[];
     if (followUpSmtpTab === 'all') {
-      return cohortDormantLeads;
+      list = cohortDormantLeads;
+    } else if (followUpSmtpTab === 'unassigned') {
+      list = cohortDormantLeads.filter(l => !leadSmtpMapping.get(l.id)?.hasPreviousSend);
+    } else {
+      list = cohortDormantLeads.filter(l => leadSmtpMapping.get(l.id)?.smtpId === followUpSmtpTab);
     }
-    if (followUpSmtpTab === 'unassigned') {
-      return cohortDormantLeads.filter(l => !leadSmtpMapping.get(l.id)?.hasPreviousSend);
+
+    if (followUpSortDecisionMakers) {
+      return [...list].sort((a, b) => {
+        const pA = classifyLeadRole(a.email).priority;
+        const pB = classifyLeadRole(b.email).priority;
+        return pB - pA;
+      });
     }
-    return cohortDormantLeads.filter(l => leadSmtpMapping.get(l.id)?.smtpId === followUpSmtpTab);
-  }, [cohortDormantLeads, followUpSmtpTab, leadSmtpMapping]);
+
+    return list;
+  }, [cohortDormantLeads, followUpSmtpTab, leadSmtpMapping, followUpSortDecisionMakers]);
+
+  const handleVerifyAllFollowUpMx = async () => {
+    if (cohortDormantLeads.length === 0 || isVerifyingAllMx) return;
+    setIsVerifyingAllMx(true);
+    try {
+      const emails = cohortDormantLeads.map(l => l.email).filter(Boolean);
+      const results = await batchVerifyMx(emails);
+      setLeadMxVerificationMap(prev => ({ ...prev, ...results }));
+      const deadCount = Object.values(results).filter(r => r.status === 'DEAD_DOMAIN_NO_MX').length;
+      addNotification({
+        title: deadCount > 0 ? `🛡️ ${deadCount} Dead Domains Detected` : '🛡️ All MX Records Verified',
+        message: deadCount > 0 
+          ? `Found ${deadCount} lead(s) with no valid MX records. They will be auto-skipped during dispatch to protect sender reputation.`
+          : `All ${emails.length} domains have active MX mail servers configured.`,
+        type: 'system'
+      });
+    } finally {
+      setIsVerifyingAllMx(false);
+    }
+  };
+
+  const handleGenerateFollowUpIcebreakers = async () => {
+    const leadsToProcess = cohortDormantLeads.filter(l => !l.icebreaker);
+    if (leadsToProcess.length === 0) {
+      addNotification({
+        title: 'Icebreakers Up-to-Date ✨',
+        message: 'All leads in this cohort already have personalized icebreakers.',
+        type: 'system'
+      });
+      return;
+    }
+    setIsGeneratingFollowUpIcebreakers(true);
+    let count = 0;
+    try {
+      for (const lead of leadsToProcess) {
+        const icebreaker = await generateLeadIcebreaker(lead);
+        if (icebreaker) {
+          updateLead(lead.id, { icebreaker });
+          count++;
+        }
+      }
+      addNotification({
+        title: `✨ Generated ${count} AI Icebreakers!`,
+        message: `Tailored natural compliments generated for ${count} leads. Ready for {{icebreaker}} token.`,
+        type: 'lead'
+      });
+    } finally {
+      setIsGeneratingFollowUpIcebreakers(false);
+    }
+  };
 
   const toggleFollowUpLead = (id: string) => {
     setFollowUpError('');
@@ -1123,7 +1240,12 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         undefined,
         undefined,
         0,
-        leadToSmtpMap
+        leadToSmtpMap,
+        followUpEnableAbTest ? {
+          enabled: true,
+          subjectB: followUpSubjectB,
+          bodyB: followUpBodyB
+        } : undefined
       );
     } else {
       addNotification({
@@ -1194,20 +1316,8 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         icebreaker: 'Impressive work on your recent product launch.',
         niche: campaignNiche || 'B2B SaaS'
       };
-    const firstName = (sampleLead.name || 'there').split(' ')[0] || 'there';
     const effSender = senderName || currentUser.name || 'Outreach Specialist';
-    return String(rawText || '')
-      .replace(/\{\{\s*first_name\s*\}\}/gi, firstName)
-      .replace(/\{\{\s*name\s*\}\}/gi, sampleLead.name || 'there')
-      .replace(/\{\{\s*company\s*\}\}/gi, sampleLead.company || 'your company')
-      .replace(/\{\{\s*website\s*\}\}/gi, sampleLead.website || sampleLead.company || 'your website')
-      .replace(/\{\{\s*title\s*\}\}/gi, sampleLead.title || 'Decision Maker')
-      .replace(/\{\{\s*email\s*\}\}/gi, sampleLead.email || '')
-      .replace(/\{\{\s*phone\s*\}\}/gi, (sampleLead as any).phone || '')
-      .replace(/\{\{\s*location\s*\}\}/gi, (sampleLead as any).location || '')
-      .replace(/\{\{\s*icebreaker\s*\}\}/gi, (sampleLead as any).icebreaker || 'Loved your recent growth!')
-      .replace(/\{\{\s*niche\s*\}\}/gi, sampleLead.niche || campaignNiche || 'your industry')
-      .replace(/\{\{\s*sender_name\s*\}\}/gi, effSender);
+    return parseTemplate(rawText, sampleLead, effSender);
   };
 
   const handleSendWizardTestEmail = async () => {
@@ -1467,13 +1577,31 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
     overrideLeadIds?: string[], 
     overrideSteps?: CampaignStep[],
     overrideSmtpId?: string,
-    overrideInterval?: number,
+    overrideInterval?: number | string,
     overrideSmtpIds?: string[],
     overrideSenderName?: string,
     overrideSenderEmail?: string,
     stepIndexToRun = 0,
-    overrideLeadToSmtpMap?: Record<string, string>
+    overrideLeadToSmtpMap?: Record<string, string>,
+    abTestingOptions?: { enabled: boolean; subjectB: string; bodyB: string }
   ) => {
+    // UK Business Hours Guard Check
+    if (ukHoursGuardEnabled) {
+      const ukStatus = getUKBusinessHoursStatus();
+      if (!ukStatus.isBusinessHours) {
+        const proceed = window.confirm(
+          `🇬🇧 UK Business Hours Guard Warning:\n\n` +
+          `Current London Time: ${ukStatus.currentLondonTime}\n` +
+          `Status: ${ukStatus.reason}\n\n` +
+          `Dispatching outside UK business hours (08:30 - 17:30 London) or on weekends may lower response rates.\n\n` +
+          `Click OK to proceed anyway, or Cancel to reschedule.`
+        );
+        if (!proceed) {
+          return;
+        }
+      }
+    }
+
     setShowWizardModal(false);
     setShowLiveDispatcher(true); // Open live dispatcher engine modal so user sees real-time progress!
     setIsDispatching(true);
@@ -1625,6 +1753,44 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       }
 
       const lead = targetLeads[i];
+
+      // Bounce Guard: Auto-skip Hard Bounced leads to protect domain reputation
+      if (lead.isBounced || lead.status === 'bounced') {
+        setDispatchProgress(prev => ({
+          ...prev,
+          sentLogs: [
+            `[🛡️ SKIPPED] Hard Bounced lead ${lead.email} (${lead.company || 'Unknown'}) — Auto-excluded from queue`,
+            ...prev.sentLogs
+          ]
+        }));
+        continue;
+      }
+
+      // Unsubscribe Guard: Auto-skip leads who asked to be unsubscribed
+      if (lead.isUnsubscribed || lead.status === 'unsubscribed') {
+        setDispatchProgress(prev => ({
+          ...prev,
+          sentLogs: [
+            `[🛡️ SKIPPED] Unsubscribed lead ${lead.email} (${lead.company || 'Unknown'}) — Auto-excluded from queue`,
+            ...prev.sentLogs
+          ]
+        }));
+        continue;
+      }
+
+      // Out of Office (OOO) Guard: Auto-pause sequence if currently in 7-day OOO window
+      if (lead.isOooPaused && lead.oooPausedUntil && new Date(lead.oooPausedUntil).getTime() > Date.now()) {
+        const pauseUntilDate = new Date(lead.oooPausedUntil).toLocaleDateString();
+        setDispatchProgress(prev => ({
+          ...prev,
+          sentLogs: [
+            `[🕒 SKIPPED] Out-of-Office paused until ${pauseUntilDate} for ${lead.email} — Auto-deferred`,
+            ...prev.sentLogs
+          ]
+        }));
+        continue;
+      }
+
       const mappedSmtpId = overrideLeadToSmtpMap?.[lead.id];
       const mappedSmtp = mappedSmtpId ? (smtpAccounts.find(s => s.id === mappedSmtpId) || activeSmtps.find(s => s.id === mappedSmtpId)) : undefined;
       const smtp = mappedSmtp
@@ -1648,15 +1814,40 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         secondsUntilNext: 0
       }));
 
-      // Render tokens
-      const rawSubject = initialStep?.subject || targetCampaign?.name || 'Cold Outreach';
-      const rawBody = initialStep?.body || 'Hi {{name}},\n\nReaching out regarding {{company}}.';
+      // 100% Free Live DNS MX Verification Check: Auto-skip DEAD_DOMAIN_NO_MX leads to prevent hard bounces
+      const leadMx = leadMxVerificationMap[(lead.email || '').trim().toLowerCase()];
+      if (leadMx && leadMx.status === 'DEAD_DOMAIN_NO_MX') {
+        setDispatchProgress(prev => ({
+          ...prev,
+          sentLogs: [
+            `[🛡️ SKIPPED] Dead domain / No MX for ${lead.email} (${lead.company || 'Unknown'}) — Auto-skipped to prevent hard bounce`,
+            ...prev.sentLogs
+          ]
+        }));
+        continue;
+      }
 
-      const leadFirstName = (lead.name || 'there').split(' ')[0] || 'there';
-      const leadWebsite = lead.website || lead.company || 'your website';
-      const leadIcebreaker =
-        lead.icebreaker ||
-        `came across ${lead.company || 'your team'} and loved your recent work in ${lead.niche || campaignNiche || 'your space'}`;
+      // Threading calculation: Look up previous outbound sent email to this lead
+      const leadEmailLower = (lead.email || '').trim().toLowerCase();
+      const priorSentLogs = (sentEmails || []).filter(
+        s => !s.isTrash && s.status === 'sent' && (s.recipientEmail || '').trim().toLowerCase() === leadEmailLower && s.messageId
+      );
+      const lastSentLog = priorSentLogs.length > 0 ? priorSentLogs[priorSentLogs.length - 1] : undefined;
+      const rawInReplyTo = lastSentLog?.messageId;
+      const formattedInReplyTo = rawInReplyTo ? (rawInReplyTo.startsWith('<') ? rawInReplyTo : `<${rawInReplyTo}>`) : undefined;
+      const formattedReferences = formattedInReplyTo
+        ? (lastSentLog?.references ? `${lastSentLog.references} ${formattedInReplyTo}` : formattedInReplyTo)
+        : undefined;
+
+      // 50/50 A/B Testing Variant Routing
+      const chosenVariant: 'A' | 'B' = (abTestingOptions?.enabled && (i % 2 === 1)) ? 'B' : 'A';
+      const rawSubject = (chosenVariant === 'B' && abTestingOptions?.subjectB?.trim())
+        ? abTestingOptions.subjectB
+        : (initialStep?.subject || targetCampaign?.name || 'Cold Outreach');
+      const rawBody = (chosenVariant === 'B' && abTestingOptions?.bodyB?.trim())
+        ? abTestingOptions.bodyB
+        : (initialStep?.body || 'Hi {{name}},\n\nReaching out regarding {{company}}.');
+
       const effectiveSenderName =
         (mappedSmtp && mappedSmtp.fromName) ||
         overrideSenderName ||
@@ -1673,25 +1864,14 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
         senderEmail ||
         'outreach@visualsky.io';
 
-      const replaceAllCampaignTokens = (txt: string) =>
-        String(txt || '')
-          .replace(/\{\{\s*first_name\s*\}\}/gi, leadFirstName)
-          .replace(/\{\{\s*name\s*\}\}/gi, lead.name || 'there')
-          .replace(/\{\{\s*company\s*\}\}/gi, lead.company || 'your company')
-          .replace(/\{\{\s*website\s*\}\}/gi, leadWebsite)
-          .replace(/\{\{\s*title\s*\}\}/gi, lead.title || 'Executive')
-          .replace(/\{\{\s*email\s*\}\}/gi, lead.email || '')
-          .replace(/\{\{\s*niche\s*\}\}/gi, lead.niche || campaignNiche || 'your industry')
-          .replace(/\{\{\s*icebreaker\s*\}\}/gi, leadIcebreaker)
-          .replace(/\{\{\s*sender_name\s*\}\}/gi, effectiveSenderName);
-
-      const renderedSubject = replaceAllCampaignTokens(rawSubject);
-      const renderedBody = replaceAllCampaignTokens(rawBody);
+      const renderedSubject = parseTemplate(rawSubject, lead, effectiveSenderName);
+      const renderedBody = parseTemplate(rawBody, lead, effectiveSenderName);
 
       // Send via real backend SMTP relay route with automatic 1x retry on transient socket timeout
       const trackingPixelId = `px-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       let isSentSuccess = false;
       let sendErrorMessage = '';
+      let returnedMessageId: string | undefined = undefined;
 
       for (let attempt = 1; attempt <= 2 && !isSentSuccess; attempt++) {
         if (abortDispatchRef.current) break;
@@ -1709,7 +1889,9 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
               subject: renderedSubject,
               text: renderedBody,
               smtpConfig: smtp,
-              trackingPixelId
+              trackingPixelId,
+              inReplyTo: formattedInReplyTo,
+              references: formattedReferences
             })
           });
           const parsed = await safeParseResponse(res, 'SMTP relay connection failed');
@@ -1733,6 +1915,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
           if (isDelivered) {
             isSentSuccess = true;
+            returnedMessageId = data.messageId || data.id || undefined;
             break;
           } else {
             sendErrorMessage =
@@ -1771,7 +1954,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       if (isSentSuccess) {
         sentSoFar++;
 
-        // Record in sent log with exact smtpAccountId and senderEmail
+        // Record in sent log with exact smtpAccountId, senderEmail, variant, messageId & threading references
         addSentEmailLog({
           campaignId: targetCampaign.id,
           campaignName: targetCampaign.name,
@@ -1786,7 +1969,11 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
           smtpHost: `${smtp?.host || 'smtp.relay'}:${smtp?.port || 587}`,
           status: 'sent',
           openCount: 0,
-          trackingPixelId
+          trackingPixelId,
+          variant: chosenVariant,
+          messageId: returnedMessageId,
+          inReplyTo: formattedInReplyTo,
+          references: formattedReferences
         });
 
         // Update lead
@@ -1802,10 +1989,12 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
           sentCount: sentSoFar
         });
 
+        const variantBadge = abTestingOptions?.enabled ? `[Variant ${chosenVariant}] ` : '';
+        const threadBadge = formattedInReplyTo ? '[Threaded 🔗] ' : '';
         setDispatchProgress(prev => ({
           ...prev,
           sentLogs: [
-            `[DELIVERED] ✓ Dispatched to ${lead.name} (${lead.email}) via ${smtp?.name || 'Relay'} at ${new Date().toLocaleTimeString()}`,
+            `[DELIVERED] ${variantBadge}${threadBadge}✓ Dispatched to ${lead.name} (${lead.email}) via ${smtp?.name || 'Relay'} at ${new Date().toLocaleTimeString()}`,
             ...prev.sentLogs
           ]
         }));
@@ -1843,27 +2032,42 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       }
 
       // If not last lead and delay interval is configured, countdown using resilient wall-clock time!
-      if (i < targetLeads.length - 1 && intervalSec > 0) {
-        const actualInterval = enableJitter 
-          ? Math.max(1, intervalSec + Math.floor(Math.random() * 3) - 1) 
-          : intervalSec;
-
-        const targetEndTime = Date.now() + actualInterval * 1000;
-        while (Date.now() < targetEndTime) {
-          if (abortDispatchRef.current) break;
-          while (isPausedRef.current && !abortDispatchRef.current) {
-            await new Promise(r => setTimeout(r, 200));
+      if (i < targetLeads.length - 1) {
+        let actualInterval = 15;
+        if (typeof intervalSec === 'string') {
+          if (intervalSec === 'jitter_15_45') {
+            actualInterval = Math.floor(Math.random() * (45 - 15 + 1)) + 15;
+          } else if (intervalSec === 'jitter_30_75') {
+            actualInterval = Math.floor(Math.random() * (75 - 30 + 1)) + 30;
+          } else {
+            actualInterval = Math.max(1, Number(intervalSec) || 15);
           }
-          if (abortDispatchRef.current) break;
+        } else if (typeof intervalSec === 'number' && intervalSec > 0) {
+          actualInterval = enableJitter 
+            ? Math.max(1, intervalSec + Math.floor(Math.random() * 3) - 1) 
+            : intervalSec;
+        } else if (typeof intervalSec === 'number' && intervalSec <= 0) {
+          actualInterval = 0;
+        }
 
-          const remainingSec = Math.max(0, Math.ceil((targetEndTime - Date.now()) / 1000));
-          setDispatchProgress(prev => ({
-            ...prev,
-            secondsUntilNext: remainingSec
-          }));
+        if (actualInterval > 0) {
+          const targetEndTime = Date.now() + actualInterval * 1000;
+          while (Date.now() < targetEndTime) {
+            if (abortDispatchRef.current) break;
+            while (isPausedRef.current && !abortDispatchRef.current) {
+              await new Promise(r => setTimeout(r, 200));
+            }
+            if (abortDispatchRef.current) break;
 
-          const sleepMs = Math.min(250, Math.max(10, targetEndTime - Date.now()));
-          await new Promise(r => setTimeout(r, sleepMs));
+            const remainingSec = Math.max(0, Math.ceil((targetEndTime - Date.now()) / 1000));
+            setDispatchProgress(prev => ({
+              ...prev,
+              secondsUntilNext: remainingSec
+            }));
+
+            const sleepMs = Math.min(250, Math.max(10, targetEndTime - Date.now()));
+            await new Promise(r => setTimeout(r, sleepMs));
+          }
         }
       }
     }
@@ -1995,7 +2199,10 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
           sendingInterval,
           effectiveSmtpIds,
           senderName.trim(),
-          effectiveSenderEmail
+          effectiveSenderEmail,
+          0,
+          undefined,
+          wizardEnableAbTest ? { enabled: true, subjectB: wizardSubjectB, bodyB: wizardBodyB } : undefined
         );
       } else {
         addNotification({
@@ -2051,7 +2258,10 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       sendingInterval,
       effectiveSmtpIds,
       senderName.trim(),
-      effectiveSenderEmail
+      effectiveSenderEmail,
+      0,
+      undefined,
+      wizardEnableAbTest ? { enabled: true, subjectB: wizardSubjectB, bodyB: wizardBodyB } : undefined
     );
   };
 
@@ -2777,22 +2987,102 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                 </div>
               </div>
 
-              {/* Lead Search & Select Controls */}
+              {/* UK Business Hours Guard Live Banner */}
+              {(() => {
+                const uk = getUKBusinessHoursStatus();
+                return (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-2xl bg-slate-950/90 border border-slate-800 text-xs">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-base shrink-0">🇬🇧</span>
+                      <div className="min-w-0">
+                        <span className="font-bold text-slate-200">UK Business Hours Guard: </span>
+                        <span className="font-mono text-cyan-300 font-bold">{uk.currentLondonTime}</span>
+                        <span className="text-slate-400 text-[11px] ml-1.5 hidden sm:inline">(08:30 - 17:30 London Time)</span>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${
+                        uk.isBusinessHours 
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
+                          : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      }`}>
+                        {uk.isBusinessHours ? '🟢 OPEN (Active Hours)' : '🟡 CLOSED (Off-Hours)'}
+                      </span>
+                    </div>
+
+                    <label className="flex items-center gap-2 cursor-pointer self-end sm:self-auto shrink-0 select-none">
+                      <input
+                        type="checkbox"
+                        checked={ukHoursGuardEnabled}
+                        onChange={(e) => setUkHoursGuardEnabled(e.target.checked)}
+                        className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-500"
+                      />
+                      <span className="text-[11px] font-bold text-slate-300">Guard Active</span>
+                    </label>
+                  </div>
+                );
+              })()}
+
+              {/* Lead Search & Action Toolbar */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2 text-xs">
-                  <span className="font-bold text-slate-300">
-                    Showing {displayedFollowUpLeads.length} leads {followUpSmtpTab !== 'all' ? `for selected tab` : ''}
-                  </span>
-                  <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-slate-300">
+                      Showing {displayedFollowUpLeads.length} leads {followUpSmtpTab !== 'all' ? `for selected tab` : ''}
+                    </span>
+                    {duplicatesMergedCount > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-cyan-950 border border-cyan-500/40 text-cyan-300 font-mono text-[10px] font-black shadow-sm">
+                        <span>🧹 Auto-Deduplicated:</span>
+                        <span className="text-white font-extrabold">{duplicatesMergedCount}</span>
+                        <span>duplicates merged</span>
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setFollowUpSortDecisionMakers(!followUpSortDecisionMakers)}
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-black border transition cursor-pointer flex items-center gap-1 ${
+                        followUpSortDecisionMakers
+                          ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/20'
+                          : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-slate-500'
+                      }`}
+                      title="Sort personal decision-maker emails (Priority 100) before generic studio inboxes"
+                    >
+                      <span>⚡ Sort: Decision Makers First</span>
+                      {followUpSortDecisionMakers && <span className="w-1.5 h-1.5 rounded-full bg-slate-950" />}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleVerifyAllFollowUpMx}
+                      disabled={isVerifyingAllMx}
+                      className="px-2.5 py-1 rounded-xl bg-emerald-950/70 hover:bg-emerald-900/80 border border-emerald-500/40 text-[11px] font-black text-emerald-300 transition cursor-pointer flex items-center gap-1 shadow-sm"
+                      title="100% Free Live DNS MX Verification via Google DNS-over-HTTPS"
+                    >
+                      <ShieldCheck className={`w-3 h-3 text-emerald-400 ${isVerifyingAllMx ? 'animate-spin' : ''}`} />
+                      <span>{isVerifyingAllMx ? 'Verifying MX...' : '🛡️ Verify All MX (Free)'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleGenerateFollowUpIcebreakers}
+                      disabled={isGeneratingFollowUpIcebreakers}
+                      className="px-2.5 py-1 rounded-xl bg-purple-950/70 hover:bg-purple-900/80 border border-purple-500/40 text-[11px] font-black text-purple-300 transition cursor-pointer flex items-center gap-1 shadow-sm"
+                      title="Fetch studio website and generate natural 1-sentence compliment via Gemini 2.0"
+                    >
+                      <Sparkles className={`w-3 h-3 text-purple-400 ${isGeneratingFollowUpIcebreakers ? 'animate-spin' : ''}`} />
+                      <span>{isGeneratingFollowUpIcebreakers ? 'Writing Icebreakers...' : '✨ Generate AI Icebreakers (Free)'}</span>
+                    </button>
+
                     <button
                       type="button"
                       onClick={() => {
                         const newIds = Array.from(new Set([...followUpSelectedLeadIds, ...displayedFollowUpLeads.map(l => l.id)]));
                         setFollowUpSelectedLeadIds(newIds);
                       }}
-                      className="text-cyan-400 hover:underline font-bold cursor-pointer"
+                      className="text-cyan-400 hover:underline font-bold text-[11px] cursor-pointer"
                     >
-                      Select Displayed ({displayedFollowUpLeads.length})
+                      Select All ({displayedFollowUpLeads.length})
                     </button>
                     <span className="text-slate-700">&bull;</span>
                     <button
@@ -2801,9 +3091,9 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                         const displayedSet = new Set(displayedFollowUpLeads.map(l => l.id));
                         setFollowUpSelectedLeadIds(prev => prev.filter(id => !displayedSet.has(id)));
                       }}
-                      className="text-rose-400 hover:underline font-bold cursor-pointer"
+                      className="text-rose-400 hover:underline font-bold text-[11px] cursor-pointer"
                     >
-                      Deselect Displayed
+                      Deselect
                     </button>
                   </div>
                 </div>
@@ -2819,7 +3109,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                   />
                 </div>
 
-                {/* Lead List with Real-time SMTP Auto-Routing Badges */}
+                {/* Lead List with Real-time SMTP Auto-Routing Badges & Decision Maker Classification */}
                 <div className="max-h-52 overflow-y-auto divide-y divide-slate-800/60 border border-slate-800 rounded-2xl bg-slate-900/60">
                   {displayedFollowUpLeads.length === 0 ? (
                     <div className="p-6 text-center text-xs text-slate-400">
@@ -2835,6 +3125,8 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                       const assignedFromEmail = hasMappedSmtp 
                         ? (mapped!.senderEmail || mapped!.smtpAccount!.fromEmail || mapped!.smtpAccount!.username)
                         : (fallbackSmtp?.fromEmail || fallbackSmtp?.username || '');
+                      const roleClassification = classifyLeadRole(lead.email);
+                      const leadMx = leadMxVerificationMap[(lead.email || '').trim().toLowerCase()];
 
                       return (
                         <div
@@ -2861,7 +3153,21 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                                   </span>
                                 ))}
                               </div>
-                              <div className="text-[11px] text-slate-400 font-mono truncate">{lead.email}</div>
+                              <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                                <span className="text-[11px] text-slate-300 font-mono truncate">{lead.email}</span>
+                                <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold border ${roleClassification.badgeColor}`}>
+                                  {roleClassification.label}
+                                </span>
+                                {leadMx && (
+                                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold border ${
+                                    leadMx.status === 'VALID_MX'
+                                      ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                                      : 'bg-rose-500/15 border-rose-500/30 text-rose-300 font-black'
+                                  }`}>
+                                    {leadMx.status === 'VALID_MX' ? `🛡️ ${leadMx.provider}` : '❌ Dead Domain / No MX'}
+                                  </span>
+                                )}
+                              </div>
 
                               {/* Prominent Auto-Selected SMTP Indicator */}
                               <div className="mt-1 flex items-center gap-1.5 flex-wrap">
@@ -2935,15 +3241,140 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                   />
                 </div>
 
-                <div className="space-y-1">
-                  <label className="block font-bold text-slate-300">Follow-Up Message Template</label>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block font-bold text-slate-300">Follow-Up Message Template</label>
+                    <span className="text-[10px] text-cyan-400 font-mono">Supports Spintax & Fallbacks</span>
+                  </div>
                   <textarea
                     rows={4}
                     value={followUpBody}
                     onChange={(e) => setFollowUpBody(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-100 font-sans focus:outline-none focus:border-cyan-400"
                   />
+                  {/* Clickable Token Pills */}
+                  <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                    <span className="text-[10px] text-slate-400 font-bold">Quick Tokens:</span>
+                    {[
+                      '{{name}}',
+                      '{{first_name|there}}',
+                      '{{company}}',
+                      '{{icebreaker}}',
+                      '{Hi|Hello|Hey}'
+                    ].map(tok => (
+                      <button
+                        key={tok}
+                        type="button"
+                        onClick={() => {
+                          setFollowUpBody(prev => {
+                            const sep = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : '';
+                            return `${prev}${sep}${tok}`;
+                          });
+                        }}
+                        className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-cyan-950 text-[10px] font-mono text-cyan-300 border border-slate-800 hover:border-cyan-500/50 cursor-pointer transition shadow-sm"
+                        title={`Click to insert ${tok}`}
+                      >
+                        +{tok}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+
+                {/* 🧪 A/B Testing Toggle (50/50 Split) */}
+                <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-950 border border-slate-800">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-lg">🧪</span>
+                    <div>
+                      <div className="font-bold text-slate-200 text-xs flex items-center gap-1.5">
+                        <span>A/B Testing (50/50 Split)</span>
+                        {followUpEnableAbTest && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-400">
+                        ৫০% লিড ভ্যারিয়েন্ট A এবং ৫০% লিড ভ্যারিয়েন্ট B পাবে — ওপেন এবং রেসপন্স রেট তুলনা করার জন্য
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFollowUpEnableAbTest(!followUpEnableAbTest)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black border transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                      followUpEnableAbTest
+                        ? 'bg-purple-600 text-white border-purple-400 shadow-md shadow-purple-600/30'
+                        : 'bg-slate-900 text-slate-400 border-slate-700 hover:border-slate-500'
+                    }`}
+                  >
+                    <span>{followUpEnableAbTest ? '✓ A/B Split Active' : '🧪 Enable A/B Testing (50/50 Split)'}</span>
+                  </button>
+                </div>
+
+                {/* Variant B Template Fields when A/B Testing is enabled */}
+                {followUpEnableAbTest && (
+                  <div className="p-3.5 rounded-2xl bg-purple-950/30 border border-purple-500/40 space-y-3 animate-in fade-in">
+                    <div className="flex items-center justify-between">
+                      <span className="font-black text-purple-300 flex items-center gap-1.5 text-xs uppercase">
+                        <span>🧪 Variant B Message Template (50% of Cohort)</span>
+                      </span>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-900/70 text-purple-200 border border-purple-600">
+                        Variant B (Split 50%)
+                      </span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block font-bold text-slate-300">Variant B Subject Line</label>
+                      <input
+                        type="text"
+                        value={followUpSubjectB}
+                        onChange={(e) => setFollowUpSubjectB(e.target.value)}
+                        placeholder="e.g. Quick question regarding {{company}}"
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 font-medium focus:outline-none focus:border-purple-400"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block font-bold text-slate-300">Variant B Message Body</label>
+                        <span className="text-[10px] text-purple-400 font-mono">Supports Spintax & Fallbacks</span>
+                      </div>
+                      <textarea
+                        rows={4}
+                        value={followUpBodyB}
+                        onChange={(e) => setFollowUpBodyB(e.target.value)}
+                        placeholder="e.g. Hey {{first_name|there}},\n\nCircling back with a fresh angle regarding {{company}}..."
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-100 font-sans focus:outline-none focus:border-purple-400"
+                      />
+                      {/* Clickable Token Pills for Variant B */}
+                      <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                        <span className="text-[10px] text-slate-400 font-bold">Quick Tokens:</span>
+                        {[
+                          '{{name}}',
+                          '{{first_name|there}}',
+                          '{{company}}',
+                          '{{icebreaker}}',
+                          '{Hi|Hello|Hey}'
+                        ].map(tok => (
+                          <button
+                            key={tok}
+                            type="button"
+                            onClick={() => {
+                              setFollowUpBodyB(prev => {
+                                const sep = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : '';
+                                return `${prev}${sep}${tok}`;
+                              });
+                            }}
+                            className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-purple-950 text-[10px] font-mono text-purple-300 border border-slate-800 hover:border-purple-500/50 cursor-pointer transition shadow-sm"
+                            title={`Click to insert ${tok}`}
+                          >
+                            +{tok}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Sending Mode & Delay */}
@@ -2964,12 +3395,14 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                   <label className="block font-bold text-slate-300">Sending Interval Delay</label>
                   <select
                     value={followUpInterval}
-                    onChange={(e) => setFollowUpInterval(Number(e.target.value))}
+                    onChange={(e) => setFollowUpInterval(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400 font-mono"
                   >
-                    <option value="5">5 seconds</option>
+                    <option value="5">5 seconds (Testing)</option>
                     <option value="10">10 seconds</option>
-                    <option value="15">15 seconds (Recommended)</option>
+                    <option value="15">15 seconds (Standard)</option>
+                    <option value="jitter_15_45">🎲 15s - 45s (Smart Human Jitter - Recommended)</option>
+                    <option value="jitter_30_75">🎲 30s - 75s (Ultra-Safe Jitter)</option>
                     <option value="30">30 seconds</option>
                     <option value="60">60 seconds</option>
                   </select>
@@ -2985,7 +3418,9 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
             {/* Modal Footer Controls */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-800 flex-wrap gap-2">
-              <span className="text-[11px] text-slate-400 font-mono">Tokens: &#123;&#123;name&#125;&#125;, &#123;&#123;company&#125;&#125;, &#123;&#123;first_name&#125;&#125;</span>
+              <span className="text-[11px] text-slate-400 font-mono">
+                Tokens: &#123;&#123;first_name|there&#125;&#125;, &#123;&#123;company|your studio&#125;&#125;, &#123;Hi|Hello&#125;
+              </span>
               <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
@@ -4551,14 +4986,16 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                                 <label className="block text-[11px] font-semibold text-slate-400">Body Content *</label>
                                 <div className="flex items-center gap-1 flex-wrap">
                                   {[
-                                    '{{first_name}}',
+                                    '{{first_name|there}}',
                                     '{{name}}',
                                     '{{company}}',
+                                    '{{company|your studio}}',
                                     '{{website}}',
                                     '{{title}}',
                                     '{{email}}',
                                     '{{niche}}',
                                     '{{icebreaker}}',
+                                    '{Hi|Hello|Hey}',
                                     '{{sender_name}}'
                                   ].map(tok => (
                                     <button
@@ -4584,6 +5021,69 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
                                 className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-100 focus:outline-none focus:border-cyan-500 font-sans"
                               />
                             </div>
+
+                            {/* A/B Testing Option for Step 1 Outreach Email */}
+                            {idx === 0 && (
+                              <div className="pt-2 border-t border-slate-800 space-y-3">
+                                <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm">🧪</span>
+                                    <div>
+                                      <div className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                                        <span>A/B Testing (50/50 Split)</span>
+                                        {wizardEnableAbTest && (
+                                          <span className="px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[9px] font-black">
+                                            Active
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-[10px] text-slate-400">
+                                        Test two message angles — 50% receive Variant A and 50% receive Variant B
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setWizardEnableAbTest(!wizardEnableAbTest)}
+                                    className={`px-2.5 py-1 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                                      wizardEnableAbTest
+                                        ? 'bg-purple-600 text-white border-purple-400 shadow-md shadow-purple-600/30'
+                                        : 'bg-slate-900 text-slate-400 border-slate-700 hover:border-slate-500'
+                                    }`}
+                                  >
+                                    {wizardEnableAbTest ? '✓ A/B Active' : '🧪 Enable A/B Testing'}
+                                  </button>
+                                </div>
+
+                                {wizardEnableAbTest && (
+                                  <div className="p-3 rounded-xl bg-purple-950/20 border border-purple-500/40 space-y-2.5 animate-in fade-in">
+                                    <div className="flex items-center justify-between text-xs">
+                                      <span className="font-bold text-purple-300">🧪 Variant B Subject & Message (50% Split)</span>
+                                    </div>
+                                    <div className="space-y-1">
+                                      <label className="block text-[11px] font-semibold text-slate-400">Variant B Subject</label>
+                                      <input
+                                        type="text"
+                                        value={wizardSubjectB}
+                                        onChange={(e) => setWizardSubjectB(e.target.value)}
+                                        placeholder="Alternative subject angle..."
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-purple-400 font-medium"
+                                      />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <label className="block text-[11px] font-semibold text-slate-400">Variant B Body</label>
+                                      <textarea
+                                        rows={3}
+                                        value={wizardBodyB}
+                                        onChange={(e) => setWizardBodyB(e.target.value)}
+                                        placeholder="Alternative pitch copy with {{first_name|there}}..."
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-100 focus:outline-none focus:border-purple-400 font-sans"
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </>
                         )}
                       </div>

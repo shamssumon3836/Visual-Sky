@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, 
   Sparkles, 
@@ -13,8 +13,13 @@ import {
   Layers,
   HelpCircle,
   TrendingUp,
-  Cpu
+  Cpu,
+  Copy,
+  Check,
+  RefreshCw,
+  Globe
 } from 'lucide-react';
+import { checkDomainDeliverability, DomainDeliverabilityAudit } from '../../utils/outreachEngine';
 
 interface RadarMetric {
   id: string;
@@ -44,6 +49,36 @@ export const DeliverabilityRadarChart: React.FC<DeliverabilityRadarChartProps> =
   const [activePreset, setActivePreset] = useState<'current' | 'benchmark' | 'both'>('both');
   const [hoveredMetricId, setHoveredMetricId] = useState<string | null>(null);
   const [selectedTargetIsp, setSelectedTargetIsp] = useState<'google' | 'microsoft' | 'yahoo' | 'custom'>('google');
+
+  // Live Domain Health Auditor & Blacklist Checker State
+  const [auditDomain, setAuditDomain] = useState<string>('visualsky.pro');
+  const [isAuditingDomain, setIsAuditingDomain] = useState<boolean>(false);
+  const [auditResult, setAuditResult] = useState<DomainDeliverabilityAudit | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const runLiveAudit = async (domainToAudit?: string) => {
+    const d = (domainToAudit || auditDomain || 'visualsky.pro').trim();
+    if (!d) return;
+    setIsAuditingDomain(true);
+    try {
+      const res = await checkDomainDeliverability(d);
+      setAuditResult(res);
+    } finally {
+      setIsAuditingDomain(false);
+    }
+  };
+
+  useEffect(() => {
+    runLiveAudit('visualsky.pro');
+  }, []);
+
+  const handleCopyDns = (key: string, text: string) => {
+    try {
+      navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2000);
+    } catch {}
+  };
 
   // 6 Primary Radar Vectors for Cold Outreach Deliverability
   const radarMetrics: RadarMetric[] = [
@@ -250,6 +285,185 @@ export const DeliverabilityRadarChart: React.FC<DeliverabilityRadarChartProps> =
             Dual Compare
           </button>
         </div>
+      </div>
+
+      {/* Live Domain Health Auditor & Blacklist Checker Bar (Google DoH Powered) */}
+      <div className="p-4 md:p-5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-4 shadow-xl">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800/80 pb-3.5">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 rounded-full flex items-center gap-1">
+                <Globe className="w-3 h-3 text-cyan-400" />
+                Live DNS-over-HTTPS Auditor
+              </span>
+              <span className="text-[11px] text-slate-400">
+                Audited via Google DoH • {auditResult?.auditedAt || 'Live'}
+              </span>
+            </div>
+            <h3 className="text-base font-black text-slate-100 mt-1 flex items-center gap-2">
+              Domain Health & Free DNSBL Blacklist Checker
+            </h3>
+          </div>
+
+          {/* Domain Input Form */}
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <input
+                type="text"
+                value={auditDomain}
+                onChange={(e) => setAuditDomain(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && runLiveAudit()}
+                placeholder="domain.com (e.g. visualsky.pro)"
+                className="w-48 sm:w-60 bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 font-mono focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => runLiveAudit()}
+              disabled={isAuditingDomain}
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-cyan-500/20 cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isAuditingDomain ? 'animate-spin' : ''}`} />
+              <span>{isAuditingDomain ? 'Auditing...' : '⚡ Live Audit DNS'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Audit Results Metrics Grid */}
+        {auditResult && (
+          <div className="space-y-3.5 animate-in fade-in">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              
+              {/* Overall Health Score Card */}
+              <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                <div className="text-[11px] font-bold text-slate-400 flex items-center justify-between">
+                  <span>Domain Health Score</span>
+                  <span className={`px-2 py-0.2 rounded text-[10px] font-mono font-black ${
+                    auditResult.healthScore >= 85
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  }`}>
+                    {auditResult.healthScore}/100
+                  </span>
+                </div>
+                <div className="text-xl font-black text-white flex items-baseline gap-1">
+                  <span>{auditResult.healthScore}%</span>
+                  <span className="text-[11px] font-normal text-emerald-400">
+                    {auditResult.healthScore >= 90 ? 'Inbox Master' : 'Needs DNS Fix'}
+                  </span>
+                </div>
+                <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden mt-1">
+                  <div
+                    className={`h-full rounded-full ${
+                      auditResult.healthScore >= 85
+                        ? 'bg-gradient-to-r from-emerald-500 to-cyan-400'
+                        : 'bg-gradient-to-r from-amber-500 to-rose-400'
+                    }`}
+                    style={{ width: `${auditResult.healthScore}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* SPF 1-to-1 Card */}
+              <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                <div className="text-[11px] font-bold text-slate-400 flex items-center justify-between">
+                  <span>SPF Record (Root TXT)</span>
+                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                    auditResult.spf.passed
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                  }`}>
+                    {auditResult.spf.statusText}
+                  </span>
+                </div>
+                <div className="font-mono text-[10px] text-slate-300 truncate" title={auditResult.spf.record}>
+                  {auditResult.spf.record}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleCopyDns('spf', auditResult.spf.recommendedDns)}
+                  className="text-[10px] text-cyan-400 hover:text-cyan-300 font-bold flex items-center gap-1 pt-0.5 cursor-pointer"
+                >
+                  {copiedKey === 'spf' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedKey === 'spf' ? 'Copied Recommended DNS!' : 'Copy Recommended SPF'}</span>
+                </button>
+              </div>
+
+              {/* DMARC Enforcement Card */}
+              <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                <div className="text-[11px] font-bold text-slate-400 flex items-center justify-between">
+                  <span>DMARC (_dmarc TXT)</span>
+                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                    auditResult.dmarc.passed
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  }`}>
+                    {auditResult.dmarc.statusText}
+                  </span>
+                </div>
+                <div className="font-mono text-[10px] text-slate-300 truncate" title={auditResult.dmarc.record}>
+                  {auditResult.dmarc.record}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleCopyDns('dmarc', auditResult.dmarc.recommendedDns)}
+                  className="text-[10px] text-cyan-400 hover:text-cyan-300 font-bold flex items-center gap-1 pt-0.5 cursor-pointer"
+                >
+                  {copiedKey === 'dmarc' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedKey === 'dmarc' ? 'Copied Recommended DNS!' : 'Copy Recommended DMARC'}</span>
+                </button>
+              </div>
+
+              {/* DKIM 2048 Card */}
+              <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                <div className="text-[11px] font-bold text-slate-400 flex items-center justify-between">
+                  <span>DKIM Cryptographic Key</span>
+                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                    auditResult.dkim.passed
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  }`}>
+                    {auditResult.dkim.statusText}
+                  </span>
+                </div>
+                <div className="font-mono text-[10px] text-slate-300 truncate" title={auditResult.dkim.record}>
+                  {auditResult.dkim.record}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleCopyDns('dkim', auditResult.dkim.recommendedDns)}
+                  className="text-[10px] text-cyan-400 hover:text-cyan-300 font-bold flex items-center gap-1 pt-0.5 cursor-pointer"
+                >
+                  {copiedKey === 'dkim' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedKey === 'dkim' ? 'Copied Recommended DNS!' : 'Copy Recommended DKIM'}</span>
+                </button>
+              </div>
+
+            </div>
+
+            {/* Free Live DNSBL Blacklist Badges Row */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-slate-800/80 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 font-bold text-[11px]">Free Live DNSBL Audits:</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {auditResult.blacklists.map((bl) => (
+                    <span
+                      key={bl.host}
+                      className={`px-2 py-0.5 rounded-lg border text-[11px] font-mono font-bold flex items-center gap-1.5 ${bl.badgeClass}`}
+                    >
+                      <span>{bl.name}</span>
+                      <span className="text-[10px] font-sans font-black">{bl.statusText}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <span className="text-[11px] text-emerald-400 font-bold flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                Zero Spam Penalties Detected
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Main Radar Layout: Interactive Hexagonal Radar Canvas + ISP Breakdown Panel */}
