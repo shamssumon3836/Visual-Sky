@@ -266,7 +266,7 @@ const MainContent: React.FC = () => {
       currentUser.permissions?.accountStatus === 'suspended');
 
   return (
-    <div className="h-screen w-full bg-[#080c14] text-slate-100 flex flex-col overflow-hidden selection:bg-cyan-500/30 selection:text-cyan-200">
+    <div className="h-screen w-full max-w-full bg-[#080c14] text-slate-100 flex flex-col overflow-hidden selection:bg-cyan-500/30 selection:text-cyan-200">
       {/* Top Navbar */}
       <Navbar 
         onOpenAuth={() => setIsAuthOpen(true)} 
@@ -275,17 +275,17 @@ const MainContent: React.FC = () => {
       />
 
       {/* Body Layout: Sidebar + Main Content View */}
-      <div className="flex-1 flex overflow-hidden min-h-0">
+      <div className="flex-1 flex overflow-hidden min-h-0 w-full max-w-full min-w-0">
         <Sidebar onOpenBilling={() => setIsBillingOpen(true)} />
 
         <main
-          className={`flex-1 min-h-0 relative ${
+          className={`flex-1 min-h-0 min-w-0 w-full max-w-full relative ${
             activeTab === 'inbox'
-              ? 'flex flex-col overflow-hidden pb-[60px] md:pb-0'
-              : 'overflow-y-auto overflow-x-hidden pb-20 md:pb-6'
+              ? 'flex flex-col overflow-hidden pb-[64px] md:pb-0'
+              : 'overflow-y-auto overflow-x-hidden pb-24 md:pb-6'
           }`}
         >
-          <div className={`saas-view-enter ${activeTab === 'inbox' ? 'h-full flex flex-col min-h-0' : 'min-h-full'}`}>
+          <div className={`saas-view-enter w-full max-w-full min-w-0 ${activeTab === 'inbox' ? 'h-full flex flex-col min-h-0' : 'min-h-full'}`}>
             {renderActiveView()}
             {(hasVisitedCampaigns || activeTab === 'campaigns') && (
               <CampaignManager isHidden={activeTab !== 'campaigns' || isCampaignsRestricted} />

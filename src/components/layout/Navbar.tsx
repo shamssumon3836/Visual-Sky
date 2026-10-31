@@ -434,12 +434,12 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
       </div>
 
       {/* Right Actions (Single Line Bar, Send Mail button prominently visible) */}
-      <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+      <div className="flex items-center gap-1 sm:gap-2.5 shrink-0 max-w-full">
         {/* Mobile Search Toggle Button */}
         <button
           type="button"
           onClick={() => setShowMobileSearch(prev => !prev)}
-          className={`md:hidden w-9 h-9 rounded-xl border flex items-center justify-center transition cursor-pointer ${
+          className={`md:hidden w-8 h-8 sm:w-9 sm:h-9 rounded-xl border flex items-center justify-center transition cursor-pointer shrink-0 ${
             showMobileSearch || searchQuery
               ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300'
               : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300 hover:text-white'
@@ -447,14 +447,14 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
           title="Search leads, campaigns, relays, inbox"
           aria-label="Toggle mobile search"
         >
-          {showMobileSearch ? <X className="w-4 h-4" /> : <Search className="w-4 h-4" />}
+          {showMobileSearch ? <X className="w-3.5 h-3.5" /> : <Search className="w-3.5 h-3.5" />}
         </button>
 
         {/* Direct Agency Master Quick Access Button if Agency User */}
         {(currentUser.role === 'agency' || currentUser.role === 'owner' || currentUser.isOwner || currentUser.email === 'sojibdaridro123@gmail.com' || currentUser.email === 'rafiqulvisualsky@gmail.com') && (
           <button
             onClick={() => setActiveTab('owner')}
-            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer border ${
+            className={`hidden sm:flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer border ${
               activeTab === 'owner'
                 ? 'bg-amber-500/20 text-amber-300 border-amber-500/60 shadow-lg shadow-amber-500/10'
                 : 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20 hover:border-amber-500/50'
@@ -462,7 +462,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
             title="Agency Master Administrative Dashboard"
           >
             <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="hidden sm:inline whitespace-nowrap font-extrabold">Agency Master</span>
+            <span className="hidden md:inline whitespace-nowrap font-extrabold">Agency Master</span>
           </button>
         )}
 
@@ -470,7 +470,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
         {currentUser.role === 'client' && (
           <button
             onClick={() => setActiveTab('dashboard')}
-            className={`hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer border ${
+            className={`hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer border ${
               activeTab === 'dashboard'
                 ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/60 shadow-lg shadow-cyan-500/10'
                 : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30 hover:bg-cyan-500/20 hover:border-cyan-500/50'
@@ -485,7 +485,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
         {/* Direct Apollo.io Intelligence Quick Access Button */}
         <button
           onClick={() => setActiveTab('apollo')}
-          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer border ${
+          className={`hidden sm:flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer border ${
             activeTab === 'apollo'
               ? 'bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-slate-950 font-black shadow-lg shadow-amber-500/30'
               : 'bg-amber-500/10 text-amber-300 border-amber-500/40 hover:bg-amber-500/20 hover:border-amber-500/60'
@@ -494,17 +494,18 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
         >
           <span className="text-amber-400">🎯</span>
           <span className="whitespace-nowrap font-black">Apollo.io</span>
-          <span className="hidden sm:inline text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono font-bold">275M+</span>
+          <span className="hidden md:inline text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono font-bold">275M+</span>
         </button>
 
         {/* Send Mail Action Button (User request from original app) */}
         {onOpenSendMail && (
           <button
             onClick={onOpenSendMail}
-            className="flex items-center gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 hover:from-blue-500 hover:via-cyan-400 hover:to-indigo-500 text-white font-extrabold text-xs shadow-lg shadow-blue-500/25 transition shrink-0 cursor-pointer"
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 hover:from-blue-500 hover:via-cyan-400 hover:to-indigo-500 text-white font-extrabold text-xs shadow-lg shadow-blue-500/25 transition shrink-0 cursor-pointer"
           >
             <Send className="w-3.5 h-3.5 shrink-0" />
-            <span className="whitespace-nowrap">Send Mail</span>
+            <span className="hidden sm:inline whitespace-nowrap">Send Mail</span>
+            <span className="sm:hidden text-[11px] font-bold">Mail</span>
           </button>
         )}
 
@@ -524,19 +525,20 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
         </button>
 
         {/* Quick Follow-up Dropdown (7d, 14d, 30d 1-click triggers) */}
-        <div className="relative" ref={followUpRef}>
+        <div className="relative shrink-0" ref={followUpRef}>
           <button
             onClick={() => setShowFollowUpMenu(!showFollowUpMenu)}
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-emerald-950/50 via-cyan-950/40 to-slate-900 hover:bg-slate-800 border border-cyan-500/40 text-cyan-300 text-xs font-black shadow-sm transition cursor-pointer"
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-emerald-950/50 via-cyan-950/40 to-slate-900 hover:bg-slate-800 border border-cyan-500/40 text-cyan-300 text-xs font-black shadow-sm transition cursor-pointer"
             title="৩ দিন, ৭ দিন, ১৪ দিন ও ৩০ দিনের অটোমেটিক ফলো-আপ চালান"
           >
             <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            <span className="whitespace-nowrap">⚡ ৩/৭/১৪/৩০ দিন ফলো-আপ</span>
+            <span className="hidden sm:inline whitespace-nowrap">⚡ ৩/৭/১৪/৩০ দিন ফলো-আপ</span>
+            <span className="sm:hidden whitespace-nowrap text-[11px]">⚡ ফলো-আপ</span>
             <ChevronDown className="w-3 h-3 ml-0.5 opacity-70" />
           </button>
 
           {showFollowUpMenu && (
-            <div className="absolute right-0 mt-2 w-72 max-w-[calc(100vw-1.5rem)] bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-2.5 z-50 animate-in fade-in slide-in-from-top-2">
+            <div className="fixed inset-x-2 top-16 sm:absolute sm:inset-x-auto sm:top-auto sm:right-0 sm:mt-2 sm:w-72 max-w-[calc(100vw-1rem)] bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-2.5 z-50 animate-in fade-in slide-in-from-top-2">
               <div className="px-3 py-2 border-b border-slate-800">
                 <div className="text-xs font-bold text-slate-200">Smart Follow-up Automation</div>
                 <div className="text-[11px] text-slate-400">Target dormant leads with 1 click:</div>

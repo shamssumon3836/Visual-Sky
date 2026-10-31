@@ -2298,9 +2298,9 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
   return (
     <>
     {(!isHidden || showFollowUpModal || showWizardModal) && (
-    <div className={isHidden ? 'hidden' : 'p-4 md:p-8 max-w-7xl mx-auto space-y-6'}>
+    <div className={isHidden ? 'hidden' : 'p-3 sm:p-5 md:p-8 max-w-7xl mx-auto space-y-5 sm:space-y-6 w-full max-w-full overflow-x-hidden min-w-0'}>
       {/* Header Banner */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-gradient-to-r from-blue-950/60 via-slate-900 to-indigo-950/60 p-6 rounded-3xl border border-slate-800 shadow-xl">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-gradient-to-r from-blue-950/60 via-slate-900 to-indigo-950/60 p-4 sm:p-6 rounded-3xl border border-slate-800 shadow-xl">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <Send className="w-6 h-6 text-cyan-400" />
@@ -2325,7 +2325,7 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       </div>
 
       {/* 1-CLICK FOLLOW-UP COHORTS SECTION (Prominently placed at the top for immediate access) */}
-      <div className="p-5 rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border-2 border-cyan-500/30 space-y-4 shadow-xl">
+      <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border-2 border-cyan-500/30 space-y-4 shadow-xl">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 rounded-2xl bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-300 shrink-0">
@@ -2816,8 +2816,8 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
       {/* DEDICATED SMART MULTI-SMTP FOLLOW-UP COMMAND CENTER MODAL */}
       {showFollowUpModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
-          <div className="bg-[#090d16] border border-cyan-500/40 w-full max-w-3xl rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 my-auto max-h-[94vh] flex flex-col">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
+          <div className="bg-[#090d16] border border-cyan-500/40 w-full max-w-[calc(100vw-1rem)] sm:max-w-3xl rounded-3xl p-3.5 sm:p-6 shadow-2xl space-y-4 my-auto max-h-[94vh] flex flex-col">
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
@@ -3457,8 +3457,8 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
 
       {/* 6-STEP CAMPAIGN LAUNCH WIZARD MODAL */}
       {showWizardModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
-          <div className="bg-[#090d16] border border-slate-800 w-full max-w-3xl rounded-3xl shadow-2xl overflow-hidden flex flex-col my-auto max-h-[92vh]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
+          <div className="bg-[#090d16] border border-slate-800 w-full max-w-[calc(100vw-1rem)] sm:max-w-3xl rounded-3xl shadow-2xl overflow-hidden flex flex-col my-auto max-h-[92vh]">
             
             {/* Modal Header */}
             <div className="p-4 sm:p-5 border-b border-slate-800 bg-gradient-to-r from-blue-950/40 via-slate-900 to-cyan-950/40 flex items-center justify-between">
@@ -5578,11 +5578,11 @@ export const CampaignManager: React.FC<{ isHidden?: boolean }> = ({ isHidden = f
       {showLiveDispatcher && (
         <div
           onClick={handleDismissLiveDispatcherPopup}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+          className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md overflow-y-auto"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-[#090d16] border border-cyan-500/40 w-full max-w-xl rounded-3xl p-6 shadow-2xl space-y-5"
+            className="bg-[#090d16] border border-cyan-500/40 w-full max-w-[calc(100vw-1rem)] sm:max-w-xl rounded-3xl p-3.5 sm:p-6 shadow-2xl space-y-4 sm:space-y-5 my-auto max-h-[94vh] flex flex-col"
           >
             <div className="flex items-center justify-between border-b border-slate-800 pb-3 gap-2">
               <div className="flex items-center gap-2 min-w-0">

@@ -220,7 +220,7 @@ export const DeliverabilityRadarChart: React.FC<DeliverabilityRadarChartProps> =
   const activeIsp = ispData[selectedTargetIsp];
 
   return (
-    <div className="bg-gradient-to-b from-slate-900 via-[#0a0f1d] to-slate-950 rounded-3xl border border-slate-800 p-6 md:p-8 space-y-6 shadow-2xl relative overflow-hidden">
+    <div className="bg-gradient-to-b from-slate-900 via-[#0a0f1d] to-slate-950 rounded-3xl border border-slate-800 p-3.5 sm:p-6 md:p-8 space-y-5 sm:space-y-6 shadow-2xl relative overflow-hidden w-full max-w-full min-w-0">
       {/* Radiant Glow ambient backgrounds */}
       <div className="absolute top-0 right-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-0 left-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -306,22 +306,22 @@ export const DeliverabilityRadarChart: React.FC<DeliverabilityRadarChartProps> =
           </div>
 
           {/* Domain Input Form */}
-          <div className="flex items-center gap-2">
-            <div className="relative">
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap w-full sm:w-auto">
+            <div className="relative flex-1 sm:flex-initial">
               <input
                 type="text"
                 value={auditDomain}
                 onChange={(e) => setAuditDomain(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && runLiveAudit()}
                 placeholder="domain.com (e.g. visualsky.pro)"
-                className="w-48 sm:w-60 bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 font-mono focus:outline-none focus:border-cyan-500"
+                className="w-full sm:w-60 bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 font-mono focus:outline-none focus:border-cyan-500"
               />
             </div>
             <button
               type="button"
               onClick={() => runLiveAudit()}
               disabled={isAuditingDomain}
-              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-cyan-500/20 cursor-pointer disabled:opacity-50"
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-cyan-500/20 cursor-pointer disabled:opacity-50 shrink-0"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isAuditingDomain ? 'animate-spin' : ''}`} />
               <span>{isAuditingDomain ? 'Auditing...' : '⚡ Live Audit DNS'}</span>
@@ -470,9 +470,9 @@ export const DeliverabilityRadarChart: React.FC<DeliverabilityRadarChartProps> =
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center relative z-10">
         
         {/* Visual High-Tech SVG Radar Chart (7 Columns) */}
-        <div className="lg:col-span-7 flex flex-col items-center justify-center p-4 bg-slate-950/70 rounded-3xl border border-slate-800/80 relative shadow-inner">
+        <div className="lg:col-span-7 flex flex-col items-center justify-center p-2 sm:p-4 bg-slate-950/70 rounded-3xl border border-slate-800/80 relative shadow-inner w-full max-w-full overflow-hidden min-w-0">
           
-          <div className="relative w-full max-w-[420px] aspect-square flex items-center justify-center">
+          <div className="relative w-full max-w-[340px] sm:max-w-[420px] aspect-square flex items-center justify-center">
             
             {/* Spinning Radar Sweep Ray */}
             <div 

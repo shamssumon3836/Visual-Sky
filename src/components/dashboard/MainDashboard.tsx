@@ -116,20 +116,20 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
   });
 
   return (
-    <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-7 animate-in fade-in duration-200">
+    <div className="p-3 sm:p-5 md:p-8 max-w-7xl mx-auto space-y-5 sm:space-y-7 w-full max-w-full overflow-x-hidden min-w-0 animate-in fade-in duration-200">
       
       {/* 🌟 EXECUTIVE DASHBOARD HEADER */}
-      <div className="relative overflow-hidden rounded-2xl bg-slate-900/95 border border-slate-800 p-6 sm:p-7 shadow-lg">
+      <div className="relative overflow-hidden rounded-2xl bg-slate-900/95 border border-slate-800 p-4 sm:p-6 sm:p-7 shadow-lg">
         {/* Subtle top accent line */}
         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600" />
 
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-3 max-w-3xl">
             {/* Live Status Badges */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="px-2.5 py-1 text-xs font-bold bg-slate-800 text-cyan-300 border border-slate-700 rounded-lg flex items-center gap-1.5">
-                <Radio className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-                <span>Visual Sky v3.2 Enterprise Hub</span>
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+              <span className="px-2 sm:px-2.5 py-1 text-[11px] sm:text-xs font-bold bg-slate-800 text-cyan-300 border border-slate-700 rounded-lg flex items-center gap-1.5">
+                <Radio className="w-3.5 h-3.5 text-cyan-400 animate-pulse shrink-0" />
+                <span className="truncate">Visual Sky v3.2 Enterprise Hub</span>
               </span>
 
               <span className="px-2.5 py-1 text-xs font-bold bg-slate-800 text-emerald-300 border border-slate-700 rounded-lg flex items-center gap-1.5">

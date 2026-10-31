@@ -907,7 +907,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className="p-4 md:p-8 max-w-7xl mx-auto space-y-6 relative"
+      className="p-3 sm:p-5 md:p-8 max-w-7xl mx-auto space-y-5 sm:space-y-6 relative w-full max-w-full overflow-x-hidden min-w-0"
     >
       {/* Global Drag & Drop Overlay */}
       {isDragOver && (
@@ -1311,7 +1311,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
         )}
 
         {/* Leads Table - STRICT SINGLE-LINE RESPONSIVE FORMAT */}
-        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-xl w-full max-w-full min-w-0">
           {filteredLeads.length === 0 ? (
             <div className="p-12 text-center space-y-3">
               <Users className="w-12 h-12 text-slate-600 mx-auto" />
@@ -1321,7 +1321,7 @@ export const LeadDirectory: React.FC<LeadDirectoryProps> = ({ onOpenSendMail }) 
               </p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto w-full max-w-full -webkit-overflow-scrolling-touch">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-slate-800 bg-slate-950/70 text-slate-400 uppercase tracking-wider text-[10px] font-extrabold whitespace-nowrap">
