@@ -122,6 +122,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
       badgeColor: isServiceDisabled('campaigns') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
     },
     {
+      id: 'auto_engine',
+      label: '⚡ 7-Day Auto Engine',
+      href: '/auto-engine',
+      icon: Zap,
+      tag: 'Autonomous',
+      tagColor: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-emerald-500/40 font-black'
+    },
+    {
       id: 'followup_cohorts',
       label: '⚡ ৩/৭/১৪/৩০ দিন ফলো-আপ',
       icon: Clock,
@@ -177,6 +185,31 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
+
+          if ((item as any).href) {
+            return (
+              <a
+                key={item.id}
+                href={(item as any).href}
+                title={item.label}
+                className="w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-semibold transition-all group text-slate-300 hover:text-cyan-300 hover:bg-slate-800/60 border border-slate-800/40 hover:border-cyan-500/30"
+              >
+                <div className="flex items-center gap-2.5 min-w-0 flex-1 mr-1.5">
+                  <Icon className="w-4 h-4 shrink-0 transition text-amber-400 group-hover:text-cyan-400" />
+                  <span className="truncate whitespace-nowrap text-[12px] font-medium leading-tight">
+                    {item.label}
+                  </span>
+                </div>
+                <div className="shrink-0 flex items-center gap-1 ml-auto">
+                  {item.tag && (
+                    <span className={`px-1.5 py-0.5 text-[8.5px] font-extrabold tracking-wide uppercase rounded border whitespace-nowrap ${item.tagColor}`}>
+                      {item.tag}
+                    </span>
+                  )}
+                </div>
+              </a>
+            );
+          }
 
           return (
             <button

@@ -145,6 +145,15 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
       badgeColor: isServiceDisabled('campaigns') ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
     },
     {
+      id: 'auto_engine',
+      label: '⚡ 7-Day Auto Engine',
+      description: 'Autonomous Lead Miner, Rotation Pitcher & Phone Web Push Hub',
+      href: '/auto-engine',
+      icon: Zap,
+      tag: 'Autonomous',
+      tagColor: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-emerald-500/40 font-black'
+    },
+    {
       id: 'followup_cohorts',
       label: '⚡ ৩/৭/১৪/৩০ দিন ফলো-আপ',
       description: 'Multi-SMTP অটোমেটিক ফলো-আপ ইঞ্জিন (৩, ৭, ১৪, ৩০ দিন)',
@@ -295,6 +304,32 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
+
+              if ((item as any).href) {
+                return (
+                  <a
+                    key={item.id}
+                    href={(item as any).href}
+                    onClick={onClose}
+                    className="w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800/60 border border-transparent transition-all text-left"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="p-1.5 rounded-lg shrink-0 bg-slate-800/80 text-amber-400">
+                        <Icon className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-bold text-amber-300">{item.label}</div>
+                        <div className="text-[10px] text-slate-400 truncate">{item.description}</div>
+                      </div>
+                    </div>
+                    {item.tag && (
+                      <span className={`px-1.5 py-0.5 text-[9px] font-extrabold tracking-wide uppercase rounded border whitespace-nowrap ${(item as any).tagColor || 'bg-amber-500/20 text-amber-400 border-amber-500/30'}`}>
+                        {item.tag}
+                      </span>
+                    )}
+                  </a>
+                );
+              }
 
               return (
                 <button

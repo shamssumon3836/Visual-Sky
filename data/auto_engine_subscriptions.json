@@ -1,0 +1,11 @@
+[
+  {
+    "endpoint": "https://fcm.googleapis.com/fcm/send/test-token-123",
+    "keys": {
+      "p256dh": "BMx123...",
+      "auth": "Auth123..."
+    },
+    "userAgent": "Test Device",
+    "createdAt": "2026-11-01T13:23:51.489Z"
+  }
+]

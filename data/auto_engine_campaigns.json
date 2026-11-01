@@ -1,0 +1,28 @@
+[
+  {
+    "campaignName": "Day 1 High-Ticket Creative Studios",
+    "niches": [
+      "Video Editing",
+      "Commercial Studios"
+    ],
+    "targetCities": [
+      "London",
+      "Manchester",
+      "New York"
+    ],
+    "daysDuration": 7,
+    "currentDay": 1,
+    "dailyQuotaPerSender": 30,
+    "emailPitchTemplate": "Hi {{firstName}}, loved your recent video projects!",
+    "portfolioLinks": [
+      {
+        "niche": "Video Editing",
+        "link": "https://visualsky.pro/portfolio/post-production"
+      }
+    ],
+    "status": "Active",
+    "updatedAt": "2026-11-01T13:23:57.881Z",
+    "_id": "camp_1793539437881",
+    "createdAt": "2026-11-01T13:23:57.881Z"
+  }
+]

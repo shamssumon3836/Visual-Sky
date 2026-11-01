@@ -9,6 +9,7 @@ import { simpleParser } from 'mailparser';
 import crypto from 'crypto';
 import dns from 'dns';
 import zlib from 'zlib';
+import autoEngineRouter from './api/autoEngine';
 
 let webpush: any = null;
 try {
@@ -10182,6 +10183,9 @@ app.post('/api/drive-storage/upload', async (req, res) => {
     });
   }
 });
+
+// Enterprise Isolated 7-Day Auto Outreach Engine (Routes & Web Push API)
+app.use(autoEngineRouter);
 
 // Catch-all for undefined API endpoints to ensure they always return structured JSON, never HTML
 app.all('/api/*', (req, res) => {

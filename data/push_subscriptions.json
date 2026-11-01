@@ -1,0 +1,15 @@
+[
+  {
+    "endpoint": "https://fcm.googleapis.com/fcm/send/test-token-123",
+    "subscription": {
+      "endpoint": "https://fcm.googleapis.com/fcm/send/test-token-123",
+      "keys": {
+        "p256dh": "BMx123...",
+        "auth": "Auth123..."
+      }
+    },
+    "userEmail": "auto-engine-admin@visualsky.pro",
+    "userAgent": "Test Device",
+    "updatedAt": "2026-11-01T13:23:51.490Z"
+  }
+]

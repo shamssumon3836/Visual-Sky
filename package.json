@@ -26,6 +26,7 @@
     "imapflow": "^1.7.8",
     "lucide-react": "^0.546.0",
     "mailparser": "^3.9.20",
+    "mongoose": "^9.11.4",
     "motion": "^12.23.24",
     "nodemailer": "^9.0.5",
     "react": "^19.0.1",
