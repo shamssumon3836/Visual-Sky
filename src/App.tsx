@@ -34,6 +34,7 @@ import { GeminiAssistant } from './components/ai/GeminiAssistant';
 import { OwnerPanel } from './components/owner/OwnerPanel';
 import { TrashManager } from './components/trash/TrashManager';
 import { GoogleDriveStorageView } from './components/drive/GoogleDriveStorageView';
+import { AutoEngineView } from './components/autoEngine/AutoEngineView';
 import { MobileNavDrawer } from './components/layout/MobileNavDrawer';
 import { AuthModal } from './components/auth/AuthModal';
 import { LogoutConfirmModal } from './components/auth/LogoutConfirmModal';
@@ -249,6 +250,8 @@ const MainContent: React.FC = () => {
         return <GoogleDriveStorageView onOpenSendMail={() => handleOpenSendMail()} />;
       case 'trash':
         return <TrashManager />;
+      case 'auto_engine':
+        return <AutoEngineView />;
       default:
         return <MainDashboard onOpenSendMail={() => handleOpenSendMail()} onOpenLeadModal={() => setActiveTab('leads')} />;
     }

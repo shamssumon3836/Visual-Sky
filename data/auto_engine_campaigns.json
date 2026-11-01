@@ -1,5 +1,32 @@
 [
   {
+    "_id": "camp_1793540781880",
+    "campaignName": "Videographer Multi-Niche 7-Day Auto Campaign",
+    "niches": [
+      "Videographer",
+      "Dentist",
+      "Gym Coach"
+    ],
+    "targetCities": [
+      "London",
+      "Manchester",
+      "New York"
+    ],
+    "daysDuration": 7,
+    "currentDay": 1,
+    "dailyQuotaPerSender": 30,
+    "emailPitchTemplate": "Hi {{firstName}}, check out our reel {{portfolioUrl}}",
+    "portfolioLinks": [
+      {
+        "niche": "Videographer",
+        "link": "https://visualsky.pro/reel"
+      }
+    ],
+    "status": "Active",
+    "createdAt": "2026-11-01T13:46:21.880Z",
+    "updatedAt": "2026-11-01T13:46:21.880Z"
+  },
+  {
     "campaignName": "Day 1 High-Ticket Creative Studios",
     "niches": [
       "Video Editing",

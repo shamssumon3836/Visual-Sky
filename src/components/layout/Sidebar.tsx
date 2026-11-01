@@ -124,7 +124,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
     {
       id: 'auto_engine',
       label: '⚡ 7-Day Auto Engine',
-      href: '/auto-engine',
       icon: Zap,
       tag: 'Autonomous',
       tagColor: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-emerald-500/40 font-black'
