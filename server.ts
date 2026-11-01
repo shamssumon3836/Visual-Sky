@@ -9741,6 +9741,31 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
                     ? [parsed.references]
                     : [];
 
+                  const getHeaderVal = (name: string): string => {
+                    try {
+                      const val = (parsed.headers as any)?.get(name.toLowerCase());
+                      if (!val) return '';
+                      if (typeof val === 'string') return val;
+                      if (typeof val?.text === 'string') return val.text;
+                      if (typeof val?.value === 'string') return val.value;
+                      return String(val);
+                    } catch {
+                      return '';
+                    }
+                  };
+                  const autoSubmittedHdr = getHeaderVal('auto-submitted').toLowerCase();
+                  const xAutoReplyHdr = getHeaderVal('x-autoreply').toLowerCase();
+                  const xAutoResponseSuppressHdr = getHeaderVal('x-auto-response-suppress').toLowerCase();
+                  const precedenceHdr = getHeaderVal('precedence').toLowerCase();
+                  const returnPathHdr = getHeaderVal('return-path').toLowerCase();
+                  const isAutoReplyHeader = Boolean(
+                    (autoSubmittedHdr && autoSubmittedHdr !== 'no') ||
+                    xAutoReplyHdr === 'yes' ||
+                    xAutoResponseSuppressHdr.includes('all') || xAutoResponseSuppressHdr.includes('ooo') ||
+                    precedenceHdr === 'auto_reply' || precedenceHdr === 'bulk' || precedenceHdr === 'junk' ||
+                    returnPathHdr.includes('<>')
+                  );
+
                   const msgObj = {
                     uid: message.uid,
                     messageId:
@@ -9760,7 +9785,8 @@ app.post('/api/smtp/imap-sync', async (req, res) => {
                     html: '', // Never send raw quoted HTML to prevent <div dir="ltr"> from rendering
                     inReplyTo: parsed.inReplyTo || message.envelope?.inReplyTo || '',
                     references: refs,
-                    attachments: extractedAttachments
+                    attachments: extractedAttachments,
+                    isAutoReplyHeader
                   };
 
                   imapUidMessageCache.set(`${cachePrefix}::${message.uid}`, msgObj);

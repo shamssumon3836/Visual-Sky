@@ -37,6 +37,14 @@ import {
   WorkspaceData
 } from '../lib/workspaceSync';
 import { safeParseResponse } from '../lib/safeFetch';
+import {
+  isAutoReplyOrOoo,
+  isHardBounceMessage,
+  isUnsubscribeMessage,
+  classifyIntent,
+  isThreadUnread,
+  deduplicateAndSortThreadMessages
+} from '../utils/inboxIntelligence';
 
 // Helper to calculate automatic 4-Week SMTP Warm-up Schedule limits:
 // Week 1 (Days 1-7): Daily 10 to 15 mails (Text-only enforced: no links or images)
@@ -3186,7 +3194,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         smtpEmail: senderFromEmail || target.smtpEmail,
         lastMessage: (resolvedBody || `📎 Sent ${metadataOnlyAttachments?.length || 1} attachment(s)`).slice(0, 100),
         lastMessageDate: 'Just now',
-        messages: [...target.messages.map(m => ({ ...m, isRead: true })), newMsg]
+        messages: deduplicateAndSortThreadMessages([...target.messages.map(m => ({ ...m, isRead: true })), newMsg])
       };
       const nextThreads = [updatedThread, ...prev.filter(t => t.id !== threadId)];
       (latestWorkspaceRef.current as any).threads = nextThreads;
@@ -3323,19 +3331,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const markThreadRead = (threadId: string) => {
+    let targetEmail: string | undefined;
     setThreads(prev => {
       const next = prev.map(t => {
         if (t.id === threadId) {
+          targetEmail = t.leadEmail?.toLowerCase();
           return {
             ...t,
             unreadCount: 0,
-            messages: t.messages.map(m => ({ ...m, isRead: true }))
+            messages: deduplicateAndSortThreadMessages(t.messages.map(m => ({ ...m, isRead: true })))
           };
         }
         return t;
       });
       (latestWorkspaceRef.current as any).threads = next;
       persistResourceDirectly('threads', next);
+      return next;
+    });
+
+    // Also mark any notifications for this thread or lead as read so counters stay in 100% sync
+    setNotifications(prev => {
+      const hasUnread = prev.some(
+        n => !n.isRead && (n.threadId === threadId || (targetEmail && n.leadEmail?.toLowerCase() === targetEmail))
+      );
+      if (!hasUnread) return prev;
+      const next = prev.map(n => {
+        if (!n.isRead && (n.threadId === threadId || (targetEmail && n.leadEmail?.toLowerCase() === targetEmail))) {
+          return { ...n, isRead: true };
+        }
+        return n;
+      });
+      (latestWorkspaceRef.current as any).notifications = next;
+      persistResourceDirectly('notifications', next);
       return next;
     });
   };
@@ -3981,6 +4008,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addSentEmailLog = (logData: Omit<SentEmailLog, 'id' | 'sentAt'> & { trackingPixelId?: string; errorMessage?: string }): SentEmailLog => {
     const cleanPixelId = String(logData.trackingPixelId || `px-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`).replace(/\.gif$/i, '').trim();
     const initialStatus = logData.status === 'failed' ? 'failed' : logData.status === 'bounced' ? 'bounced' : logData.status === 'replied' ? 'replied' : 'sent';
+    const targetRecip = (logData.recipientEmail || '').trim().toLowerCase();
+    const targetSubj = (logData.subject || '').trim();
+
+    // Guardrail against accidental double-firing: if an identical sent log was created within the last 15 seconds, do not record twice
+    const existingDuplicate = (latestWorkspaceRef.current.sentEmails || sentEmails || []).find(s =>
+      !s.isTrash &&
+      s.recipientEmail?.trim().toLowerCase() === targetRecip &&
+      s.subject?.trim() === targetSubj &&
+      Math.abs(new Date(s.sentAt).getTime() - Date.now()) < 15000
+    );
+    if (existingDuplicate) {
+      return existingDuplicate;
+    }
+
     const newLog: SentEmailLog = {
       ...logData,
       id: `sent-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -3992,6 +4033,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isTrash: false
     };
     setSentEmails(prev => {
+      // Secondary in-state deduplication
+      if (prev.some(s => !s.isTrash && s.recipientEmail?.trim().toLowerCase() === targetRecip && s.subject?.trim() === targetSubj && Math.abs(new Date(s.sentAt).getTime() - Date.now()) < 15000)) {
+        return prev;
+      }
       const next = [newLog, ...prev];
       (latestWorkspaceRef.current as any).sentEmails = next;
       persistResourceDirectly('sentEmails', next);
@@ -4069,7 +4114,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               lastMessage: cleanedBody.slice(0, 100),
               lastMessageDate: nowFormatted,
               updatedAt: nowFormatted,
-              messages: [...existing.messages, outMsg]
+              messages: deduplicateAndSortThreadMessages([...existing.messages, outMsg])
             };
             nextThreads = [updated, ...base.filter(t => t.id !== existing.id)];
           } else {
@@ -4089,7 +4134,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               labels: ['Campaign Sent'],
               isStarred: false,
               isTrash: false,
-              messages: [outMsg]
+              messages: deduplicateAndSortThreadMessages([outMsg])
             };
             nextThreads = [newThread, ...base];
           }
@@ -4984,10 +5029,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
           }
 
-          // Detect Out of Office (OOO) and Unsubscribe requests
-          const lowerCombined = `${msgSubject} ${replyText}`.toLowerCase();
-          const isOoo = /out of office|annual leave|auto-reply|automatic reply|away from my desk|away from the office|on vacation|maternity leave|paternity leave/i.test(lowerCombined);
-          const isUnsubscribe = /unsubscribe|remove me|stop emailing|please remove|take me off|do not contact|opt out/i.test(lowerCombined);
+          // Detect Bounce, Out of Office (OOO) / Shoots, and Unsubscribe requests
+          const isBounce = isHardBounceMessage(senderEmail, msgSubject, replyText);
+          const isUnsubscribe = isUnsubscribeMessage(msgSubject, replyText);
+          const isOoo = isAutoReplyOrOoo(msgSubject, replyText, Boolean(msg.isAutoReplyHeader));
           const oooPauseIso = isOoo ? new Date(Date.now() + 7 * 86400000).toISOString() : undefined;
 
           // 2. Update matching lead status
@@ -4995,6 +5040,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             workingLeads = workingLeads.map(l => {
               if (l.id === matchingLead.id || l.email?.toLowerCase() === senderEmail) {
                 leadsChanged = true;
+                if (isBounce) {
+                  return {
+                    ...l,
+                    status: 'bounced' as const,
+                    isReplied: true,
+                    lastRepliedAt: msgDateIso,
+                    replySnippet: replyText.slice(0, 120)
+                  };
+                }
                 if (isUnsubscribe) {
                   return {
                     ...l,
@@ -5063,11 +5117,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             attachments: incomingAttsList,
             isRead: false,
             status: 'replied',
+            isBounce,
             isOoo,
-            isUnsubscribe
+            isUnsubscribe,
+            isAutoReplyHeader: Boolean(msg.isAutoReplyHeader)
           };
 
-          if (isUnsubscribe) {
+          if (isBounce) {
+            addNotification({
+              tag: `bounce-${msgUniqueId}`,
+              title: `🚫 Mail Bounced: ${leadName}`,
+              message: `Delivery failure noticed for ${leadName} (${senderEmail}). Removed from active follow-up queues.`,
+              type: 'bounce',
+              linkTab: 'inbox',
+              leadEmail: senderEmail
+            });
+          } else if (isUnsubscribe) {
             addNotification({
               tag: `unsub-${msgUniqueId}`,
               title: `🚫 Unsubscribed: ${leadName}`,
@@ -5079,7 +5144,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } else if (isOoo) {
             addNotification({
               tag: `ooo-${msgUniqueId}`,
-              title: `🕒 Out of Office: ${leadName}`,
+              title: `🕒 Auto-Reply / OOO: ${leadName}`,
               message: `Auto-reply detected for ${leadName}. Follow-up queue automatically paused for 7 days.`,
               type: 'lead',
               linkTab: 'inbox',
@@ -5087,9 +5152,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
           }
 
+          const intentCat = classifyIntent(msgSubject, replyText, Boolean(msg.isAutoReplyHeader));
+          let statusLabel = 'Neutral Reply';
+          if (isBounce) statusLabel = 'Bounced';
+          else if (isUnsubscribe) statusLabel = 'Unsubscribed';
+          else if (isOoo) statusLabel = 'Auto-Reply';
+          else if (intentCat.type === 'meeting') statusLabel = 'Meeting Requested';
+          else if (intentCat.type === 'hot') statusLabel = 'Hot Lead';
+          else if (intentCat.type === 'question') statusLabel = 'Inquiry / Q&A';
+          else if (intentCat.type === 'later') statusLabel = 'Follow Up Later';
+          else if (intentCat.type === 'cold') statusLabel = 'Not Interested';
+
           const dynamicIntentLabels = [
             matchingSentLog || isReplySubjectOrHeader ? 'Real Reply' : 'Direct Mail',
-            isUnsubscribe ? 'Unsubscribed' : isOoo ? '🕒 OOO Paused' : 'Hot Lead'
+            statusLabel
           ];
 
           if (targetThread) {
@@ -5106,6 +5182,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               continue;
             }
 
+            // If auto-reply, bounce, or unsubscribe, strip any misleading Hot Lead label
+            const existingCleanLabels = (targetThread.labels || []).filter(
+              l => !((isOoo || isBounce || isUnsubscribe || intentCat.type === 'neutral') && l === 'Hot Lead')
+            );
+
             const updatedThread: EmailThread = {
               ...targetThread,
               isTrash: false,
@@ -5119,11 +5200,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               unreadCount: (targetThread.unreadCount || 0) + 1,
               labels: Array.from(
                 new Set([
-                  ...(targetThread.labels || []),
+                  ...existingCleanLabels,
                   ...dynamicIntentLabels
                 ])
               ),
-              messages: [...targetThread.messages, newMsg]
+              messages: deduplicateAndSortThreadMessages([...targetThread.messages, newMsg])
             };
             workingThreads = [
               updatedThread,
@@ -5183,7 +5264,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               labels: dynamicIntentLabels,
               isStarred: true,
               isTrash: false,
-              messages: initialMessages
+              messages: deduplicateAndSortThreadMessages(initialMessages)
             };
             workingThreads = [newThread, ...workingThreads];
           }
@@ -5547,7 +5628,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             lastMessage: cleanedSentBody.slice(0, 100),
             lastMessageDate: nowFormatted,
             updatedAt: nowFormatted,
-            messages: [...existingThread.messages, sentMsg]
+            messages: deduplicateAndSortThreadMessages([...existingThread.messages, sentMsg])
           };
           nextThreads = [updated, ...prev.filter(t => t.id !== existingThread.id)];
         } else {
@@ -5567,7 +5648,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             labels: ['Sent Outreach'],
             isStarred: false,
             isTrash: false,
-            messages: [sentMsg]
+            messages: deduplicateAndSortThreadMessages([sentMsg])
           };
           nextThreads = [newThread, ...prev];
         }
@@ -6068,34 +6149,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           status: 'replied'
         };
 
+        const simIntent = classifyIntent(
+          (existingThread.subject || '').startsWith('Re:') ? (existingThread.subject || '') : `Re: ${existingThread.subject || 'Follow up'}`,
+          replyContent
+        );
+        const simLabel = simIntent.type === 'hot' ? 'Hot Lead' : simIntent.type === 'meeting' ? 'Meeting Requested' : simIntent.type === 'auto_reply' ? 'Auto-Reply' : 'Neutral Reply';
+
         setThreads(prev => prev.map(t => {
           if (t.id === existingThread.id) {
+            const cleanLabels = (t.labels || []).filter(l => !(simIntent.type === 'neutral' || simIntent.type === 'auto_reply') || l !== 'Hot Lead');
             return {
               ...t,
               lastMessage: replyContent.slice(0, 100) + '...',
               lastMessageDate: 'Just now',
               unreadCount: t.unreadCount + 1,
               isTrash: false,
-              messages: [...t.messages, newMsg]
+              labels: Array.from(new Set([...cleanLabels, simLabel])),
+              messages: deduplicateAndSortThreadMessages([...t.messages, newMsg])
             };
           }
           return t;
         }));
       } else {
+        const simSubject = `Re: Scaling outreach for ${targetLead.company}`;
+        const simIntent = classifyIntent(simSubject, replyContent);
+        const simLabel = simIntent.type === 'hot' ? 'Hot Lead' : simIntent.type === 'meeting' ? 'Meeting Requested' : simIntent.type === 'auto_reply' ? 'Auto-Reply' : 'Neutral Reply';
+
         const newThread: EmailThread = {
           id: `thread-sim-${Date.now()}`,
           leadId: targetLead.id,
           leadName: targetLead.name,
           leadCompany: targetLead.company,
           leadEmail: targetLead.email,
-          subject: `Re: Scaling outreach for ${targetLead.company}`,
+          subject: simSubject,
           lastMessage: replyContent.slice(0, 100) + '...',
           lastMessageDate: 'Just now',
           unreadCount: 1,
-          labels: ['Hot Lead'],
+          labels: [simLabel],
           isStarred: true,
           isTrash: false,
-          messages: [
+          messages: deduplicateAndSortThreadMessages([
             {
               id: `msg-sim-user-${Date.now()}`,
               threadId: `thread-sim-${Date.now()}`,
@@ -6119,12 +6212,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               recipientName: currentUser.name,
               recipientEmail: currentUser.email,
               timestamp: 'Just now',
-              subject: `Re: Scaling outreach for ${targetLead.company}`,
+              subject: simSubject,
               body: replyContent,
               isRead: false,
               status: 'replied'
             }
-          ]
+          ])
         };
         setThreads(prev => [newThread, ...prev]);
       }

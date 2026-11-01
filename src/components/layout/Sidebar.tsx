@@ -1,5 +1,6 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
+import { isThreadUnread } from '../../utils/inboxIntelligence';
 import { 
   LayoutDashboard,
   Users, 
@@ -37,7 +38,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
   } = useApp();
 
   const activeLeadsCount = leads.filter(l => !l.isTrash).length;
-  const unreadThreadsCount = threads.filter(t => !t.isTrash && t.unreadCount > 0).length;
+  const unreadThreadsCount = threads.filter(isThreadUnread).length;
   const runningCampaignsCount = campaigns.filter(c => c.status === 'running').length;
   const activeSmtpCount = smtpAccounts.filter(s => !s.isTrash && s.isConnected).length;
 
@@ -166,9 +167,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
   ];
 
   return (
-    <aside className="w-64 shrink-0 bg-[#090d16]/95 border-r border-slate-800/80 flex flex-col justify-between hidden md:flex h-full min-h-0 select-none">
+    <aside className="w-72 lg:w-[292px] shrink-0 bg-[#090d16]/95 border-r border-slate-800/80 flex flex-col justify-between hidden md:flex h-full min-h-0 select-none">
       {/* Navigation Section */}
-      <div className="p-3.5 space-y-1 overflow-y-auto">
+      <div className="p-2.5 space-y-1 overflow-y-auto">
         <div className="px-3 py-1.5 text-[10px] font-bold tracking-wider text-slate-500 uppercase">
           Visual Sky Modules
         </div>
@@ -181,26 +182,29 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
             <button
               key={item.id}
               onClick={() => (item as any).onClick ? (item as any).onClick() : setActiveTab(item.id)}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all group ${
+              title={item.label}
+              className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-semibold transition-all group cursor-pointer ${
                 isActive
                   ? 'bg-gradient-to-r from-blue-600/20 via-cyan-500/10 to-transparent text-cyan-300 border border-cyan-500/30 shadow-md shadow-cyan-500/5 font-bold'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
               }`}
             >
-              <div className="flex items-center gap-2.5 min-w-0">
+              <div className="flex items-center gap-2.5 min-w-0 flex-1 mr-1.5">
                 <Icon
                   className={`w-4 h-4 shrink-0 transition ${
                     isActive ? 'text-cyan-400' : 'text-slate-400 group-hover:text-slate-200'
                   }`}
                 />
-                <span className="truncate whitespace-nowrap text-[12px]">{item.label}</span>
+                <span className="truncate whitespace-nowrap text-[12px] font-medium leading-tight">
+                  {item.label}
+                </span>
               </div>
 
               {/* Badges / Tags */}
-              <div className="shrink-0 flex items-center gap-1.5 ml-2">
+              <div className="shrink-0 flex items-center gap-1 ml-auto">
                 {item.badge !== undefined && (
                   <span
-                    className={`px-1.5 py-0.5 text-[10px] font-bold rounded-md border whitespace-nowrap ${
+                    className={`px-1.5 py-0.5 text-[9.5px] font-bold rounded-md border whitespace-nowrap ${
                       item.badgeColor || 'bg-slate-800 text-slate-300 border-slate-700'
                     }`}
                   >
@@ -209,7 +213,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenBilling }) => {
                 )}
                 {item.tag && (
                   <span
-                    className={`px-1.5 py-0.5 text-[9px] font-extrabold tracking-wide uppercase rounded border whitespace-nowrap ${
+                    className={`px-1.5 py-0.5 text-[8.5px] font-extrabold tracking-wide uppercase rounded border whitespace-nowrap ${
                       item.tagColor
                     }`}
                   >

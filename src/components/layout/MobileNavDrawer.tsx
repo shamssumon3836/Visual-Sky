@@ -1,5 +1,6 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
+import { isThreadUnread } from '../../utils/inboxIntelligence';
 import { VisualSkyLogo } from '../brand/VisualSkyLogo';
 import { 
   LayoutDashboard,
@@ -59,7 +60,7 @@ export const MobileNavDrawer: React.FC<MobileNavDrawerProps> = ({
   if (!isOpen) return null;
 
   const activeLeadsCount = leads.filter(l => !l.isTrash).length;
-  const unreadThreadsCount = threads.filter(t => !t.isTrash && t.unreadCount > 0).length;
+  const unreadThreadsCount = threads.filter(isThreadUnread).length;
   const runningCampaignsCount = campaigns.filter(c => c.status === 'running').length;
   const activeSmtpCount = smtpAccounts.filter(s => !s.isTrash && s.isConnected).length;
 

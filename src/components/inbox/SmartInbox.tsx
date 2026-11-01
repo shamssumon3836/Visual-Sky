@@ -72,29 +72,28 @@ const playReplyChime = () => {
   } catch {}
 };
 
+import { 
+  isAutoReplyOrOoo,
+  isHardBounceMessage,
+  isUnsubscribeMessage,
+  classifyIntent,
+  isThreadUnread,
+  deduplicateAndSortThreadMessages
+} from '../../utils/inboxIntelligence';
+
 export const detectLeadIntentCategory = (lastMsgText: string, labels: string[] = []): {
-  type: 'hot' | 'meeting' | 'question' | 'later' | 'cold' | 'replied';
+  type: 'hot' | 'meeting' | 'question' | 'later' | 'cold' | 'replied' | 'auto_reply' | 'bounce' | 'unsubscribe' | 'neutral';
   label: string;
   badgeClass: string;
   icon: string;
 } => {
-  const lower = (lastMsgText || '').toLowerCase();
-  if (labels.includes('Meeting Scheduled') || /meeting|calendar|schedule|zoom|google meet|calendly|call me|available at|what time|tomorrow at|thursday at|friday at/i.test(lower)) {
-    return { type: 'meeting', label: 'Wants Meeting', badgeClass: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40', icon: '📅' };
-  }
-  if (labels.includes('Hot Lead') || /interested|sounds good|send me|more details|lets talk|let's talk|pricing|cost|send over|proposal|demo/i.test(lower)) {
-    return { type: 'hot', label: 'High Intent', badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40', icon: '🔥' };
-  }
-  if (/\?|how does|what is|can you|do you support|security|gdpr|case study|samples/i.test(lower)) {
-    return { type: 'question', label: 'Inquiry / Q&A', badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40', icon: '❓' };
-  }
-  if (/busy|next month|next quarter|q4|reach out later|not now|bad timing/i.test(lower)) {
-    return { type: 'later', label: 'Follow Up Later', badgeClass: 'bg-blue-500/20 text-blue-300 border-blue-500/40', icon: '⏳' };
-  }
-  if (/unsubscribe|remove me|stop emailing|not interested|wrong person/i.test(lower)) {
-    return { type: 'cold', label: 'Not Interested', badgeClass: 'bg-slate-800 text-slate-400 border-slate-700', icon: '💤' };
-  }
-  return { type: 'replied', label: 'Active Conversation', badgeClass: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40', icon: '💬' };
+  const result = classifyIntent('', lastMsgText, false, labels);
+  return {
+    type: result.type as any,
+    label: result.label,
+    badgeClass: result.badgeClass,
+    icon: result.icon
+  };
 };
 
 const SPAM_TRIGGERS = [
@@ -555,6 +554,18 @@ export const SmartInbox: React.FC = () => {
   const isThreadWaitingReply = (t: EmailThread): boolean => {
     if (!Array.isArray(t.messages) || t.messages.length === 0) return false;
     if (t.isReplied) return false;
+
+    // Check thread labels for Auto-Reply, OOO, Bounced, or Unsubscribed
+    const labels = t.labels || [];
+    if (
+      labels.includes('Auto-Reply') ||
+      labels.includes('🕒 OOO Paused') ||
+      labels.includes('Bounced') ||
+      labels.includes('Unsubscribed')
+    ) {
+      return false;
+    }
+
     let lastLeadIdx = -1;
     let lastUserIdx = -1;
     for (let i = 0; i < t.messages.length; i++) {
@@ -563,7 +574,24 @@ export const SmartInbox: React.FC = () => {
     }
     // If the user sent a reply after the lead's message, it is NOT waiting for reply!
     if (lastUserIdx > lastLeadIdx) return false;
-    return lastLeadIdx !== -1;
+    if (lastLeadIdx === -1) return false;
+
+    // Check if the last lead message was an auto-reply, shoot/holiday notice, bounce, or unsubscribe
+    const lastLeadMsg = t.messages[lastLeadIdx];
+    if (lastLeadMsg?.isOoo || lastLeadMsg?.isBounce || lastLeadMsg?.isUnsubscribe) {
+      return false;
+    }
+    if (isAutoReplyOrOoo(lastLeadMsg?.subject || t.subject, lastLeadMsg?.body, Boolean(lastLeadMsg?.isAutoReplyHeader))) {
+      return false;
+    }
+    if (isHardBounceMessage(lastLeadMsg?.senderEmail, lastLeadMsg?.subject || t.subject, lastLeadMsg?.body)) {
+      return false;
+    }
+    if (isUnsubscribeMessage(lastLeadMsg?.subject || t.subject, lastLeadMsg?.body)) {
+      return false;
+    }
+
+    return true;
   };
 
   // Active thread details
@@ -672,13 +700,13 @@ export const SmartInbox: React.FC = () => {
       if (selectedFolder === 'starred' && !thread.isStarred) return false;
       if (selectedFolder === 'high_intent' && !thread.labels.includes('Hot Lead')) return false;
       if (selectedFolder === 'meetings' && !thread.labels.includes('Meeting Scheduled')) return false;
-      if (selectedFolder === 'unread' && (thread.unreadCount === 0 || !(Array.isArray(thread.messages) && thread.messages.some(m => m.sender === 'lead' && !m.isRead)))) return false;
+      if (selectedFolder === 'unread' && !isThreadUnread(thread)) return false;
 
       // Label sidebar filter
       if (selectedLabelFilter && !thread.labels.includes(selectedLabelFilter)) return false;
 
       // Quick status sub-filter
-      if (quickStatusFilter === 'unread' && (thread.unreadCount === 0 || !(Array.isArray(thread.messages) && thread.messages.some(m => m.sender === 'lead' && !m.isRead)))) return false;
+      if (quickStatusFilter === 'unread' && !isThreadUnread(thread)) return false;
       if (quickStatusFilter === 'needs_reply' && !isThreadWaitingReply(thread)) return false;
 
       // Primary tab filtering
@@ -1344,7 +1372,7 @@ export const SmartInbox: React.FC = () => {
                 {[
                   { id: 'inbox', label: 'Primary Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead')).length },
                   { id: 'needs_reply', label: 'Waiting Reply', icon: Clock, count: waitingReplyCount },
-                  { id: 'unread', label: 'Unread Mail', icon: Mail, count: threads.filter(t => !t.isTrash && (t.unreadCount || 0) > 0 && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead' && !m.isRead)).length },
+                  { id: 'unread', label: 'Unread Mail', icon: Mail, count: threads.filter(isThreadUnread).length },
                   { id: 'sent', label: 'Sent Mails', icon: Send, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'user')).length },
                   { id: 'starred', label: 'Starred', icon: Star, count: threads.filter(t => t.isStarred && !t.isTrash).length },
                   { id: 'high_intent', label: 'High Intent Leads', icon: Flame, count: threads.filter(t => t.labels.includes('Hot Lead') && !t.isTrash).length },
@@ -1492,7 +1520,7 @@ export const SmartInbox: React.FC = () => {
               {[
                 { id: 'inbox', label: 'Primary Inbox', icon: Inbox, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead')).length },
                 { id: 'needs_reply', label: 'Waiting Reply', icon: Clock, count: waitingReplyCount },
-                { id: 'unread', label: 'Unread Mail', icon: Mail, count: threads.filter(t => !t.isTrash && (t.unreadCount || 0) > 0 && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'lead' && !m.isRead)).length },
+                { id: 'unread', label: 'Unread Mail', icon: Mail, count: threads.filter(isThreadUnread).length },
                 { id: 'sent', label: 'Sent Mails', icon: Send, count: threads.filter(t => !t.isTrash && Array.isArray(t.messages) && t.messages.some(m => m.sender === 'user')).length },
                 { id: 'starred', label: 'Starred', icon: Star, count: threads.filter(t => t.isStarred && !t.isTrash).length },
                 { id: 'high_intent', label: 'High Intent Leads', icon: Flame, count: threads.filter(t => t.labels.includes('Hot Lead') && !t.isTrash).length },
@@ -2199,7 +2227,7 @@ export const SmartInbox: React.FC = () => {
                 {(() => {
                   const baseMessages =
                     Array.isArray(currentThread.messages) && currentThread.messages.length > 0
-                      ? currentThread.messages
+                      ? deduplicateAndSortThreadMessages(currentThread.messages)
                       : [
                           {
                             id: `${currentThread.id}-fallback`,

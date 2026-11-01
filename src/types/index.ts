@@ -109,6 +109,7 @@ export interface EmailMessage {
   isBounce?: boolean;
   isOoo?: boolean;
   isUnsubscribe?: boolean;
+  isAutoReplyHeader?: boolean;
 }
 
 export interface EmailThread {
