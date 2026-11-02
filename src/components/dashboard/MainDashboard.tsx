@@ -181,12 +181,69 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({ onOpenSendMail, on
             </button>
 
             <button
+              onClick={() => setActiveTab('auto_engine')}
+              className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-emerald-500/25 transition cursor-pointer"
+            >
+              <Zap className="w-4 h-4 fill-current text-slate-950" />
+              <span>⚡ 7-Day Auto Engine</span>
+              <span className="px-1.5 py-0.2 text-[9px] bg-slate-950/20 text-slate-950 rounded font-black uppercase">Day 1</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('generator')}
               className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
             >
               <Sparkles className="w-4 h-4 text-purple-400" />
               <span>AI Lead Miner</span>
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ⚡ PROMINENT 7-DAY AUTONOMOUS OUTREACH ENGINE BANNER */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#0c1629] via-[#091122] to-slate-900 border border-cyan-500/40 p-5 sm:p-6 shadow-xl shadow-cyan-500/10">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5 relative z-10">
+          <div className="space-y-2 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                <span>Day 1 Online &bull; Active Pipeline</span>
+              </span>
+              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-800 text-cyan-300 border border-slate-700">
+                30 Mails / Sender Quota
+              </span>
+              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-800 text-amber-300 border border-slate-700">
+                Multi-Niche Lead Miner
+              </span>
+            </div>
+
+            <h2 className="text-lg sm:text-xl font-black text-white flex items-center gap-2.5">
+              <span>⚡ 7-Day Autonomous Cold Outreach Engine</span>
+            </h2>
+
+            <p className="text-xs sm:text-sm text-slate-300 max-w-3xl leading-relaxed">
+              Automates multi-industry cold pitching across rotated SMTP accounts, queues 7-day follow-ups, and delivers instant phone lock-screen push alerts when prospects reply.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0 flex-wrap">
+            <button
+              onClick={() => setActiveTab('auto_engine')}
+              className="px-5 py-3 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-black text-xs sm:text-sm shadow-lg shadow-cyan-500/25 transition cursor-pointer flex items-center gap-2"
+            >
+              <Zap className="w-4 h-4 fill-white" />
+              <span>Launch 7-Day Auto Engine</span>
+            </button>
+
+            <a
+              href="/auto-engine"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white font-bold text-xs transition cursor-pointer flex items-center gap-1.5"
+            >
+              <span>Fullscreen Hub</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
           </div>
         </div>
       </div>

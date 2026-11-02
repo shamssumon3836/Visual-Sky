@@ -32,9 +32,9 @@ __export(server_exports, {
   default: () => server_default
 });
 module.exports = __toCommonJS(server_exports);
-var import_express = __toESM(require("express"), 1);
-var import_path = __toESM(require("path"), 1);
-var import_fs = __toESM(require("fs"), 1);
+var import_express2 = __toESM(require("express"), 1);
+var import_path2 = __toESM(require("path"), 1);
+var import_fs2 = __toESM(require("fs"), 1);
 var import_dotenv = __toESM(require("dotenv"), 1);
 var import_genai = require("@google/genai");
 var import_nodemailer = __toESM(require("nodemailer"), 1);
@@ -43,9 +43,515 @@ var import_mailparser = require("mailparser");
 var import_crypto = __toESM(require("crypto"), 1);
 var import_dns = __toESM(require("dns"), 1);
 var import_zlib = __toESM(require("zlib"), 1);
-var webpush = null;
+
+// api/autoEngine.ts
+var import_express = require("express");
+var import_path = __toESM(require("path"), 1);
+var import_fs = __toESM(require("fs"), 1);
+var import_mongoose2 = __toESM(require("mongoose"), 1);
+var import_web_push = __toESM(require("web-push"), 1);
+
+// models/autoEngine.js
+var import_mongoose = __toESM(require("mongoose"), 1);
+var AutoCampaignSchema = new import_mongoose.default.Schema(
+  {
+    campaignName: { type: String, required: true },
+    niches: [{ type: String }],
+    targetCities: [{ type: String }],
+    daysDuration: { type: Number, default: 7 },
+    currentDay: { type: Number, default: 1 },
+    dailyQuotaPerSender: { type: Number, default: 30 },
+    emailPitchTemplate: { type: String },
+    portfolioLinks: [
+      {
+        niche: { type: String },
+        link: { type: String }
+      }
+    ],
+    status: {
+      type: String,
+      enum: ["Active", "Paused", "Completed"],
+      default: "Active"
+    }
+  },
+  { timestamps: true }
+);
+var GlobalLeadLedgerSchema = new import_mongoose.default.Schema(
+  {
+    email: { type: String, unique: true, index: true, required: true, lowercase: true, trim: true },
+    businessName: { type: String },
+    targetNiche: { type: String, required: true, index: true },
+    city: { type: String },
+    website: { type: String },
+    sentBySender: { type: String },
+    campaignId: { type: String },
+    status: {
+      type: String,
+      enum: ["Sent", "Followup_1", "Followup_2", "Replied"],
+      default: "Sent"
+    },
+    lastContactedAt: { type: Date }
+  },
+  { timestamps: true }
+);
+var SenderAccountSchema = new import_mongoose.default.Schema(
+  {
+    email: { type: String, required: true },
+    smtpConfig: {
+      host: { type: String },
+      port: { type: Number },
+      user: { type: String },
+      pass: { type: String }
+    },
+    dailyLimit: { type: Number, default: 30 },
+    sentToday: { type: Number, default: 0 },
+    status: { type: String, default: "Active" }
+  },
+  { timestamps: true }
+);
+var PushSubscriptionSchema = new import_mongoose.default.Schema({
+  endpoint: { type: String, required: true, unique: true },
+  keys: {
+    p256dh: { type: String, required: true },
+    auth: { type: String, required: true }
+  },
+  userAgent: { type: String },
+  createdAt: { type: Date, default: Date.now }
+});
+var AutoCampaign = import_mongoose.default.models.AutoCampaign || import_mongoose.default.model("AutoCampaign", AutoCampaignSchema);
+var GlobalLeadLedger = import_mongoose.default.models.GlobalLeadLedger || import_mongoose.default.model("GlobalLeadLedger", GlobalLeadLedgerSchema);
+var SenderAccount = import_mongoose.default.models.SenderAccount || import_mongoose.default.model("SenderAccount", SenderAccountSchema);
+var PushSubscription = import_mongoose.default.models.PushSubscription || import_mongoose.default.model("PushSubscription", PushSubscriptionSchema);
+
+// api/autoEngine.ts
+var router = (0, import_express.Router)();
+var DATA_DIR = import_path.default.join(process.cwd(), "data");
+if (!import_fs.default.existsSync(DATA_DIR)) {
+  import_fs.default.mkdirSync(DATA_DIR, { recursive: true });
+}
+var CAMPAIGNS_FILE = import_path.default.join(DATA_DIR, "auto_engine_campaigns.json");
+var SUBSCRIPTIONS_FILE = import_path.default.join(DATA_DIR, "auto_engine_subscriptions.json");
+var LEDGER_FILE = import_path.default.join(DATA_DIR, "auto_engine_ledger.json");
+var SENDERS_FILE = import_path.default.join(DATA_DIR, "auto_engine_senders.json");
+var VAPID_KEYS_FILE = import_path.default.join(DATA_DIR, "vapid_keys.json");
+var getOrGenerateVapidKeys = () => {
+  try {
+    if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+      return {
+        publicKey: process.env.VAPID_PUBLIC_KEY,
+        privateKey: process.env.VAPID_PRIVATE_KEY
+      };
+    }
+    if (import_fs.default.existsSync(VAPID_KEYS_FILE)) {
+      const saved = JSON.parse(import_fs.default.readFileSync(VAPID_KEYS_FILE, "utf-8"));
+      if (saved?.publicKey && saved?.privateKey) {
+        return saved;
+      }
+    }
+  } catch {
+  }
+  try {
+    const generated = import_web_push.default.generateVAPIDKeys();
+    import_fs.default.writeFileSync(VAPID_KEYS_FILE, JSON.stringify(generated, null, 2), "utf-8");
+    return generated;
+  } catch {
+    return {
+      publicKey: "BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U",
+      privateKey: ""
+    };
+  }
+};
+var vapidKeys = getOrGenerateVapidKeys();
+if (vapidKeys.publicKey && vapidKeys.privateKey) {
+  try {
+    import_web_push.default.setVapidDetails(
+      "mailto:founder@visualsky.pro",
+      vapidKeys.publicKey,
+      vapidKeys.privateKey
+    );
+  } catch (err) {
+    console.warn("[AutoEngine] VAPID configuration notice:", err?.message || err);
+  }
+}
+var initMongoConnection = async () => {
+  if (import_mongoose2.default.connection.readyState === 1 || import_mongoose2.default.connection.readyState === 2) return;
+  const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URL;
+  if (!mongoUri) return;
+  try {
+    await import_mongoose2.default.connect(mongoUri, { serverSelectionTimeoutMS: 2500 });
+    console.log("[AutoEngine] Mongoose connected to MongoDB.");
+  } catch (err) {
+    console.warn("[AutoEngine] Mongoose running in memory/file fallback mode:", err?.message || err);
+  }
+};
+initMongoConnection();
+var readJsonFile = (filePath, fallback) => {
+  try {
+    if (import_fs.default.existsSync(filePath)) {
+      return JSON.parse(import_fs.default.readFileSync(filePath, "utf-8"));
+    }
+  } catch {
+  }
+  return fallback;
+};
+var writeJsonFile = (filePath, data) => {
+  try {
+    import_fs.default.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+  } catch {
+  }
+};
+router.get("/auto-engine", (req, res) => {
+  if (req.app && typeof res.render === "function" && req.app.get("view engine")) {
+    return res.render("auto-engine", (err, html) => {
+      if (!err && html) {
+        return res.send(html);
+      }
+      const ejsPath2 = import_path.default.join(process.cwd(), "views", "auto-engine.ejs");
+      if (import_fs.default.existsSync(ejsPath2)) {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        return res.sendFile(ejsPath2);
+      }
+      const htmlPath2 = import_path.default.join(process.cwd(), "public", "auto-engine.html");
+      if (import_fs.default.existsSync(htmlPath2)) {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        return res.sendFile(htmlPath2);
+      }
+      return res.status(404).send("Auto-Engine dashboard not found.");
+    });
+  }
+  const ejsPath = import_path.default.join(process.cwd(), "views", "auto-engine.ejs");
+  if (import_fs.default.existsSync(ejsPath)) {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.sendFile(ejsPath);
+  }
+  const htmlPath = import_path.default.join(process.cwd(), "public", "auto-engine.html");
+  if (import_fs.default.existsSync(htmlPath)) {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.sendFile(htmlPath);
+  }
+  return res.status(404).send("Auto-Engine dashboard view not found.");
+});
+router.get("/auto-engine-sw.js", (req, res) => {
+  const swPath = import_path.default.join(process.cwd(), "public", "sw.js");
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+  res.setHeader("Service-Worker-Allowed", "/");
+  if (import_fs.default.existsSync(swPath)) {
+    return res.sendFile(swPath);
+  }
+  return res.send(`
+    self.addEventListener('install', () => self.skipWaiting());
+    self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+    self.addEventListener('push', (e) => {
+      const data = e.data ? e.data.json() : { title: 'Auto-Engine Notification', body: 'New lead activity' };
+      self.registration.showNotification(data.title, { body: data.body, icon: '/public/favicon.svg' });
+    });
+  `);
+});
+router.get("/api/auto-engine/vapid-public-key", (req, res) => {
+  return res.json({
+    success: true,
+    publicKey: vapidKeys.publicKey
+  });
+});
+router.post("/api/auto-engine/save-subscription", async (req, res) => {
+  try {
+    const rawSub = req.body?.subscription || req.body;
+    const userAgent = req.body?.userAgent || req.headers["user-agent"] || "Unknown Browser";
+    if (!rawSub || !rawSub.endpoint || !rawSub.keys?.p256dh || !rawSub.keys?.auth) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid Push Subscription payload. Endpoint and keys (p256dh, auth) are required."
+      });
+    }
+    const subDoc = {
+      endpoint: rawSub.endpoint,
+      keys: {
+        p256dh: rawSub.keys.p256dh,
+        auth: rawSub.keys.auth
+      },
+      userAgent,
+      createdAt: /* @__PURE__ */ new Date()
+    };
+    if (import_mongoose2.default.connection.readyState === 1) {
+      try {
+        await PushSubscription.findOneAndUpdate(
+          { endpoint: rawSub.endpoint },
+          subDoc,
+          { upsert: true, new: true }
+        );
+      } catch (dbErr) {
+        console.warn("[AutoEngine] Mongoose save subscription fallback:", dbErr);
+      }
+    }
+    const localSubs = readJsonFile(SUBSCRIPTIONS_FILE, []);
+    const existingIdx = localSubs.findIndex((s) => s.endpoint === rawSub.endpoint);
+    if (existingIdx >= 0) {
+      localSubs[existingIdx] = subDoc;
+    } else {
+      localSubs.push(subDoc);
+    }
+    writeJsonFile(SUBSCRIPTIONS_FILE, localSubs);
+    try {
+      const globalPushPath = import_path.default.join(DATA_DIR, "push_subscriptions.json");
+      const globalSubs = readJsonFile(globalPushPath, []);
+      if (!globalSubs.some((g) => g.endpoint === rawSub.endpoint)) {
+        globalSubs.push({
+          endpoint: rawSub.endpoint,
+          subscription: rawSub,
+          userEmail: req.body?.userEmail || "auto-engine-admin@visualsky.pro",
+          userAgent,
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        });
+        writeJsonFile(globalPushPath, globalSubs);
+      }
+    } catch {
+    }
+    return res.json({
+      success: true,
+      message: "Mobile Web Push subscription saved successfully! \u{1F514}",
+      subscription: subDoc
+    });
+  } catch (err) {
+    console.error("[AutoEngine] Save subscription error:", err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "Failed to save push subscription"
+    });
+  }
+});
+router.post("/api/auto-engine/test-push", async (req, res) => {
+  try {
+    const localSubs = readJsonFile(SUBSCRIPTIONS_FILE, []);
+    const targetEndpoint = req.body?.endpoint;
+    let targetSub = targetEndpoint ? localSubs.find((s) => s.endpoint === targetEndpoint) : localSubs[localSubs.length - 1];
+    if (!targetSub && import_mongoose2.default.connection.readyState === 1) {
+      targetSub = await PushSubscription.findOne().sort({ createdAt: -1 });
+    }
+    if (!targetSub) {
+      return res.status(404).json({
+        success: false,
+        error: 'No active push subscriptions registered. Click "Enable Mobile Push Notifications" first!'
+      });
+    }
+    const payload = JSON.stringify({
+      title: "\u26A1 7-Day Auto Engine Active",
+      body: "\u{1F514} Mobile Push Notifications are now paired with your phone browser! Day 1 Lead Miner ready.",
+      tag: "auto-engine-test-" + Date.now(),
+      linkTab: "auto-engine",
+      data: { url: "/auto-engine" }
+    });
+    const pushObject = targetSub.keys ? { endpoint: targetSub.endpoint, keys: targetSub.keys } : targetSub.subscription || targetSub;
+    await import_web_push.default.sendNotification(pushObject, payload);
+    return res.json({
+      success: true,
+      message: "Test notification sent to your device! Check your phone lock screen or notification tray."
+    });
+  } catch (err) {
+    console.error("[AutoEngine] Test push failed:", err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "Failed to dispatch test push notification"
+    });
+  }
+});
+router.get("/api/auto-engine/campaigns", async (req, res) => {
+  try {
+    let campaigns = [];
+    if (import_mongoose2.default.connection.readyState === 1) {
+      try {
+        campaigns = await AutoCampaign.find().sort({ createdAt: -1 });
+      } catch {
+      }
+    }
+    if (campaigns.length === 0) {
+      campaigns = readJsonFile(CAMPAIGNS_FILE, []);
+    }
+    return res.json({ success: true, campaigns });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message });
+  }
+});
+router.post("/api/auto-engine/campaigns", async (req, res) => {
+  try {
+    const {
+      campaignName,
+      niches,
+      targetCities,
+      daysDuration,
+      dailyQuotaPerSender,
+      emailPitchTemplate,
+      portfolioLinks,
+      status
+    } = req.body;
+    if (!campaignName || !niches || niches.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Campaign name and at least one target niche are required."
+      });
+    }
+    const campaignData = {
+      campaignName: String(campaignName).trim(),
+      niches: Array.isArray(niches) ? niches : [niches],
+      targetCities: Array.isArray(targetCities) ? targetCities : [targetCities],
+      daysDuration: Number(daysDuration) || 7,
+      currentDay: 1,
+      dailyQuotaPerSender: Number(dailyQuotaPerSender) || 30,
+      emailPitchTemplate: emailPitchTemplate || "",
+      portfolioLinks: Array.isArray(portfolioLinks) ? portfolioLinks : [],
+      status: status || "Active",
+      updatedAt: /* @__PURE__ */ new Date()
+    };
+    let savedCampaign = null;
+    if (import_mongoose2.default.connection.readyState === 1) {
+      try {
+        savedCampaign = await AutoCampaign.create(campaignData);
+      } catch (err) {
+        console.warn("[AutoEngine] Mongoose create error, writing to file store:", err);
+      }
+    }
+    const localCampaigns = readJsonFile(CAMPAIGNS_FILE, []);
+    const newEntry = savedCampaign ? savedCampaign.toObject() : { ...campaignData, _id: "camp_" + Date.now(), createdAt: /* @__PURE__ */ new Date() };
+    localCampaigns.unshift(newEntry);
+    writeJsonFile(CAMPAIGNS_FILE, localCampaigns);
+    return res.json({
+      success: true,
+      message: "7-Day Auto Campaign configured and launched for Day 1! \u{1F680}",
+      campaign: newEntry
+    });
+  } catch (err) {
+    console.error("[AutoEngine] Campaign creation error:", err);
+    return res.status(500).json({ success: false, error: err?.message || "Failed to save campaign" });
+  }
+});
+router.post("/api/auto-campaign/create-multi", async (req, res) => {
+  try {
+    const rawNiches = req.body?.niches;
+    const rawCities = req.body?.targetCities || req.body?.cities;
+    const dailyLimit = Number(req.body?.dailyLimitPerSender || req.body?.dailyQuotaPerSender) || 30;
+    const portfolioUrl = req.body?.portfolioUrl || req.body?.reelUrl || "";
+    const pitch = req.body?.servicePitch || req.body?.pitchTemplate || req.body?.emailPitchTemplate || "";
+    const niches = Array.isArray(rawNiches) ? rawNiches : String(rawNiches || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const targetCities = Array.isArray(rawCities) ? rawCities : String(rawCities || "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (niches.length === 0) {
+      return res.status(400).json({ success: false, error: "At least one target niche is required." });
+    }
+    const campaignRecord = {
+      _id: "camp_" + Date.now(),
+      campaignName: `${niches[0]} Multi-Niche 7-Day Auto Campaign`,
+      niches,
+      targetCities: targetCities.length ? targetCities : ["Global"],
+      daysDuration: 7,
+      currentDay: 1,
+      dailyQuotaPerSender: dailyLimit,
+      emailPitchTemplate: pitch,
+      portfolioLinks: portfolioUrl ? [{ niche: niches[0], link: portfolioUrl }] : [],
+      status: "Active",
+      createdAt: /* @__PURE__ */ new Date(),
+      updatedAt: /* @__PURE__ */ new Date()
+    };
+    if (import_mongoose2.default.connection.readyState === 1) {
+      try {
+        await AutoCampaign.create(campaignRecord);
+      } catch {
+      }
+    }
+    const localCampaigns = readJsonFile(CAMPAIGNS_FILE, []);
+    localCampaigns.unshift(campaignRecord);
+    writeJsonFile(CAMPAIGNS_FILE, localCampaigns);
+    return res.json({
+      success: true,
+      message: "\u26A1 Scalable 7-Day Auto Engine Launched Successfully!",
+      campaign: campaignRecord
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Failed to create multi-campaign" });
+  }
+});
+router.get("/api/auto-engine/senders-health", async (_req, res) => {
+  try {
+    const senders = readJsonFile(SENDERS_FILE, [
+      {
+        email: process.env.SMTP_USER || "dispatch@visualsky.pro",
+        host: process.env.SMTP_HOST || "mail.visualsky.pro",
+        dailyLimit: 30,
+        sentToday: 14,
+        warmupScore: "98%",
+        status: "Active (Healthy \u{1F7E2})"
+      }
+    ]);
+    return res.json({ success: true, senders });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message });
+  }
+});
+router.get("/api/auto-engine/recent-stream", async (_req, res) => {
+  try {
+    const ledger = readJsonFile(LEDGER_FILE, []);
+    const stream = ledger.length > 0 ? ledger.slice(0, 8) : [
+      {
+        recipient: "director@lumosvideo.co.uk",
+        businessName: "Lumos Video Studio",
+        niche: "Videographer",
+        city: "London",
+        step: "Day 1 Initial Pitch",
+        status: "Delivered",
+        time: "Just now"
+      },
+      {
+        recipient: "dr.harris@brightsmiledental.com",
+        businessName: "BrightSmile Clinic",
+        niche: "Dentist",
+        city: "Manchester",
+        step: "Day 1 Initial Pitch",
+        status: "Delivered",
+        time: "4 mins ago"
+      },
+      {
+        recipient: "coach.mark@ironpeakgym.com",
+        businessName: "IronPeak Fitness",
+        niche: "Gym Coach",
+        city: "New York",
+        step: "Day 1 Initial Pitch",
+        status: "Delivered",
+        time: "12 mins ago"
+      }
+    ];
+    return res.json({ success: true, stream });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message });
+  }
+});
+router.get("/api/auto-engine/stats", async (req, res) => {
+  try {
+    const campaigns = readJsonFile(CAMPAIGNS_FILE, []);
+    const subscriptions = readJsonFile(SUBSCRIPTIONS_FILE, []);
+    const ledger = readJsonFile(LEDGER_FILE, []);
+    const senders = readJsonFile(SENDERS_FILE, []);
+    const activeCampaigns = campaigns.filter((c) => c.status === "Active").length;
+    return res.json({
+      success: true,
+      stats: {
+        activeCampaigns,
+        totalCampaigns: campaigns.length,
+        currentDay: campaigns[0]?.currentDay || 1,
+        totalDays: campaigns[0]?.daysDuration || 7,
+        leadsContacted: ledger.length,
+        senderAccounts: Math.max(senders.length, 1),
+        dailyQuota: campaigns[0]?.dailyQuotaPerSender || 30,
+        pushSubscribers: subscriptions.length,
+        vapidConfigured: Boolean(vapidKeys.publicKey)
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message });
+  }
+});
+var autoEngine_default = router;
+
+// server.ts
+var webpush2 = null;
 try {
-  webpush = require("web-push");
+  webpush2 = require("web-push");
 } catch (_wpErr) {
 }
 import_dotenv.default.config();
@@ -71,8 +577,8 @@ var getPort = () => {
   return 3e3;
 };
 var PORT = getPort();
-var app = (0, import_express.default)();
-app.use(import_express.default.json({ limit: "50mb" }));
+var app = (0, import_express2.default)();
+app.use(import_express2.default.json({ limit: "50mb" }));
 app.use((err, _req, res, next) => {
   if (err instanceof SyntaxError && "body" in err) {
     res.setHeader("Content-Type", "application/json");
@@ -84,72 +590,72 @@ app.use((err, _req, res, next) => {
   }
   next(err);
 });
-var DATA_DIR = process.env.VERCEL ? import_path.default.join("/tmp", ".data") : import_path.default.join(process.cwd(), ".data");
-if (!import_fs.default.existsSync(DATA_DIR)) {
+var DATA_DIR2 = process.env.VERCEL ? import_path2.default.join("/tmp", ".data") : import_path2.default.join(process.cwd(), ".data");
+if (!import_fs2.default.existsSync(DATA_DIR2)) {
   try {
-    import_fs.default.mkdirSync(DATA_DIR, { recursive: true });
+    import_fs2.default.mkdirSync(DATA_DIR2, { recursive: true });
   } catch {
   }
 }
 var getWorkspaceFilePath = (identifier) => {
   const clean = (identifier || "").trim().toLowerCase();
   const safe = clean.replace(/[^a-z0-9_.-]/g, "_");
-  return import_path.default.join(DATA_DIR, `workspace_${safe}.json`);
+  return import_path2.default.join(DATA_DIR2, `workspace_${safe}.json`);
 };
 var getUserDataFilePath = (email) => {
   const cleanEmail = (email || "").trim().toLowerCase();
   const safeEmail = cleanEmail.replace(/[^a-z0-9_.-]/g, "_");
-  return import_path.default.join(DATA_DIR, `user_${safeEmail}.json`);
+  return import_path2.default.join(DATA_DIR2, `user_${safeEmail}.json`);
 };
 var getAiCopilotFilePath = (identifier) => {
   const clean = (identifier || "").trim().toLowerCase();
   const safe = clean.replace(/[^a-z0-9_.-]/g, "_");
-  return import_path.default.join(DATA_DIR, `ai_copilot_${safe}.json`);
+  return import_path2.default.join(DATA_DIR2, `ai_copilot_${safe}.json`);
 };
-var USERS_LIST_FILE = import_path.default.join(DATA_DIR, "users_registry.json");
+var USERS_LIST_FILE = import_path2.default.join(DATA_DIR2, "users_registry.json");
 try {
-  const seedUsersFile = import_path.default.join(process.cwd(), "data", "users_registry.json");
-  if (!import_fs.default.existsSync(USERS_LIST_FILE) && import_fs.default.existsSync(seedUsersFile)) {
-    import_fs.default.copyFileSync(seedUsersFile, USERS_LIST_FILE);
+  const seedUsersFile = import_path2.default.join(process.cwd(), "data", "users_registry.json");
+  if (!import_fs2.default.existsSync(USERS_LIST_FILE) && import_fs2.default.existsSync(seedUsersFile)) {
+    import_fs2.default.copyFileSync(seedUsersFile, USERS_LIST_FILE);
   }
 } catch {
 }
-var PAYMENT_SETTINGS_FILE = import_path.default.join(DATA_DIR, "payment_settings.json");
-var SUBSCRIPTIONS_FILE = import_path.default.join(DATA_DIR, "subscriptions_registry.json");
-var TRACKING_EVENTS_FILE = import_path.default.join(DATA_DIR, "tracking_events.json");
-var DRIVE_STORAGE_SETTINGS_FILE = import_path.default.join(DATA_DIR, "drive_storage_settings.json");
-var VAPID_KEYS_FILE = import_path.default.join(DATA_DIR, "vapid_keys.json");
-var PUSH_SUBSCRIPTIONS_FILE = import_path.default.join(DATA_DIR, "push_subscriptions.json");
-var NOTIFIED_IMAP_UIDS_FILE = import_path.default.join(DATA_DIR, "notified_imap_uids.json");
+var PAYMENT_SETTINGS_FILE = import_path2.default.join(DATA_DIR2, "payment_settings.json");
+var SUBSCRIPTIONS_FILE2 = import_path2.default.join(DATA_DIR2, "subscriptions_registry.json");
+var TRACKING_EVENTS_FILE = import_path2.default.join(DATA_DIR2, "tracking_events.json");
+var DRIVE_STORAGE_SETTINGS_FILE = import_path2.default.join(DATA_DIR2, "drive_storage_settings.json");
+var VAPID_KEYS_FILE2 = import_path2.default.join(DATA_DIR2, "vapid_keys.json");
+var PUSH_SUBSCRIPTIONS_FILE = import_path2.default.join(DATA_DIR2, "push_subscriptions.json");
+var NOTIFIED_IMAP_UIDS_FILE = import_path2.default.join(DATA_DIR2, "notified_imap_uids.json");
 var TRANSPARENT_GIF_BUFFER = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
 var initVapidKeys = () => {
   try {
-    if (import_fs.default.existsSync(VAPID_KEYS_FILE)) {
-      const saved = JSON.parse(import_fs.default.readFileSync(VAPID_KEYS_FILE, "utf-8"));
+    if (import_fs2.default.existsSync(VAPID_KEYS_FILE2)) {
+      const saved = JSON.parse(import_fs2.default.readFileSync(VAPID_KEYS_FILE2, "utf-8"));
       if (saved && saved.publicKey && saved.privateKey) {
         return saved;
       }
     }
   } catch {
   }
-  if (!webpush) {
+  if (!webpush2) {
     return { publicKey: "", privateKey: "" };
   }
   try {
-    const generated = webpush.generateVAPIDKeys();
-    import_fs.default.writeFileSync(VAPID_KEYS_FILE, JSON.stringify(generated, null, 2), "utf-8");
+    const generated = webpush2.generateVAPIDKeys();
+    import_fs2.default.writeFileSync(VAPID_KEYS_FILE2, JSON.stringify(generated, null, 2), "utf-8");
     return generated;
   } catch {
     return { publicKey: "", privateKey: "" };
   }
 };
-var vapidKeys = initVapidKeys();
-if (webpush && vapidKeys.publicKey && vapidKeys.privateKey) {
+var vapidKeys2 = initVapidKeys();
+if (webpush2 && vapidKeys2.publicKey && vapidKeys2.privateKey) {
   try {
-    webpush.setVapidDetails(
+    webpush2.setVapidDetails(
       "mailto:founder@visualsky.pro",
-      vapidKeys.publicKey,
-      vapidKeys.privateKey
+      vapidKeys2.publicKey,
+      vapidKeys2.privateKey
     );
   } catch (err) {
     console.warn("[WebPush] VAPID init warning:", err);
@@ -157,8 +663,8 @@ if (webpush && vapidKeys.publicKey && vapidKeys.privateKey) {
 }
 var loadPushSubscriptions = () => {
   try {
-    if (import_fs.default.existsSync(PUSH_SUBSCRIPTIONS_FILE)) {
-      const parsed = JSON.parse(import_fs.default.readFileSync(PUSH_SUBSCRIPTIONS_FILE, "utf-8"));
+    if (import_fs2.default.existsSync(PUSH_SUBSCRIPTIONS_FILE)) {
+      const parsed = JSON.parse(import_fs2.default.readFileSync(PUSH_SUBSCRIPTIONS_FILE, "utf-8"));
       if (Array.isArray(parsed)) {
         return parsed.filter((item) => item && item.endpoint && item.subscription);
       }
@@ -169,13 +675,13 @@ var loadPushSubscriptions = () => {
 };
 var savePushSubscriptions = (records) => {
   try {
-    import_fs.default.writeFileSync(PUSH_SUBSCRIPTIONS_FILE, JSON.stringify(records, null, 2), "utf-8");
+    import_fs2.default.writeFileSync(PUSH_SUBSCRIPTIONS_FILE, JSON.stringify(records, null, 2), "utf-8");
   } catch {
   }
 };
 var dispatchWebPushNotification = async (payload, targetUserEmail) => {
   const allSubs = loadPushSubscriptions();
-  if (!webpush || allSubs.length === 0) return;
+  if (!webpush2 || allSubs.length === 0) return;
   const cleanTarget = String(targetUserEmail || "").trim().toLowerCase();
   let matchingSubs = cleanTarget ? allSubs.filter((s) => !s.userEmail || s.userEmail.toLowerCase() === cleanTarget) : allSubs;
   if (matchingSubs.length === 0) {
@@ -189,7 +695,7 @@ var dispatchWebPushNotification = async (payload, targetUserEmail) => {
   await Promise.all(
     matchingSubs.map(async (rec) => {
       try {
-        await webpush.sendNotification(rec.subscription, jsonPayload, {
+        await webpush2.sendNotification(rec.subscription, jsonPayload, {
           TTL: 86400,
           urgency: "high"
         });
@@ -207,8 +713,8 @@ var dispatchWebPushNotification = async (payload, targetUserEmail) => {
 };
 var loadNotifiedImapUids = () => {
   try {
-    if (import_fs.default.existsSync(NOTIFIED_IMAP_UIDS_FILE)) {
-      const parsed = JSON.parse(import_fs.default.readFileSync(NOTIFIED_IMAP_UIDS_FILE, "utf-8"));
+    if (import_fs2.default.existsSync(NOTIFIED_IMAP_UIDS_FILE)) {
+      const parsed = JSON.parse(import_fs2.default.readFileSync(NOTIFIED_IMAP_UIDS_FILE, "utf-8"));
       if (parsed && typeof parsed === "object") return parsed;
     }
   } catch {
@@ -217,7 +723,7 @@ var loadNotifiedImapUids = () => {
 };
 var saveNotifiedImapUids = (mapObj) => {
   try {
-    import_fs.default.writeFileSync(NOTIFIED_IMAP_UIDS_FILE, JSON.stringify(mapObj, null, 2), "utf-8");
+    import_fs2.default.writeFileSync(NOTIFIED_IMAP_UIDS_FILE, JSON.stringify(mapObj, null, 2), "utf-8");
   } catch {
   }
 };
@@ -226,7 +732,7 @@ var lastImapSyncTimestampByUser = /* @__PURE__ */ new Map();
 app.get("/api/push/vapid-public-key", (_req, res) => {
   return res.json({
     success: true,
-    publicKey: vapidKeys.publicKey
+    publicKey: vapidKeys2.publicKey
   });
 });
 app.post("/api/push/subscribe", (req, res) => {
@@ -297,8 +803,8 @@ var DEFAULT_PAYMENT_SETTINGS = {
 };
 var getPaymentSettings = () => {
   try {
-    if (import_fs.default.existsSync(PAYMENT_SETTINGS_FILE)) {
-      const parsed = JSON.parse(import_fs.default.readFileSync(PAYMENT_SETTINGS_FILE, "utf-8"));
+    if (import_fs2.default.existsSync(PAYMENT_SETTINGS_FILE)) {
+      const parsed = JSON.parse(import_fs2.default.readFileSync(PAYMENT_SETTINGS_FILE, "utf-8"));
       if (parsed && parsed.bkashPersonalNumber) {
         return { ...DEFAULT_PAYMENT_SETTINGS, ...parsed };
       }
@@ -308,12 +814,12 @@ var getPaymentSettings = () => {
   return DEFAULT_PAYMENT_SETTINGS;
 };
 var otpStore = /* @__PURE__ */ new Map();
-var SIGNUP_OTP_STORE_FILE = import_path.default.join(DATA_DIR, "signup_otp_store.json");
+var SIGNUP_OTP_STORE_FILE = import_path2.default.join(DATA_DIR2, "signup_otp_store.json");
 var signupOtpStore = /* @__PURE__ */ new Map();
 var loadSignupOtpStoreFromDisk = () => {
   try {
-    if (import_fs.default.existsSync(SIGNUP_OTP_STORE_FILE)) {
-      const raw = JSON.parse(import_fs.default.readFileSync(SIGNUP_OTP_STORE_FILE, "utf-8"));
+    if (import_fs2.default.existsSync(SIGNUP_OTP_STORE_FILE)) {
+      const raw = JSON.parse(import_fs2.default.readFileSync(SIGNUP_OTP_STORE_FILE, "utf-8"));
       if (raw && typeof raw === "object") {
         for (const [k, v] of Object.entries(raw)) {
           if (v && typeof v === "object") {
@@ -333,17 +839,17 @@ var saveSignupOtpStoreToDisk = () => {
         obj[k] = v;
       }
     }
-    import_fs.default.writeFileSync(SIGNUP_OTP_STORE_FILE, JSON.stringify(obj, null, 2), "utf-8");
+    import_fs2.default.writeFileSync(SIGNUP_OTP_STORE_FILE, JSON.stringify(obj, null, 2), "utf-8");
   } catch {
   }
 };
 loadSignupOtpStoreFromDisk();
-var BKASH_OTP_STORE_FILE = import_path.default.join(DATA_DIR, "bkash_otp_store.json");
+var BKASH_OTP_STORE_FILE = import_path2.default.join(DATA_DIR2, "bkash_otp_store.json");
 var bkashPaymentOtpStore = /* @__PURE__ */ new Map();
 var loadBkashOtpStoreFromDisk = () => {
   try {
-    if (import_fs.default.existsSync(BKASH_OTP_STORE_FILE)) {
-      const raw = JSON.parse(import_fs.default.readFileSync(BKASH_OTP_STORE_FILE, "utf-8"));
+    if (import_fs2.default.existsSync(BKASH_OTP_STORE_FILE)) {
+      const raw = JSON.parse(import_fs2.default.readFileSync(BKASH_OTP_STORE_FILE, "utf-8"));
       if (raw && typeof raw === "object") {
         for (const [k, v] of Object.entries(raw)) {
           if (v && typeof v === "object") {
@@ -363,7 +869,7 @@ var saveBkashOtpStoreToDisk = () => {
         obj[k] = v;
       }
     }
-    import_fs.default.writeFileSync(BKASH_OTP_STORE_FILE, JSON.stringify(obj, null, 2), "utf-8");
+    import_fs2.default.writeFileSync(BKASH_OTP_STORE_FILE, JSON.stringify(obj, null, 2), "utf-8");
   } catch {
   }
 };
@@ -507,7 +1013,7 @@ app.post("/api/settings/payment", (req, res) => {
       bkashPassword: bkashPassword !== void 0 ? String(bkashPassword).trim() : existing.bkashPassword,
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
-    import_fs.default.writeFileSync(PAYMENT_SETTINGS_FILE, JSON.stringify(updated, null, 2), "utf-8");
+    import_fs2.default.writeFileSync(PAYMENT_SETTINGS_FILE, JSON.stringify(updated, null, 2), "utf-8");
     return res.json({ success: true, settings: updated });
   } catch (err) {
     return res.status(500).json({ success: false, error: err?.message || "Failed to save payment settings" });
@@ -931,9 +1437,9 @@ app.post("/api/bkash/submit-manual-payment", async (req, res) => {
       });
     }
     let existingUsers = [];
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+    if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
       try {
-        existingUsers = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
+        existingUsers = JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8"));
       } catch {
       }
     }
@@ -1015,9 +1521,9 @@ app.post("/api/subscriptions/submit", async (req, res) => {
       aiCredits: Number(aiCredits) || 2500
     };
     let existingUsers = [];
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+    if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
       try {
-        existingUsers = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
+        existingUsers = JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8"));
       } catch {
       }
     }
@@ -1054,11 +1560,11 @@ app.post("/api/subscriptions/submit", async (req, res) => {
       };
       existingUsers.unshift(updatedUser);
     }
-    import_fs.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
+    import_fs2.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
     let subs = [];
-    if (import_fs.default.existsSync(SUBSCRIPTIONS_FILE)) {
+    if (import_fs2.default.existsSync(SUBSCRIPTIONS_FILE2)) {
       try {
-        subs = JSON.parse(import_fs.default.readFileSync(SUBSCRIPTIONS_FILE, "utf-8"));
+        subs = JSON.parse(import_fs2.default.readFileSync(SUBSCRIPTIONS_FILE2, "utf-8"));
       } catch {
       }
     }
@@ -1071,7 +1577,7 @@ app.post("/api/subscriptions/submit", async (req, res) => {
       ...paymentInfo,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     });
-    import_fs.default.writeFileSync(SUBSCRIPTIONS_FILE, JSON.stringify(subs, null, 2), "utf-8");
+    import_fs2.default.writeFileSync(SUBSCRIPTIONS_FILE2, JSON.stringify(subs, null, 2), "utf-8");
     sendOwnerManualBkashNotificationEmail({
       customerName: updatedUser.name,
       customerEmail: updatedUser.email,
@@ -1099,9 +1605,9 @@ app.post("/api/subscriptions/verify", async (req, res) => {
     const cleanEmail = String(email || "").trim().toLowerCase();
     const targetStatus = status === "rejected" ? "rejected" : status === "pending" ? "pending" : "verified";
     let existingUsers = [];
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+    if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
       try {
-        existingUsers = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
+        existingUsers = JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8"));
       } catch {
       }
     }
@@ -1121,11 +1627,11 @@ app.post("/api/subscriptions/verify", async (req, res) => {
       }
       return u;
     });
-    import_fs.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
+    import_fs2.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
     let subs = [];
-    if (import_fs.default.existsSync(SUBSCRIPTIONS_FILE)) {
+    if (import_fs2.default.existsSync(SUBSCRIPTIONS_FILE2)) {
       try {
-        subs = JSON.parse(import_fs.default.readFileSync(SUBSCRIPTIONS_FILE, "utf-8"));
+        subs = JSON.parse(import_fs2.default.readFileSync(SUBSCRIPTIONS_FILE2, "utf-8"));
       } catch {
       }
     }
@@ -1135,7 +1641,7 @@ app.post("/api/subscriptions/verify", async (req, res) => {
       }
       return s;
     });
-    import_fs.default.writeFileSync(SUBSCRIPTIONS_FILE, JSON.stringify(subs, null, 2), "utf-8");
+    import_fs2.default.writeFileSync(SUBSCRIPTIONS_FILE2, JSON.stringify(subs, null, 2), "utf-8");
     return res.json({
       success: true,
       status: targetStatus,
@@ -1154,9 +1660,9 @@ app.post("/api/users/admin-update", (req, res) => {
   try {
     const { userId, email, updates, deleteAccount } = req.body || {};
     let existingUsers = [];
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+    if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
       try {
-        existingUsers = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
+        existingUsers = JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8"));
       } catch {
       }
     }
@@ -1165,7 +1671,7 @@ app.post("/api/users/admin-update", (req, res) => {
       existingUsers = existingUsers.filter(
         (u) => u.id !== userId && (!cleanEmail || u.email?.toLowerCase() !== cleanEmail)
       );
-      import_fs.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
+      import_fs2.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
       return res.json({ success: true, users: existingUsers });
     }
     const idx = existingUsers.findIndex(
@@ -1178,7 +1684,7 @@ app.post("/api/users/admin-update", (req, res) => {
         paymentInfo: updates.paymentInfo ? { ...existingUsers[idx].paymentInfo || {}, ...updates.paymentInfo } : existingUsers[idx].paymentInfo,
         permissions: updates.permissions ? { ...existingUsers[idx].permissions || {}, ...updates.permissions } : existingUsers[idx].permissions
       };
-      import_fs.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
+      import_fs2.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
       return res.json({ success: true, user: existingUsers[idx], users: existingUsers });
     }
     return res.status(404).json({ success: false, error: "User not found" });
@@ -1253,17 +1759,17 @@ var sanitizeLiveUsers = (list) => {
 app.get("/api/users/registry", (_req, res) => {
   try {
     let subs = [];
-    if (import_fs.default.existsSync(SUBSCRIPTIONS_FILE)) {
+    if (import_fs2.default.existsSync(SUBSCRIPTIONS_FILE2)) {
       try {
-        subs = JSON.parse(import_fs.default.readFileSync(SUBSCRIPTIONS_FILE, "utf-8"));
+        subs = JSON.parse(import_fs2.default.readFileSync(SUBSCRIPTIONS_FILE2, "utf-8"));
       } catch {
       }
     }
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
-      const raw = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
+    if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
+      const raw = JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8"));
       const liveUsers = sanitizeLiveUsers(raw);
       if (liveUsers.length !== raw.length) {
-        import_fs.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(liveUsers, null, 2), "utf-8");
+        import_fs2.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(liveUsers, null, 2), "utf-8");
       }
       return res.json({
         success: true,
@@ -1292,9 +1798,9 @@ app.post("/api/users/sync", (req, res) => {
     const { users } = req.body;
     if (Array.isArray(users)) {
       let existingUsers = [];
-      if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+      if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
         try {
-          existingUsers = sanitizeLiveUsers(JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8")));
+          existingUsers = sanitizeLiveUsers(JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8")));
         } catch {
         }
       }
@@ -1311,7 +1817,7 @@ app.post("/api/users/sync", (req, res) => {
         }
       }
       const mergedUsers = Array.from(userMap.values());
-      import_fs.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(mergedUsers, null, 2), "utf-8");
+      import_fs2.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(mergedUsers, null, 2), "utf-8");
       return res.json({ success: true, count: mergedUsers.length, users: mergedUsers });
     }
     return res.status(400).json({ error: "Invalid users array" });
@@ -1329,9 +1835,9 @@ app.post("/api/auth/send-otp", async (req, res) => {
     }
     const cleanEmail = email.trim().toLowerCase();
     let existingUsers = [];
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+    if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
       try {
-        existingUsers = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
+        existingUsers = JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8"));
       } catch {
       }
     }
@@ -1458,9 +1964,9 @@ This code will expire in 15 minutes. If you did not request this password reset,
         customSmtp = req.body.smtpAccounts.find((s) => s.password && s.host && !s.isTrash);
       }
       const userDataPath = getUserDataFilePath(cleanEmail);
-      if (!customSmtp && import_fs.default.existsSync(userDataPath)) {
+      if (!customSmtp && import_fs2.default.existsSync(userDataPath)) {
         try {
-          const uData = JSON.parse(import_fs.default.readFileSync(userDataPath, "utf-8"));
+          const uData = JSON.parse(import_fs2.default.readFileSync(userDataPath, "utf-8"));
           customSmtp = uData.smtpAccounts?.find((s) => s.password && s.host && !s.isTrash);
         } catch {
         }
@@ -1552,16 +2058,16 @@ app.post("/api/auth/reset-password", async (req, res) => {
       return res.status(400).json({ success: false, error: "Invalid or expired 6-digit verification code. Please request a new code." });
     }
     let existingUsers = [];
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+    if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
       try {
-        existingUsers = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
+        existingUsers = JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8"));
       } catch {
       }
     }
     const userIndex = existingUsers.findIndex((u) => u.email?.toLowerCase() === cleanEmail);
     if (userIndex !== -1) {
       existingUsers[userIndex].password = newPassword;
-      import_fs.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
+      import_fs2.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
     } else {
       return res.status(404).json({
         success: false,
@@ -1787,9 +2293,9 @@ app.post("/api/auth/send-signup-otp", async (req, res) => {
       });
     }
     let existingUsers = [];
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+    if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
       try {
-        existingUsers = sanitizeLiveUsers(JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8")));
+        existingUsers = sanitizeLiveUsers(JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8")));
       } catch {
       }
     }
@@ -2049,9 +2555,9 @@ app.post("/api/auth/register", (req, res) => {
       });
     }
     let existingUsers = [];
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+    if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
       try {
-        existingUsers = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
+        existingUsers = JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8"));
       } catch {
       }
     }
@@ -2113,14 +2619,14 @@ app.post("/api/auth/register", (req, res) => {
     };
     existingUsers.unshift(newUser);
     try {
-      import_fs.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
+      import_fs2.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
     } catch {
     }
     if (paymentInfo && paymentInfo.trxId) {
       try {
         let subs = [];
-        if (import_fs.default.existsSync(SUBSCRIPTIONS_FILE)) {
-          subs = JSON.parse(import_fs.default.readFileSync(SUBSCRIPTIONS_FILE, "utf-8"));
+        if (import_fs2.default.existsSync(SUBSCRIPTIONS_FILE2)) {
+          subs = JSON.parse(import_fs2.default.readFileSync(SUBSCRIPTIONS_FILE2, "utf-8"));
         }
         subs.unshift({
           id: `sub-${Date.now()}`,
@@ -2131,7 +2637,7 @@ app.post("/api/auth/register", (req, res) => {
           ...paymentInfo,
           createdAt: (/* @__PURE__ */ new Date()).toISOString()
         });
-        import_fs.default.writeFileSync(SUBSCRIPTIONS_FILE, JSON.stringify(subs, null, 2), "utf-8");
+        import_fs2.default.writeFileSync(SUBSCRIPTIONS_FILE2, JSON.stringify(subs, null, 2), "utf-8");
       } catch {
       }
       const currentSettings = getPaymentSettings();
@@ -2199,9 +2705,9 @@ app.post("/api/auth/google", (req, res) => {
     }
     const cleanEmail = String(email).trim().toLowerCase();
     let existingUsers = [];
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+    if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
       try {
-        existingUsers = sanitizeLiveUsers(JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8")));
+        existingUsers = sanitizeLiveUsers(JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8")));
       } catch {
       }
     }
@@ -2279,14 +2785,14 @@ app.post("/api/auth/google", (req, res) => {
       }
     }
     try {
-      import_fs.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
+      import_fs2.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
     } catch {
     }
     if (paymentInfo && paymentInfo.trxId) {
       try {
         let subs = [];
-        if (import_fs.default.existsSync(SUBSCRIPTIONS_FILE)) {
-          subs = JSON.parse(import_fs.default.readFileSync(SUBSCRIPTIONS_FILE, "utf-8"));
+        if (import_fs2.default.existsSync(SUBSCRIPTIONS_FILE2)) {
+          subs = JSON.parse(import_fs2.default.readFileSync(SUBSCRIPTIONS_FILE2, "utf-8"));
         }
         subs.unshift({
           id: `sub-${Date.now()}`,
@@ -2297,7 +2803,7 @@ app.post("/api/auth/google", (req, res) => {
           ...paymentInfo,
           createdAt: (/* @__PURE__ */ new Date()).toISOString()
         });
-        import_fs.default.writeFileSync(SUBSCRIPTIONS_FILE, JSON.stringify(subs, null, 2), "utf-8");
+        import_fs2.default.writeFileSync(SUBSCRIPTIONS_FILE2, JSON.stringify(subs, null, 2), "utf-8");
       } catch {
       }
       const currentSettings = getPaymentSettings();
@@ -2334,9 +2840,9 @@ app.post("/api/auth/verify-credentials", (req, res) => {
     }
     const cleanEmail = email.trim().toLowerCase();
     let existingUsers = [];
-    if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+    if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
       try {
-        existingUsers = sanitizeLiveUsers(JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8")));
+        existingUsers = sanitizeLiveUsers(JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8")));
       } catch {
       }
     }
@@ -2389,7 +2895,7 @@ app.post("/api/auth/verify-credentials", (req, res) => {
         user.plan = "Enterprise";
       }
       try {
-        import_fs.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
+        import_fs2.default.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), "utf-8");
       } catch {
       }
       const resolvedUser = user || existingUsers.find((u) => u.email?.toLowerCase() === cleanEmail);
@@ -2589,9 +3095,9 @@ function resolveUserAliasCandidates(primaryId, secondaryId, extraEmail, extraUse
   const rawList = [primaryId, secondaryId, extraEmail, extraUserId].filter(Boolean);
   const candidates = /* @__PURE__ */ new Set();
   let existingUsers = [];
-  if (import_fs.default.existsSync(USERS_LIST_FILE)) {
+  if (import_fs2.default.existsSync(USERS_LIST_FILE)) {
     try {
-      existingUsers = JSON.parse(import_fs.default.readFileSync(USERS_LIST_FILE, "utf-8"));
+      existingUsers = JSON.parse(import_fs2.default.readFileSync(USERS_LIST_FILE, "utf-8"));
     } catch {
     }
   }
@@ -2638,10 +3144,10 @@ function readUserWorkspace(primaryId, secondaryId) {
         getAiCopilotFilePath(cand)
       ];
       for (const p of pathsToCheck) {
-        if (import_fs.default.existsSync(p)) {
+        if (import_fs2.default.existsSync(p)) {
           try {
-            const stat = import_fs.default.statSync(p);
-            const content = import_fs.default.readFileSync(p, "utf-8");
+            const stat = import_fs2.default.statSync(p);
+            const content = import_fs2.default.readFileSync(p, "utf-8");
             const parsed = JSON.parse(content);
             if (parsed && typeof parsed === "object") {
               if (Array.isArray(parsed.permanentlyDeletedIds)) {
@@ -2741,9 +3247,9 @@ function writeUserWorkspace(primaryId, data, secondaryId) {
     const idsToWrite = new Set(
       resolveUserAliasCandidates(primaryId, secondaryId, data?.email, data?.userId)
     );
-    const dir = DATA_DIR;
-    if (!import_fs.default.existsSync(dir)) {
-      import_fs.default.mkdirSync(dir, { recursive: true });
+    const dir = DATA_DIR2;
+    if (!import_fs2.default.existsSync(dir)) {
+      import_fs2.default.mkdirSync(dir, { recursive: true });
     }
     const jsonString = JSON.stringify(data, null, 2);
     for (const id of idsToWrite) {
@@ -2754,8 +3260,8 @@ function writeUserWorkspace(primaryId, data, secondaryId) {
       for (const filePath of paths) {
         try {
           const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).substring(2, 7)}`;
-          import_fs.default.writeFileSync(tempPath, jsonString, "utf-8");
-          import_fs.default.renameSync(tempPath, filePath);
+          import_fs2.default.writeFileSync(tempPath, jsonString, "utf-8");
+          import_fs2.default.renameSync(tempPath, filePath);
         } catch (e) {
           console.error("Atomic write failed for path:", filePath, e);
         }
@@ -3025,7 +3531,7 @@ app.post("/api/ai-copilot/sessions", (req, res) => {
     for (const c of candidates) {
       try {
         const p = getAiCopilotFilePath(c);
-        import_fs.default.writeFileSync(p, aiPayloadStr, "utf-8");
+        import_fs2.default.writeFileSync(p, aiPayloadStr, "utf-8");
       } catch {
       }
     }
@@ -3108,51 +3614,51 @@ app.post("/api/user-data/:email/smtp", (req, res) => {
 });
 function healSingleGitDir(gitDir) {
   try {
-    if (!import_fs.default.existsSync(gitDir)) return;
+    if (!import_fs2.default.existsSync(gitDir)) return;
     const requiredDirs = [
-      import_path.default.join(gitDir, "objects"),
-      import_path.default.join(gitDir, "refs", "heads"),
-      import_path.default.join(gitDir, "refs", "tags"),
-      import_path.default.join(gitDir, "refs", "remotes", "origin")
+      import_path2.default.join(gitDir, "objects"),
+      import_path2.default.join(gitDir, "refs", "heads"),
+      import_path2.default.join(gitDir, "refs", "tags"),
+      import_path2.default.join(gitDir, "refs", "remotes", "origin")
     ];
     for (const d of requiredDirs) {
-      if (!import_fs.default.existsSync(d)) {
+      if (!import_fs2.default.existsSync(d)) {
         try {
-          import_fs.default.mkdirSync(d, { recursive: true });
+          import_fs2.default.mkdirSync(d, { recursive: true });
         } catch {
         }
       }
     }
-    const headFile = import_path.default.join(gitDir, "HEAD");
-    if (!import_fs.default.existsSync(headFile)) {
+    const headFile = import_path2.default.join(gitDir, "HEAD");
+    if (!import_fs2.default.existsSync(headFile)) {
       try {
-        import_fs.default.writeFileSync(headFile, "ref: refs/heads/main\n", "utf8");
+        import_fs2.default.writeFileSync(headFile, "ref: refs/heads/main\n", "utf8");
       } catch {
       }
     }
     const lockFiles = [
-      import_path.default.join(gitDir, "index.lock"),
-      import_path.default.join(gitDir, "HEAD.lock"),
-      import_path.default.join(gitDir, "FETCH_HEAD.lock"),
-      import_path.default.join(gitDir, "ORIG_HEAD.lock"),
-      import_path.default.join(gitDir, "config.lock"),
-      import_path.default.join(gitDir, "packed-refs.lock"),
-      import_path.default.join(gitDir, "refs", "remotes", "origin", "main.lock"),
-      import_path.default.join(gitDir, "refs", "remotes", "origin", "HEAD.lock"),
-      import_path.default.join(gitDir, "refs", "heads", "main.lock")
+      import_path2.default.join(gitDir, "index.lock"),
+      import_path2.default.join(gitDir, "HEAD.lock"),
+      import_path2.default.join(gitDir, "FETCH_HEAD.lock"),
+      import_path2.default.join(gitDir, "ORIG_HEAD.lock"),
+      import_path2.default.join(gitDir, "config.lock"),
+      import_path2.default.join(gitDir, "packed-refs.lock"),
+      import_path2.default.join(gitDir, "refs", "remotes", "origin", "main.lock"),
+      import_path2.default.join(gitDir, "refs", "remotes", "origin", "HEAD.lock"),
+      import_path2.default.join(gitDir, "refs", "heads", "main.lock")
     ];
     for (const lockFile of lockFiles) {
-      if (import_fs.default.existsSync(lockFile)) {
+      if (import_fs2.default.existsSync(lockFile)) {
         try {
-          import_fs.default.unlinkSync(lockFile);
+          import_fs2.default.unlinkSync(lockFile);
         } catch {
         }
       }
     }
     const DEFAULT_REMOTE_URL = "https://github.com/shamssumon3836/Visual-Sky.git";
-    const gitConfigPath = import_path.default.join(gitDir, "config");
-    if (import_fs.default.existsSync(gitConfigPath)) {
-      const cfg = import_fs.default.readFileSync(gitConfigPath, "utf8");
+    const gitConfigPath = import_path2.default.join(gitDir, "config");
+    if (import_fs2.default.existsSync(gitConfigPath)) {
+      const cfg = import_fs2.default.readFileSync(gitConfigPath, "utf8");
       let cleanedCfg = cfg.replace(/\n?\[http\][^\[]*/g, "").replace(/\n?\[pack\][^\[]*/g, "").trimEnd() + "\n";
       if (!cleanedCfg.includes('[remote "origin"]')) {
         cleanedCfg += `[remote "origin"]
@@ -3167,7 +3673,7 @@ function healSingleGitDir(gitDir) {
 `;
       }
       if (cleanedCfg !== cfg) {
-        import_fs.default.writeFileSync(gitConfigPath, cleanedCfg, "utf8");
+        import_fs2.default.writeFileSync(gitConfigPath, cleanedCfg, "utf8");
       }
     } else {
       const restoredConfig = `[core]
@@ -3182,7 +3688,7 @@ function healSingleGitDir(gitDir) {
 	remote = origin
 	merge = refs/heads/main
 `;
-      import_fs.default.writeFileSync(gitConfigPath, restoredConfig, "utf8");
+      import_fs2.default.writeFileSync(gitConfigPath, restoredConfig, "utf8");
     }
   } catch {
   }
@@ -3194,14 +3700,14 @@ function healCpanelGitRepo() {
     "/home/visualsk/git-coldmail"
   ]);
   for (const root of candidateRoots) {
-    healSingleGitDir(import_path.default.join(root, ".git"));
-    const pbDir = import_path.default.join(root, "prebuilt");
+    healSingleGitDir(import_path2.default.join(root, ".git"));
+    const pbDir = import_path2.default.join(root, "prebuilt");
     try {
-      if (import_fs.default.existsSync(pbDir)) {
-        for (const f of import_fs.default.readdirSync(pbDir)) {
+      if (import_fs2.default.existsSync(pbDir)) {
+        for (const f of import_fs2.default.readdirSync(pbDir)) {
           if (f.endsWith(".br") || f.endsWith(".gz")) {
             try {
-              import_fs.default.unlinkSync(import_path.default.join(pbDir, f));
+              import_fs2.default.unlinkSync(import_path2.default.join(pbDir, f));
             } catch {
             }
           }
@@ -3226,7 +3732,7 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/client-app.js", (_req, res) => {
   res.setHeader("Content-Type", "application/javascript; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  res.sendFile(import_path.default.join(process.cwd(), "prebuilt", "app.js"));
+  res.sendFile(import_path2.default.join(process.cwd(), "prebuilt", "app.js"));
 });
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
@@ -6806,9 +7312,9 @@ app.get("/api/track/open/:pixelId", (req, res) => {
     const isBotOrPrefetch = req.method !== "GET" || purpose.includes("prefetch") || purpose.includes("preview") || uaLower.includes("spider") || uaLower.includes("crawler") || uaLower.includes("barracuda") || uaLower.includes("mimecast") || uaLower.includes("proofpoint") || uaLower.includes("curl/") || uaLower.includes("wget/") || uaLower.includes("python");
     if (pixelId && !isBotOrPrefetch) {
       let events = [];
-      if (import_fs.default.existsSync(TRACKING_EVENTS_FILE)) {
+      if (import_fs2.default.existsSync(TRACKING_EVENTS_FILE)) {
         try {
-          events = JSON.parse(import_fs.default.readFileSync(TRACKING_EVENTS_FILE, "utf-8"));
+          events = JSON.parse(import_fs2.default.readFileSync(TRACKING_EVENTS_FILE, "utf-8"));
           if (!Array.isArray(events)) events = [];
         } catch {
           events = [];
@@ -6828,18 +7334,18 @@ app.get("/api/track/open/:pixelId", (req, res) => {
         });
         const cleaned = getCleanAuthoritativeTrackingEvents(events);
         const trimmed = cleaned.length > 2e3 ? cleaned.slice(-2e3) : cleaned;
-        import_fs.default.writeFileSync(TRACKING_EVENTS_FILE, JSON.stringify(trimmed, null, 2), "utf-8");
+        import_fs2.default.writeFileSync(TRACKING_EVENTS_FILE, JSON.stringify(trimmed, null, 2), "utf-8");
         setImmediate(() => {
           try {
             let recipientName = "A recipient";
             let recipientEmail = "";
             let mailSubject = "your email";
             let ownerEmail = "";
-            if (import_fs.default.existsSync(DATA_DIR)) {
-              const wfFiles = import_fs.default.readdirSync(DATA_DIR).filter((f) => f.startsWith("workspace_") && f.endsWith(".json"));
+            if (import_fs2.default.existsSync(DATA_DIR2)) {
+              const wfFiles = import_fs2.default.readdirSync(DATA_DIR2).filter((f) => f.startsWith("workspace_") && f.endsWith(".json"));
               for (const wf of wfFiles) {
                 try {
-                  const parsedWf = JSON.parse(import_fs.default.readFileSync(import_path.default.join(DATA_DIR, wf), "utf-8"));
+                  const parsedWf = JSON.parse(import_fs2.default.readFileSync(import_path2.default.join(DATA_DIR2, wf), "utf-8"));
                   const sentList = Array.isArray(parsedWf?.sentEmails) ? parsedWf.sentEmails : [];
                   const matchedSent = sentList.find(
                     (s) => s && String(s.trackingPixelId || "").replace(/\.gif$/i, "").trim() === pixelId
@@ -6887,8 +7393,8 @@ app.get("/api/track/open/:pixelId", (req, res) => {
 });
 app.get("/api/track/events", (_req, res) => {
   try {
-    if (import_fs.default.existsSync(TRACKING_EVENTS_FILE)) {
-      const rawData = JSON.parse(import_fs.default.readFileSync(TRACKING_EVENTS_FILE, "utf-8"));
+    if (import_fs2.default.existsSync(TRACKING_EVENTS_FILE)) {
+      const rawData = JSON.parse(import_fs2.default.readFileSync(TRACKING_EVENTS_FILE, "utf-8"));
       const cleanEvents = getCleanAuthoritativeTrackingEvents(rawData);
       return res.json({ success: true, events: cleanEvents });
     }
@@ -7741,19 +8247,19 @@ function extractCleanReplyBody(rawText) {
   const cleaned = chosenLines.map((l) => l.replace(/^\s*>+\s?/g, "")).join("\n").replace(/\n{3,}/g, "\n\n").replace(/\{\{\s*website\s*\}\}/gi, "your website").replace(/\{\{\s*company\s*\}\}/gi, "your company").replace(/\{\{\s*first_name\s*\}\}/gi, "there").replace(/\{\{\s*name\s*\}\}/gi, "there").replace(/\{\{\s*niche\s*\}\}/gi, "your industry").trim();
   return cleaned;
 }
-var ATTACHMENTS_DIR = import_path.default.join(DATA_DIR, "attachments");
-var DRIVE_FILES_INDEX_FILE = import_path.default.join(DATA_DIR, "drive-files-index.json");
+var ATTACHMENTS_DIR = import_path2.default.join(DATA_DIR2, "attachments");
+var DRIVE_FILES_INDEX_FILE = import_path2.default.join(DATA_DIR2, "drive-files-index.json");
 try {
-  if (!import_fs.default.existsSync(ATTACHMENTS_DIR)) {
-    import_fs.default.mkdirSync(ATTACHMENTS_DIR, { recursive: true });
+  if (!import_fs2.default.existsSync(ATTACHMENTS_DIR)) {
+    import_fs2.default.mkdirSync(ATTACHMENTS_DIR, { recursive: true });
   }
 } catch {
 }
 var attachmentMemoryBuffers = /* @__PURE__ */ new Map();
 var attachmentIndexMap = /* @__PURE__ */ new Map();
 try {
-  if (import_fs.default.existsSync(DRIVE_FILES_INDEX_FILE)) {
-    const rawIdx = JSON.parse(import_fs.default.readFileSync(DRIVE_FILES_INDEX_FILE, "utf-8"));
+  if (import_fs2.default.existsSync(DRIVE_FILES_INDEX_FILE)) {
+    const rawIdx = JSON.parse(import_fs2.default.readFileSync(DRIVE_FILES_INDEX_FILE, "utf-8"));
     if (Array.isArray(rawIdx)) {
       for (const item of rawIdx) {
         if (item && item.id) {
@@ -7761,8 +8267,8 @@ try {
           attachmentIndexMap.set(key, item);
           if (item.uploadedToDrive && item.driveFileUrl && !String(item.driveFileUrl).includes("/folders/")) {
             try {
-              const p = item.filePath || import_path.default.join(ATTACHMENTS_DIR, key);
-              if (p && import_fs.default.existsSync(p)) import_fs.default.unlinkSync(p);
+              const p = item.filePath || import_path2.default.join(ATTACHMENTS_DIR, key);
+              if (p && import_fs2.default.existsSync(p)) import_fs2.default.unlinkSync(p);
             } catch {
             }
           }
@@ -7775,7 +8281,7 @@ try {
 var saveAttachmentIndexToDisk = () => {
   try {
     const list = Array.from(attachmentIndexMap.values()).sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()).slice(0, 500);
-    import_fs.default.writeFileSync(DRIVE_FILES_INDEX_FILE, JSON.stringify(list, null, 2), "utf-8");
+    import_fs2.default.writeFileSync(DRIVE_FILES_INDEX_FILE, JSON.stringify(list, null, 2), "utf-8");
   } catch {
   }
 };
@@ -7783,7 +8289,7 @@ function storeAttachmentBinary(id, name, mimeType, buffer, meta = {}) {
   const safeId = String(id || `att-${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, "_");
   const cleanName = String(name || "attachment").trim() || "attachment";
   const cleanMime = String(mimeType || "application/octet-stream").trim() || "application/octet-stream";
-  const filePath = import_path.default.join(ATTACHMENTS_DIR, safeId);
+  const filePath = import_path2.default.join(ATTACHMENTS_DIR, safeId);
   attachmentMemoryBuffers.set(safeId, { buffer, mimeType: cleanMime, name: cleanName });
   if (attachmentMemoryBuffers.size > 25) {
     const oldestKey = attachmentMemoryBuffers.keys().next().value;
@@ -7795,12 +8301,12 @@ function storeAttachmentBinary(id, name, mimeType, buffer, meta = {}) {
   const resolvedDriveFileUrl = meta.driveFileUrl || existing?.driveFileUrl || void 0;
   if (isUploadedToDrive && resolvedDriveFileUrl && !String(resolvedDriveFileUrl).includes("/folders/")) {
     try {
-      if (import_fs.default.existsSync(filePath)) import_fs.default.unlinkSync(filePath);
+      if (import_fs2.default.existsSync(filePath)) import_fs2.default.unlinkSync(filePath);
     } catch {
     }
   } else {
     try {
-      import_fs.default.writeFileSync(filePath, buffer);
+      import_fs2.default.writeFileSync(filePath, buffer);
     } catch {
     }
   }
@@ -7831,13 +8337,13 @@ function getAttachmentBinaryById(rawId, queryName) {
     if (mem && mem.buffer?.length > 0) return mem;
     const record = attachmentIndexMap.get(key);
     const candidatePaths = [
-      import_path.default.join(ATTACHMENTS_DIR, key),
+      import_path2.default.join(ATTACHMENTS_DIR, key),
       record?.filePath
     ].filter(Boolean);
     for (const candidatePath of candidatePaths) {
       try {
-        if (import_fs.default.existsSync(candidatePath)) {
-          const buffer = import_fs.default.readFileSync(candidatePath);
+        if (import_fs2.default.existsSync(candidatePath)) {
+          const buffer = import_fs2.default.readFileSync(candidatePath);
           if (buffer.length > 0) {
             const mimeType = record?.mimeType || guessMimeFromFilename(record?.name || key);
             const name = record?.name || queryName || key;
@@ -7870,8 +8376,8 @@ function getAttachmentBinaryById(rawId, queryName) {
         }
       }
       try {
-        if (import_fs.default.existsSync(ATTACHMENTS_DIR)) {
-          const files = import_fs.default.readdirSync(ATTACHMENTS_DIR);
+        if (import_fs2.default.existsSync(ATTACHMENTS_DIR)) {
+          const files = import_fs2.default.readdirSync(ATTACHMENTS_DIR);
           for (const f of files) {
             if (f.endsWith(suffixDash) || f.endsWith(suffixUnder)) {
               const found = tryLoadRecord(f);
@@ -7929,11 +8435,11 @@ async function resolveAttachmentBinaryOnDemand(rawId, queryName, queryMsgId, que
     if (bySynthesizedId) return bySynthesizedId;
   }
   try {
-    if (import_fs.default.existsSync(DATA_DIR)) {
-      const dataFiles = import_fs.default.readdirSync(DATA_DIR).filter((f) => f.startsWith("workspace_") && f.endsWith(".json"));
+    if (import_fs2.default.existsSync(DATA_DIR2)) {
+      const dataFiles = import_fs2.default.readdirSync(DATA_DIR2).filter((f) => f.startsWith("workspace_") && f.endsWith(".json"));
       for (const wf of dataFiles) {
         try {
-          const parsedWf = JSON.parse(import_fs.default.readFileSync(import_path.default.join(DATA_DIR, wf), "utf-8"));
+          const parsedWf = JSON.parse(import_fs2.default.readFileSync(import_path2.default.join(DATA_DIR2, wf), "utf-8"));
           const threadsArr = Array.isArray(parsedWf?.threads) ? parsedWf.threads : [];
           for (const t of threadsArr) {
             for (const m of t?.messages || []) {
@@ -7985,11 +8491,11 @@ async function resolveAttachmentBinaryOnDemand(rawId, queryName, queryMsgId, que
     993
   );
   try {
-    if (import_fs.default.existsSync(DATA_DIR)) {
-      const dataFiles = import_fs.default.readdirSync(DATA_DIR).filter((f) => f.startsWith("workspace_") && f.endsWith(".json"));
+    if (import_fs2.default.existsSync(DATA_DIR2)) {
+      const dataFiles = import_fs2.default.readdirSync(DATA_DIR2).filter((f) => f.startsWith("workspace_") && f.endsWith(".json"));
       for (const wf of dataFiles) {
         try {
-          const parsedWf = JSON.parse(import_fs.default.readFileSync(import_path.default.join(DATA_DIR, wf), "utf-8"));
+          const parsedWf = JSON.parse(import_fs2.default.readFileSync(import_path2.default.join(DATA_DIR2, wf), "utf-8"));
           for (const s of parsedWf?.smtpAccounts || []) {
             if (s && s.host && s.username && s.password) {
               addImapCandidate(s.imapHost || s.host, s.username, s.password, s.imapPort || 993);
@@ -8568,6 +9074,26 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
                     cleanReplyText = `\u{1F4CE} Sent ${extractedAttachments.length} file(s): ${extractedAttachments.map((a) => a.name).join(", ")}`;
                   }
                   const refs = Array.isArray(parsed.references) ? parsed.references : parsed.references ? [parsed.references] : [];
+                  const getHeaderVal = (name) => {
+                    try {
+                      const val = parsed.headers?.get(name.toLowerCase());
+                      if (!val) return "";
+                      if (typeof val === "string") return val;
+                      if (typeof val?.text === "string") return val.text;
+                      if (typeof val?.value === "string") return val.value;
+                      return String(val);
+                    } catch {
+                      return "";
+                    }
+                  };
+                  const autoSubmittedHdr = getHeaderVal("auto-submitted").toLowerCase();
+                  const xAutoReplyHdr = getHeaderVal("x-autoreply").toLowerCase();
+                  const xAutoResponseSuppressHdr = getHeaderVal("x-auto-response-suppress").toLowerCase();
+                  const precedenceHdr = getHeaderVal("precedence").toLowerCase();
+                  const returnPathHdr = getHeaderVal("return-path").toLowerCase();
+                  const isAutoReplyHeader = Boolean(
+                    autoSubmittedHdr && autoSubmittedHdr !== "no" || xAutoReplyHdr === "yes" || xAutoResponseSuppressHdr.includes("all") || xAutoResponseSuppressHdr.includes("ooo") || precedenceHdr === "auto_reply" || precedenceHdr === "bulk" || precedenceHdr === "junk" || returnPathHdr.includes("<>")
+                  );
                   const msgObj = {
                     uid: message.uid,
                     messageId: parsed.messageId || message.envelope?.messageId || `imap-${message.uid}`,
@@ -8582,7 +9108,8 @@ app.post("/api/smtp/imap-sync", async (req, res) => {
                     // Never send raw quoted HTML to prevent <div dir="ltr"> from rendering
                     inReplyTo: parsed.inReplyTo || message.envelope?.inReplyTo || "",
                     references: refs,
-                    attachments: extractedAttachments
+                    attachments: extractedAttachments,
+                    isAutoReplyHeader
                   };
                   imapUidMessageCache.set(`${cachePrefix}::${message.uid}`, msgObj);
                 }
@@ -8716,8 +9243,8 @@ var getSavedDriveStorageSettings = () => {
     updatedAt: ""
   };
   try {
-    if (import_fs.default.existsSync(DRIVE_STORAGE_SETTINGS_FILE)) {
-      const parsed = JSON.parse(import_fs.default.readFileSync(DRIVE_STORAGE_SETTINGS_FILE, "utf-8"));
+    if (import_fs2.default.existsSync(DRIVE_STORAGE_SETTINGS_FILE)) {
+      const parsed = JSON.parse(import_fs2.default.readFileSync(DRIVE_STORAGE_SETTINGS_FILE, "utf-8"));
       if (parsed && typeof parsed === "object") {
         return { ...defaults, ...parsed };
       }
@@ -8751,7 +9278,7 @@ app.post("/api/drive-storage/settings", (req, res) => {
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     try {
-      import_fs.default.writeFileSync(DRIVE_STORAGE_SETTINGS_FILE, JSON.stringify(updated, null, 2), "utf-8");
+      import_fs2.default.writeFileSync(DRIVE_STORAGE_SETTINGS_FILE, JSON.stringify(updated, null, 2), "utf-8");
     } catch {
     }
     return res.json({
@@ -8796,7 +9323,7 @@ app.delete("/api/drive-storage/files/:id", (req, res) => {
   const existing = attachmentIndexMap.get(safeId);
   if (existing?.filePath) {
     try {
-      if (import_fs.default.existsSync(existing.filePath)) import_fs.default.unlinkSync(existing.filePath);
+      if (import_fs2.default.existsSync(existing.filePath)) import_fs2.default.unlinkSync(existing.filePath);
     } catch {
     }
   }
@@ -8837,9 +9364,9 @@ app.post("/api/drive-storage/sync-file/:id", async (req, res) => {
         record.driveFolderUrl = result.driveFolderUrl;
         record.driveFileUrl = result.driveFileUrl;
         record.uploadedToDrive = true;
-        if (record.filePath && import_fs.default.existsSync(record.filePath)) {
+        if (record.filePath && import_fs2.default.existsSync(record.filePath)) {
           try {
-            import_fs.default.unlinkSync(record.filePath);
+            import_fs2.default.unlinkSync(record.filePath);
           } catch {
           }
         }
@@ -8925,6 +9452,7 @@ app.post("/api/drive-storage/upload", async (req, res) => {
     });
   }
 });
+app.use(autoEngine_default);
 app.all("/api/*", (req, res) => {
   res.setHeader("Content-Type", "application/json");
   return res.status(404).json({ success: false, error: `API endpoint ${req.method} ${req.path} not found` });
@@ -8943,16 +9471,16 @@ app.use("/api", (err, req, res, next) => {
 });
 async function startServer() {
   app.set("etag", false);
-  const prebuiltCandidate = import_path.default.join(process.cwd(), "prebuilt");
-  const publicCandidate = import_path.default.join(process.cwd(), "public");
-  const prebuiltAppJsPath = import_path.default.join(prebuiltCandidate, "app.js");
-  const prebuiltAppCssPath = import_path.default.join(prebuiltCandidate, "app.css");
-  const prebuiltFirebaseRuntimePath = import_path.default.join(prebuiltCandidate, "firebase-runtime.js");
-  const runtimeAppJsCandidate = import_path.default.join(DATA_DIR, "runtime-app.js");
+  const prebuiltCandidate = import_path2.default.join(process.cwd(), "prebuilt");
+  const publicCandidate = import_path2.default.join(process.cwd(), "public");
+  const prebuiltAppJsPath = import_path2.default.join(prebuiltCandidate, "app.js");
+  const prebuiltAppCssPath = import_path2.default.join(prebuiltCandidate, "app.css");
+  const prebuiltFirebaseRuntimePath = import_path2.default.join(prebuiltCandidate, "firebase-runtime.js");
+  const runtimeAppJsCandidate = import_path2.default.join(DATA_DIR2, "runtime-app.js");
   const isDevTsx = Boolean(process.argv[1] && process.argv[1].endsWith("server.ts")) && process.env.NODE_ENV !== "production";
   const isProdServer = !isDevTsx;
   if (isDevTsx) {
-    if (!import_fs.default.existsSync(prebuiltAppJsPath) || !import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "index.html"))) {
+    if (!import_fs2.default.existsSync(prebuiltAppJsPath) || !import_fs2.default.existsSync(import_path2.default.join(prebuiltCandidate, "index.html"))) {
       try {
         const cp = await import("child_process");
         cp.execSync("node scripts/sync-prebuilt.cjs", { cwd: process.cwd(), stdio: "inherit" });
@@ -8968,12 +9496,12 @@ async function startServer() {
     }
   }
   const getActiveAppJsPath = () => {
-    const hasPrebuilt = import_fs.default.existsSync(prebuiltAppJsPath);
-    const hasRuntime = import_fs.default.existsSync(runtimeAppJsCandidate);
+    const hasPrebuilt = import_fs2.default.existsSync(prebuiltAppJsPath);
+    const hasRuntime = import_fs2.default.existsSync(runtimeAppJsCandidate);
     if (hasPrebuilt && hasRuntime) {
       try {
-        const prebuiltMtime = import_fs.default.statSync(prebuiltAppJsPath).mtimeMs;
-        const runtimeMtime = import_fs.default.statSync(runtimeAppJsCandidate).mtimeMs;
+        const prebuiltMtime = import_fs2.default.statSync(prebuiltAppJsPath).mtimeMs;
+        const runtimeMtime = import_fs2.default.statSync(runtimeAppJsCandidate).mtimeMs;
         return prebuiltMtime >= runtimeMtime ? prebuiltAppJsPath : runtimeAppJsCandidate;
       } catch {
         return prebuiltAppJsPath;
@@ -8985,14 +9513,14 @@ async function startServer() {
   };
   const memoryAssetCache = /* @__PURE__ */ new Map();
   const getCachedAsset = (filePath) => {
-    if (!import_fs.default.existsSync(filePath)) return null;
-    const stat = import_fs.default.statSync(filePath);
+    if (!import_fs2.default.existsSync(filePath)) return null;
+    const stat = import_fs2.default.statSync(filePath);
     const mtimeMs = stat.mtimeMs;
     const cached = memoryAssetCache.get(filePath);
     if (cached && cached.mtimeMs === mtimeMs) {
       return cached;
     }
-    const raw = import_fs.default.readFileSync(filePath);
+    const raw = import_fs2.default.readFileSync(filePath);
     const gzip = import_zlib.default.gzipSync(raw, { level: 6 });
     const etag = `"v-${Math.floor(mtimeMs).toString(36)}-${raw.byteLength.toString(36)}"`;
     const entry = { mtimeMs, etag, raw, gzip };
@@ -9061,7 +9589,7 @@ async function startServer() {
     return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, "text/css; charset=utf-8");
   });
   app.get("/prebuilt/firebase-runtime.js", (req, res) => {
-    if (import_fs.default.existsSync(prebuiltFirebaseRuntimePath)) {
+    if (import_fs2.default.existsSync(prebuiltFirebaseRuntimePath)) {
       return sendMemoryCachedAsset(
         req,
         res,
@@ -9074,18 +9602,18 @@ async function startServer() {
     return res.status(200).end("export {};\n");
   });
   app.get("/sw.js", (_req, res) => {
-    const swPath = import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "sw.js")) ? import_path.default.join(prebuiltCandidate, "sw.js") : import_path.default.join(publicCandidate, "sw.js");
+    const swPath = import_fs2.default.existsSync(import_path2.default.join(prebuiltCandidate, "sw.js")) ? import_path2.default.join(prebuiltCandidate, "sw.js") : import_path2.default.join(publicCandidate, "sw.js");
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.setHeader("Service-Worker-Allowed", "/");
-    if (import_fs.default.existsSync(swPath)) {
-      return res.status(200).send(import_fs.default.readFileSync(swPath, "utf8"));
+    if (import_fs2.default.existsSync(swPath)) {
+      return res.status(200).send(import_fs2.default.readFileSync(swPath, "utf8"));
     }
     return res.status(404).end();
   });
-  app.use("/prebuilt", import_express.default.static(prebuiltCandidate, { etag: true, maxAge: 0 }));
-  if (import_fs.default.existsSync(publicCandidate)) {
-    app.use(import_express.default.static(publicCandidate, { index: false, etag: true, maxAge: "1d" }));
+  app.use("/prebuilt", import_express2.default.static(prebuiltCandidate, { etag: true, maxAge: 0 }));
+  if (import_fs2.default.existsSync(publicCandidate)) {
+    app.use(import_express2.default.static(publicCandidate, { index: false, etag: true, maxAge: "1d" }));
   }
   let cachedHtmlVersion = "";
   let cachedHtmlRaw = null;
@@ -9096,12 +9624,12 @@ async function startServer() {
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
     res.setHeader("Vary", "Accept-Encoding");
-    const distCandidate = import_path.default.join(process.cwd(), "dist");
-    const htmlPath = import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "index.html")) ? import_path.default.join(prebuiltCandidate, "index.html") : import_fs.default.existsSync(import_path.default.join(distCandidate, "index.html")) ? import_path.default.join(distCandidate, "index.html") : import_path.default.join(process.cwd(), "index.html");
+    const distCandidate = import_path2.default.join(process.cwd(), "dist");
+    const htmlPath = import_fs2.default.existsSync(import_path2.default.join(prebuiltCandidate, "index.html")) ? import_path2.default.join(prebuiltCandidate, "index.html") : import_fs2.default.existsSync(import_path2.default.join(distCandidate, "index.html")) ? import_path2.default.join(distCandidate, "index.html") : import_path2.default.join(process.cwd(), "index.html");
     try {
       const v = getDynamicAssetVersion();
       if (!cachedHtmlRaw || !cachedHtmlGzip || cachedHtmlVersion !== v) {
-        let html = import_fs.default.readFileSync(htmlPath, "utf8");
+        let html = import_fs2.default.readFileSync(htmlPath, "utf8");
         html = html.replace(/\/prebuilt\/(bundle|app)(-[a-zA-Z0-9_]+)?\.css(\?v=[^"']*)?/g, `/prebuilt/bundle-${v}.css?v=${v}`).replace(/\/prebuilt\/(bundle|app)(-[a-zA-Z0-9_]+)?\.js(\?v=[^"']*)?/g, `/prebuilt/bundle-${v}.js?v=${v}`);
         cachedHtmlVersion = v;
         cachedHtmlRaw = Buffer.from(html, "utf8");
@@ -9126,13 +9654,13 @@ async function startServer() {
     }
   };
   app.get(["/", "/index.html"], (req, res, next) => {
-    if (import_fs.default.existsSync(prebuiltAppJsPath) && import_fs.default.existsSync(import_path.default.join(prebuiltCandidate, "index.html"))) {
+    if (import_fs2.default.existsSync(prebuiltAppJsPath) && import_fs2.default.existsSync(import_path2.default.join(prebuiltCandidate, "index.html"))) {
       return sendFreshIndexHtml(req, res);
     }
     return next();
   });
   app.use(
-    import_express.default.static(prebuiltCandidate, {
+    import_express2.default.static(prebuiltCandidate, {
       index: false,
       etag: true,
       maxAge: "1h"
@@ -9159,11 +9687,11 @@ async function startServer() {
             ownerEmail: uLower
           });
         }
-        if (import_fs.default.existsSync(DATA_DIR)) {
-          const wfFiles = import_fs.default.readdirSync(DATA_DIR).filter((f) => f.startsWith("workspace_") && f.endsWith(".json"));
+        if (import_fs2.default.existsSync(DATA_DIR2)) {
+          const wfFiles = import_fs2.default.readdirSync(DATA_DIR2).filter((f) => f.startsWith("workspace_") && f.endsWith(".json"));
           for (const wf of wfFiles) {
             try {
-              const parsedWf = JSON.parse(import_fs.default.readFileSync(import_path.default.join(DATA_DIR, wf), "utf-8"));
+              const parsedWf = JSON.parse(import_fs2.default.readFileSync(import_path2.default.join(DATA_DIR2, wf), "utf-8"));
               const wfOwner = String(parsedWf?.email || "").trim().toLowerCase();
               for (const s of parsedWf?.smtpAccounts || []) {
                 if (s && !s.isTrash && s.host && s.username && s.password) {

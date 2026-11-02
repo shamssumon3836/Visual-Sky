@@ -497,6 +497,21 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth, onOpenSendMail, onOp
           <span className="hidden md:inline text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono font-bold">275M+</span>
         </button>
 
+        {/* Direct 7-Day Auto Engine Quick Access Button */}
+        <button
+          onClick={() => setActiveTab('auto_engine')}
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer border ${
+            activeTab === 'auto_engine'
+              ? 'bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-slate-950 font-black shadow-lg shadow-emerald-500/25 border-emerald-400'
+              : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+          }`}
+          title="⚡ 7-Day Autonomous Cold Outreach Engine"
+        >
+          <Zap className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <span className="whitespace-nowrap font-extrabold text-[11px] sm:text-xs">⚡ 7-Day Auto</span>
+          <span className="hidden lg:inline text-[9px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-mono font-black uppercase">Active</span>
+        </button>
+
         {/* Send Mail Action Button (User request from original app) */}
         {onOpenSendMail && (
           <button
