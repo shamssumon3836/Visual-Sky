@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import mongoose from 'mongoose';
 import webpush from 'web-push';
+import nodemailer from 'nodemailer';
 import {
   AutoCampaign,
   GlobalLeadLedger,
@@ -433,19 +434,140 @@ router.post('/api/auto-campaign/create-multi', async (req: Request, res: Respons
   }
 });
 
-// Connected Senders Health
-router.get('/api/auto-engine/senders-health', async (_req: Request, res: Response) => {
+// 1. POST /api/auto-campaign/add-sender — Test & Save Custom SMTP Sender using nodemailer.verify()
+router.post('/api/auto-campaign/add-sender', async (req: Request, res: Response) => {
   try {
-    const senders = readJsonFile<any[]>(SENDERS_FILE, [
-      {
-        email: process.env.SMTP_USER || 'dispatch@visualsky.pro',
-        host: process.env.SMTP_HOST || 'mail.visualsky.pro',
-        dailyLimit: 30,
-        sentToday: 14,
-        warmupScore: '98%',
-        status: 'Active (Healthy 🟢)'
+    const email = String(req.body?.senderEmail || req.body?.email || '').trim().toLowerCase();
+    const host = String(req.body?.smtpHost || req.body?.host || '').trim();
+    const port = Number(req.body?.smtpPort || req.body?.port) || 587;
+    const user = String(req.body?.smtpUser || req.body?.user || email).trim();
+    const pass = String(req.body?.smtpPass || req.body?.pass || req.body?.password || '').trim();
+    const dailyLimit = Number(req.body?.dailyLimit || req.body?.dailyQuota) || 30;
+
+    if (!email || !host || !pass) {
+      return res.status(400).json({
+        success: false,
+        error: 'Sender Email, SMTP Host, and Password are required.'
+      });
+    }
+
+    // Verify SMTP connection via nodemailer.verify()
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+      tls: {
+        rejectUnauthorized: false
+      },
+      connectionTimeout: 10000
+    });
+
+    try {
+      await transporter.verify();
+    } catch (verifyErr: any) {
+      console.warn('[AutoEngine] SMTP verification failed for:', email, verifyErr?.message);
+      return res.status(400).json({
+        success: false,
+        error: `SMTP Connection Failed: ${verifyErr?.message || 'Check host, port, username, or app password.'}`
+      });
+    }
+
+    const senderDoc = {
+      _id: 'snd_' + Date.now(),
+      email,
+      smtpConfig: {
+        host,
+        port,
+        user,
+        pass
+      },
+      dailyLimit,
+      sentToday: 0,
+      warmupScore: '100%',
+      status: 'Active (Healthy 🟢)',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    // Save to Mongoose if connected
+    if (mongoose.connection.readyState === 1) {
+      try {
+        await (SenderAccount as any).findOneAndUpdate(
+          { email },
+          senderDoc,
+          { upsert: true, new: true }
+        );
+      } catch (dbErr) {
+        console.warn('[AutoEngine] Mongoose save sender fallback:', dbErr);
       }
-    ]);
+    }
+
+    // Save to file-based persistent store
+    const localSenders = readJsonFile<any[]>(SENDERS_FILE, []);
+    const idx = localSenders.findIndex(s => s.email?.toLowerCase() === email);
+    if (idx >= 0) {
+      localSenders[idx] = { ...localSenders[idx], ...senderDoc };
+    } else {
+      localSenders.unshift(senderDoc);
+    }
+    writeJsonFile(SENDERS_FILE, localSenders);
+
+    return res.json({
+      success: true,
+      message: `✅ SMTP Sender "${email}" successfully tested, verified, and saved!`,
+      sender: senderDoc
+    });
+  } catch (err: any) {
+    console.error('[AutoEngine] Add sender exception:', err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to verify and save SMTP sender.'
+    });
+  }
+});
+
+// 2. DELETE /api/auto-campaign/delete-sender & DELETE /api/auto-campaign/senders/:id
+router.delete(['/api/auto-campaign/delete-sender', '/api/auto-campaign/senders/:id'], async (req: Request, res: Response) => {
+  try {
+    const targetEmail = String(req.body?.email || req.query?.email || req.params?.id || '').trim().toLowerCase();
+    if (!targetEmail) {
+      return res.status(400).json({ success: false, error: 'Sender email or ID required.' });
+    }
+
+    if (mongoose.connection.readyState === 1) {
+      try {
+        await (SenderAccount as any).deleteOne({
+          $or: [{ email: targetEmail }, { _id: targetEmail }]
+        });
+      } catch {}
+    }
+
+    let localSenders = readJsonFile<any[]>(SENDERS_FILE, []);
+    localSenders = localSenders.filter(s => s.email?.toLowerCase() !== targetEmail && s._id !== targetEmail);
+    writeJsonFile(SENDERS_FILE, localSenders);
+
+    return res.json({
+      success: true,
+      message: `Sender account removed successfully.`
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// 3. GET /api/auto-engine/senders-health & GET /api/auto-campaign/senders — Real Database Senders (No hardcoded demo)
+router.get(['/api/auto-engine/senders-health', '/api/auto-campaign/senders'], async (_req: Request, res: Response) => {
+  try {
+    let senders: any[] = [];
+    if (mongoose.connection.readyState === 1) {
+      try {
+        senders = await (SenderAccount as any).find().sort({ createdAt: -1 });
+      } catch {}
+    }
+    if (senders.length === 0) {
+      senders = readJsonFile<any[]>(SENDERS_FILE, []);
+    }
     return res.json({ success: true, senders });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err?.message });

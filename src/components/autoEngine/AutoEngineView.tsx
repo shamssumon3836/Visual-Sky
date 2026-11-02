@@ -15,7 +15,11 @@ import {
   Smartphone,
   ShieldCheck,
   Building2,
-  FileVideo
+  FileVideo,
+  Plus,
+  Trash2,
+  X,
+  Mail
 } from 'lucide-react';
 
 interface AutoEngineStats {
@@ -31,7 +35,7 @@ interface AutoEngineStats {
 }
 
 export const AutoEngineView: React.FC = () => {
-  // Form State
+  // Campaign Form State
   const [niches, setNiches] = useState('Videographer, Dentist, Gym Coach');
   const [cities, setCities] = useState('London, Manchester, New York');
   const [dailyLimit, setDailyLimit] = useState(30);
@@ -59,6 +63,16 @@ VisualSky Production Team`);
   const [stats, setStats] = useState<AutoEngineStats | null>(null);
   const [senders, setSenders] = useState<any[]>([]);
   const [recentStream, setRecentStream] = useState<any[]>([]);
+
+  // SMTP Modal State
+  const [isSmtpModalOpen, setIsSmtpModalOpen] = useState(false);
+  const [smtpEmail, setSmtpEmail] = useState('');
+  const [smtpHost, setSmtpHost] = useState('');
+  const [smtpPort, setSmtpPort] = useState(587);
+  const [smtpUser, setSmtpUser] = useState('');
+  const [smtpPass, setSmtpPass] = useState('');
+  const [smtpDailyLimit, setSmtpDailyLimit] = useState(30);
+  const [isTestingSmtp, setIsTestingSmtp] = useState(false);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ message, type });
@@ -114,14 +128,12 @@ VisualSky Production Team`);
         return;
       }
 
-      // 1. Fetch public key
       const keyRes = await fetch('/api/auto-engine/vapid-public-key');
       const keyData = await keyRes.json();
       if (!keyData.success || !keyData.publicKey) {
         throw new Error('Could not retrieve VAPID public key from server.');
       }
 
-      // 2. Register Service Worker & Subscribe
       const reg = await navigator.serviceWorker.register('/auto-engine-sw.js');
       await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.subscribe({
@@ -129,7 +141,6 @@ VisualSky Production Team`);
         applicationServerKey: urlBase64ToUint8Array(keyData.publicKey)
       });
 
-      // 3. Save to backend
       const saveRes = await fetch('/api/auto-engine/save-subscription', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -175,12 +186,12 @@ VisualSky Production Team`);
     }
   };
 
-  // Load backend stats
+  // Load backend data
   const fetchDashboardData = async () => {
     try {
       const [statsRes, sendersRes, streamRes] = await Promise.all([
         fetch('/api/auto-engine/stats').then(r => r.json()).catch(() => ({})),
-        fetch('/api/auto-engine/senders-health').then(r => r.json()).catch(() => ({})),
+        fetch('/api/auto-campaign/senders').then(r => r.json()).catch(() => ({})),
         fetch('/api/auto-engine/recent-stream').then(r => r.json()).catch(() => ({}))
       ]);
 
@@ -231,6 +242,69 @@ VisualSky Production Team`);
     }
   };
 
+  // Test & Save SMTP Sender
+  const handleTestAndSaveSmtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!smtpEmail || !smtpHost || !smtpPass) {
+      showToast('Sender Email, SMTP Host, and Password are required.', 'error');
+      return;
+    }
+
+    try {
+      setIsTestingSmtp(true);
+      const res = await fetch('/api/auto-campaign/add-sender', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          senderEmail: smtpEmail,
+          smtpHost,
+          smtpPort,
+          smtpUser: smtpUser || smtpEmail,
+          smtpPass,
+          dailyLimit: smtpDailyLimit
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        showToast(data.message || 'SMTP Sender connected and verified successfully! 🟢', 'success');
+        setIsSmtpModalOpen(false);
+        setSmtpEmail('');
+        setSmtpHost('');
+        setSmtpUser('');
+        setSmtpPass('');
+        fetchDashboardData();
+      } else {
+        showToast(data.error || 'SMTP Verification failed. Please check host, port or password.', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Network error verifying SMTP.', 'error');
+    } finally {
+      setIsTestingSmtp(false);
+    }
+  };
+
+  // Delete Sender Account
+  const handleDeleteSender = async (email: string) => {
+    if (!confirm(`Are you sure you want to disconnect sender "${email}"?`)) return;
+    try {
+      const res = await fetch('/api/auto-campaign/delete-sender', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Sender "${email}" removed.`, 'info');
+        fetchDashboardData();
+      } else {
+        showToast(data.error || 'Failed to delete sender.', 'error');
+      }
+    } catch {
+      showToast('Error removing sender.', 'error');
+    }
+  };
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       
@@ -272,32 +346,33 @@ VisualSky Production Team`);
             <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight flex items-center gap-2">
               <span>7-Day Autonomous Outreach Engine</span>
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
-                Isolated Module
+                Custom SMTP
               </span>
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-400 max-w-2xl">
-            Autonomous multi-niche cold pitching, automated follow-up cadences, and lock-screen mobile push alerts.
+            Real database sender rotation, automated 7-day multi-niche cadence, and lock-screen mobile push alerts.
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-950/90 border border-slate-800 text-xs font-semibold">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
-            <span className="text-slate-300">Engine: <strong className="text-emerald-400">Day 1 Online</strong></span>
-          </div>
+        <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setIsSmtpModalOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs shadow-md shadow-emerald-500/20 transition cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Connect SMTP Sender</span>
+          </button>
 
           <a
             href="/auto-engine"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-bold transition"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-bold transition"
             title="Open in Standalone Fullscreen View"
           >
-            <span>Fullscreen Page</span>
+            <span>Fullscreen View</span>
             <ExternalLink className="w-3.5 h-3.5" />
           </a>
         </div>
@@ -481,55 +556,87 @@ VisualSky Production Team`);
         {/* Live Status Cards */}
         <div className="space-y-6">
           
-          {/* Senders Health */}
+          {/* Senders Health (100% Real Database Accounts) */}
           <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800/80 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h4 className="text-sm font-black text-white flex items-center gap-2">
-                <Server className="w-4 h-4 text-cyan-400" />
-                <span>Connected Senders Health</span>
-              </h4>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                Rotator Active
-              </span>
+              <div>
+                <h4 className="text-sm font-black text-white flex items-center gap-2">
+                  <Server className="w-4 h-4 text-cyan-400" />
+                  <span>Connected Senders Health</span>
+                </h4>
+                <p className="text-[10px] text-slate-400">Live Database Accounts</p>
+              </div>
+              <button
+                type="button"
+                onClick={fetchDashboardData}
+                className="text-[11px] font-bold px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white transition flex items-center gap-1"
+                title="Refresh senders from database"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>Sync</span>
+              </button>
             </div>
 
-            <div className="space-y-2.5">
+            <div className="space-y-2.5 min-h-[100px]">
               {senders.length > 0 ? (
-                senders.map((s, idx) => (
-                  <div key={idx} className="p-3 rounded-2xl bg-slate-950 border border-slate-800/80 space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-white truncate">{s.email || 'dispatch@visualsky.pro'}</span>
-                      <span className="px-2 py-0.5 rounded text-[9px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                        {s.status || 'Active 🟢'}
-                      </span>
+                senders.map((s, idx) => {
+                  const limit = s.dailyLimit || 30;
+                  const sent = s.sentToday || 0;
+                  const pct = Math.min(100, Math.round((sent / limit) * 100));
+                  return (
+                    <div key={idx} className="p-3 rounded-2xl bg-slate-950 border border-slate-800/80 space-y-1.5 transition hover:border-slate-700">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-white truncate">{s.email}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="px-2 py-0.5 rounded text-[9px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                            {s.status || 'Active 🟢'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSender(s.email)}
+                            className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition"
+                            title="Disconnect sender"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-400">
+                        <span>Quota: <strong className="text-slate-200">{sent} / {limit}</strong> Sent</span>
+                        <span>Warmup: <strong className="text-cyan-400">{s.warmupScore || '100%'}</strong></span>
+                      </div>
+                      <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className="bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-500 h-1.5 rounded-full"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="flex items-center justify-between text-[11px] text-slate-400">
-                      <span>Quota: {s.sentToday || 14} / {s.dailyLimit || 30} Sent</span>
-                      <span>Warmup: {s.warmupScore || '98%'}</span>
-                    </div>
-                    <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
-                      <div
-                        className="bg-gradient-to-r from-cyan-500 to-blue-500 h-1.5 rounded-full"
-                        style={{ width: `${Math.min(100, Math.round(((s.sentToday || 14) / (s.dailyLimit || 30)) * 100))}%` }}
-                      />
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               ) : (
-                <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800/80 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-white truncate">dispatch@visualsky.pro</span>
-                    <span className="px-2 py-0.5 rounded text-[9px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                      Healthy 🟢
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-[11px] text-slate-400">
-                    <span>Quota: 14 / 30 Sent</span>
-                    <span>Warmup: 98%</span>
-                  </div>
+                <div className="p-5 text-center rounded-2xl bg-slate-950/50 border border-slate-800/60 space-y-2">
+                  <p className="text-xs font-semibold text-slate-300">No Custom SMTP Senders Connected Yet</p>
+                  <p className="text-[11px] text-slate-500">Connect your custom SMTP mailboxes to power the automated engine.</p>
+                  <button
+                    type="button"
+                    onClick={() => setIsSmtpModalOpen(true)}
+                    className="px-3.5 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-bold transition cursor-pointer"
+                  >
+                    + Connect First SMTP Sender
+                  </button>
                 </div>
               )}
             </div>
+
+            <button
+              type="button"
+              onClick={() => setIsSmtpModalOpen(true)}
+              className="w-full py-2.5 rounded-xl border border-dashed border-cyan-500/40 hover:border-cyan-400 text-cyan-300 hover:text-white text-xs font-bold transition flex items-center justify-center gap-1.5 bg-cyan-500/5 hover:bg-cyan-500/10 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Connect New SMTP Sender</span>
+            </button>
 
             <p className="text-[11px] text-slate-400 text-center">
               Senders automatically balance cold outreach load to protect sender score.
@@ -579,6 +686,135 @@ VisualSky Production Team`);
         </div>
 
       </div>
+
+      {/* ========================================================================= */}
+      {/* MODAL: CONNECT NEW CUSTOM SMTP SENDER */}
+      {/* ========================================================================= */}
+      {isSmtpModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg rounded-3xl bg-[#090e1c] border border-cyan-500/40 p-6 sm:p-7 shadow-2xl relative space-y-5 animate-in fade-in zoom-in-95 duration-200">
+            
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-bold">
+                  <Mail className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white">Connect New SMTP Sender</h3>
+                  <p className="text-xs text-slate-400">Verifies live credentials via nodemailer.verify() before saving</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSmtpModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleTestAndSaveSmtp} className="space-y-3.5">
+              <div className="space-y-1">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">Sender Email Address *</label>
+                <input
+                  type="email"
+                  required
+                  value={smtpEmail}
+                  onChange={e => setSmtpEmail(e.target.value)}
+                  placeholder="outreach@yourdomain.com"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500 transition"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2 space-y-1">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">SMTP Host *</label>
+                  <input
+                    type="text"
+                    required
+                    value={smtpHost}
+                    onChange={e => setSmtpHost(e.target.value)}
+                    placeholder="smtp.gmail.com or mail.yourdomain.com"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500 transition"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">Port *</label>
+                  <input
+                    type="number"
+                    required
+                    value={smtpPort}
+                    onChange={e => setSmtpPort(Number(e.target.value) || 587)}
+                    placeholder="587 or 465"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-cyan-300 font-bold focus:outline-none focus:border-cyan-500 transition"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">Username *</label>
+                  <input
+                    type="text"
+                    required
+                    value={smtpUser}
+                    onChange={e => setSmtpUser(e.target.value)}
+                    placeholder="Username or email"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500 transition"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">Password / App Password *</label>
+                  <input
+                    type="password"
+                    required
+                    value={smtpPass}
+                    onChange={e => setSmtpPass(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500 transition"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">Daily Limit per Sender</label>
+                <input
+                  type="number"
+                  required
+                  min={5}
+                  max={200}
+                  value={smtpDailyLimit}
+                  onChange={e => setSmtpDailyLimit(Number(e.target.value) || 30)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-cyan-300 font-bold focus:outline-none focus:border-cyan-500 transition"
+                />
+                <p className="text-[11px] text-slate-400">Default 30 emails/day recommended for high inbox delivery.</p>
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsSmtpModalOpen(false)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={isTestingSmtp}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Zap className="w-3.5 h-3.5 fill-current" />
+                  <span>{isTestingSmtp ? 'Verifying SMTP...' : 'Test & Save SMTP'}</span>
+                </button>
+              </div>
+            </form>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );

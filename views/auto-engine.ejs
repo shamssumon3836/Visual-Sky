@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>⚡ 7-Day Autonomous Outreach Engine</title>
+  <title>⚡ 7-Day Autonomous Outreach Engine - Custom SMTP Manager</title>
   <meta name="description" content="Autonomous Cold Outreach Engine - Multi-Niche Targeting, Multi-Sender Cadence & Mobile Push Alerts">
   
   <!-- Tailwind CSS CDN -->
@@ -27,7 +27,6 @@
   </script>
 
   <style>
-    /* Neon glass styling & animations */
     body {
       background-color: #060913;
       color: #f1f5f9;
@@ -38,10 +37,10 @@
     ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 9999px; }
     ::-webkit-scrollbar-thumb:hover { background: #334155; }
     .glass-panel {
-      background: rgba(13, 20, 36, 0.75);
+      background: rgba(13, 20, 36, 0.78);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(30, 41, 59, 0.8);
+      border: 1px solid rgba(30, 41, 59, 0.85);
     }
     .neon-cyan-glow {
       box-shadow: 0 0 25px -4px rgba(6, 182, 212, 0.25);
@@ -50,20 +49,13 @@
       border-color: rgba(6, 182, 212, 0.8);
       box-shadow: 0 0 15px rgba(6, 182, 212, 0.3);
     }
-    @keyframes pulse-ring {
-      0%, 100% { opacity: 0.4; transform: scale(0.98); }
-      50% { opacity: 0.9; transform: scale(1.02); }
-    }
-    .pulse-subtle {
-      animation: pulse-ring 3s infinite ease-in-out;
-    }
   </style>
 </head>
 
 <body class="min-h-screen flex flex-col antialiased selection:bg-cyan-500/30 selection:text-cyan-200">
 
   <!-- Top Navigation Bar -->
-  <header class="border-b border-slate-800/80 bg-[#080d1a]/90 sticky top-0 z-50 backdrop-blur-md">
+  <header class="border-b border-slate-800/80 bg-[#080d1a]/95 sticky top-0 z-40 backdrop-blur-md">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
       
       <!-- Brand & Title -->
@@ -81,23 +73,24 @@
             <h1 class="text-sm sm:text-base font-extrabold tracking-tight text-white flex items-center gap-2">
               <span>7-Day Autonomous Outreach Engine</span>
             </h1>
-            <p class="text-[11px] text-slate-400 hidden md:block">Scalable Multi-Sender Cold Pipeline with Instant Mobile Alerts</p>
+            <p class="text-[11px] text-slate-400 hidden md:block">Real Database Senders &bull; Multi-Niche Rotator &bull; Mobile Push Hub</p>
           </div>
         </div>
       </div>
 
-      <!-- System Status Badge -->
-      <div class="flex items-center gap-3">
-        <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/90 border border-slate-800 text-xs font-semibold">
-          <span class="relative flex h-2.5 w-2.5">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-          </span>
-          <span class="text-slate-300">Engine: <strong class="text-emerald-400 font-bold">Online (Active)</strong></span>
-        </div>
+      <!-- Action Buttons -->
+      <div class="flex items-center gap-2.5">
+        <button
+          type="button"
+          id="btn-open-smtp-modal"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs shadow-md shadow-emerald-500/20 transition cursor-pointer"
+        >
+          <span>➕</span>
+          <span>Connect SMTP Sender</span>
+        </button>
 
         <a href="#push-control-box" class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/20 text-xs font-bold transition">
-          <span>🔔 Mobile Alerts</span>
+          <span>🔔 Push Alerts</span>
         </a>
       </div>
 
@@ -107,7 +100,7 @@
   <!-- Main Content Container -->
   <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
 
-    <!-- 1. Hero & Mobile Push Notification Banner -->
+    <!-- 1. Mobile Push Alerts Hero Card -->
     <section id="push-control-box" class="glass-panel p-5 sm:p-6 rounded-3xl border border-cyan-500/30 neon-cyan-glow relative overflow-hidden bg-gradient-to-r from-slate-950 via-[#0a1528] to-slate-950">
       <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
         
@@ -119,11 +112,11 @@
           </div>
 
           <h2 class="text-xl sm:text-2xl font-black text-white tracking-tight">
-            ⚡ Stay Connected with Live Mobile Push Notifications
+            ⚡ Live Mobile Push Notifications & Real-Time Alerts
           </h2>
 
           <p class="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
-            Get pinged on your mobile phone or browser the second a lead replies, books a call, or an inbox receives high-intent responses. Works autonomously in the background even when your laptop or browser is closed.
+            Get pinged on your phone lock screen or browser the second a lead replies, requests a meeting, or reports an auto-reply. Works in the background even if this tab is closed.
           </p>
 
           <div class="flex items-center gap-2 pt-1 text-xs">
@@ -134,7 +127,7 @@
           </div>
         </div>
 
-        <!-- Action Button -->
+        <!-- Push Buttons -->
         <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
           <button
             type="button"
@@ -161,10 +154,10 @@
       <div id="push-feedback-message" class="mt-4 p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-xs text-slate-300 hidden"></div>
     </section>
 
-    <!-- 2. Campaign Launch Form + Real-Time Overview Grid -->
+    <!-- 2. Campaign Launch Form + Live Status Overview -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-      <!-- Left Column (2 Cols): Campaign Launch Form -->
+      <!-- Left Column: Campaign Launch Form -->
       <section class="lg:col-span-2 glass-panel p-5 sm:p-7 rounded-3xl border border-slate-800/80 space-y-6">
         
         <div class="border-b border-slate-800/80 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -172,7 +165,7 @@
             <h3 class="text-lg font-black text-white flex items-center gap-2">
               <span>🚀 Launch Scalable 7-Day Campaign</span>
             </h3>
-            <p class="text-xs text-slate-400">Distribute high-volume cold outreach across rotating sender mailboxes over 7 autonomous days.</p>
+            <p class="text-xs text-slate-400">Distribute cold outreach across custom verified sender mailboxes over 7 autonomous days.</p>
           </div>
           <span class="px-2.5 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 w-fit">
             Auto Cadence Active
@@ -191,10 +184,10 @@
               id="field-niches"
               required
               value="Videographer, Dentist, Gym Coach"
-              placeholder="e.g. Videographer, Dentist, Gym Coach, Real Estate Agent"
+              placeholder="e.g. Videographer, Dentist, Gym Coach"
               class="w-full px-4 py-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-sm text-white focus:outline-none focus:border-cyan-500 neon-border-glow transition"
             >
-            <p class="text-[11px] text-slate-400">Separate multiple industries with commas. The engine mines and rotates leads per niche.</p>
+            <p class="text-[11px] text-slate-400">Comma-separated industries. The engine automatically segments and balances outreach.</p>
           </div>
 
           <!-- Target Cities -->
@@ -207,7 +200,7 @@
               id="field-cities"
               required
               value="London, Manchester, New York"
-              placeholder="e.g. London, Manchester, New York, Los Angeles, Miami"
+              placeholder="e.g. London, Manchester, New York"
               class="w-full px-4 py-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-sm text-white focus:outline-none focus:border-cyan-500 neon-border-glow transition"
             >
           </div>
@@ -232,7 +225,7 @@
                 >
                 <span class="absolute right-3.5 top-2.5 text-xs text-slate-400 pointer-events-none">emails/day</span>
               </div>
-              <p class="text-[11px] text-slate-400">Recommended: 25–40 emails per sender to protect domain deliverability.</p>
+              <p class="text-[11px] text-slate-400">Default 30 protects your domain warmup score.</p>
             </div>
 
             <!-- Portfolio / Reel URL -->
@@ -244,10 +237,10 @@
                 type="url"
                 id="field-portfolio-url"
                 value="https://visualsky.pro/reel"
-                placeholder="https://visualsky.pro/reel or Google Drive folder"
+                placeholder="https://visualsky.pro/reel or Drive folder link"
                 class="w-full px-4 py-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 neon-border-glow transition"
               >
-              <p class="text-[11px] text-slate-400">Auto-injected into the pitch template token: <code class="text-cyan-400 font-mono">{{portfolioUrl}}</code></p>
+              <p class="text-[11px] text-slate-400">Auto-injected into token: <code class="text-cyan-400 font-mono">{{portfolioUrl}}</code></p>
             </div>
 
           </div>
@@ -256,28 +249,15 @@
           <div class="space-y-1.5">
             <div class="flex items-center justify-between">
               <label class="block text-xs font-bold uppercase tracking-wider text-slate-300">
-                Service Pitch / Cold Outreach Offer *
+                Service Pitch / Offer *
               </label>
-              <span class="text-[11px] text-slate-400">Tokens: <strong class="text-cyan-300 font-mono">{{firstName}}</strong>, <strong class="text-cyan-300 font-mono">{{businessName}}</strong>, <strong class="text-cyan-300 font-mono">{{city}}</strong></span>
+              <span class="text-[11px] text-slate-400">Tokens: <code class="text-cyan-300 font-mono">{{firstName}}</code>, <code class="text-cyan-300 font-mono">{{businessName}}</code>, <code class="text-cyan-300 font-mono">{{city}}</code></span>
             </div>
             <textarea
               id="field-service-pitch"
               rows="6"
               required
               class="w-full px-4 py-3 rounded-xl bg-slate-950/90 border border-slate-800 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-cyan-500 neon-border-glow transition font-mono leading-relaxed"
-              placeholder="Hi {{firstName}},
-
-I came across {{businessName}} in {{city}} and was really impressed with your brand.
-
-We specialize in scaling client acquisition and video post-production for high-growth businesses. We recently helped a similar team double their inbound booking rate within 30 days.
-
-You can check out our recent project showreel here:
-{{portfolioUrl}}
-
-Would you be open to a quick 5-minute review call this Thursday at 2 PM to see if this makes sense for {{businessName}}?
-
-Best regards,
-VisualSky Production Team"
             >Hi {{firstName}},
 
 I came across {{businessName}} in {{city}} and was really impressed with your brand.
@@ -309,54 +289,46 @@ VisualSky Production Team</textarea>
 
       </section>
 
-      <!-- Right Column: Status Cards & Metrics -->
+      <!-- Right Column: Connected Senders Health & Live Stream -->
       <div class="space-y-6">
 
-        <!-- CARD 1: Connected Senders Health -->
+        <!-- CARD 1: Connected Senders Health (100% Real Database Accounts) -->
         <div class="glass-panel p-5 rounded-3xl border border-slate-800/80 space-y-4">
           <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-            <h4 class="text-sm font-black text-white flex items-center gap-2">
-              <span>📡 Connected Senders Health</span>
-            </h4>
-            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-              Rotator Active
-            </span>
+            <div>
+              <h4 class="text-sm font-black text-white flex items-center gap-2">
+                <span>📡 Connected Senders Health</span>
+              </h4>
+              <p class="text-[11px] text-slate-400">Live Database Verified Accounts</p>
+            </div>
+            <button
+              type="button"
+              id="btn-refresh-senders"
+              class="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-300 hover:text-white transition flex items-center gap-1"
+              title="Refresh Senders"
+            >
+              <span>🔄</span>
+              <span>Sync</span>
+            </button>
           </div>
 
-          <div id="senders-health-list" class="space-y-2.5">
-            <!-- Dynamically populated or default fallback -->
-            <div class="p-3 rounded-2xl bg-slate-950/90 border border-slate-800/80 space-y-1.5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-bold text-white truncate">dispatch@visualsky.pro</span>
-                <span class="px-2 py-0.5 rounded-md text-[9px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  Healthy 🟢
-                </span>
-              </div>
-              <div class="flex items-center justify-between text-[11px] text-slate-400">
-                <span>Quota: 14 / 30 Sent</span>
-                <span>Warmup: 98%</span>
-              </div>
-              <div class="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
-                <div class="bg-gradient-to-r from-cyan-500 to-blue-500 h-1.5 rounded-full" style="width: 47%"></div>
-              </div>
-            </div>
-
-            <div class="p-3 rounded-2xl bg-slate-950/90 border border-slate-800/80 space-y-1.5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-bold text-white truncate">outreach@visualsky.pro</span>
-                <span class="px-2 py-0.5 rounded-md text-[9px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  Healthy 🟢
-                </span>
-              </div>
-              <div class="flex items-center justify-between text-[11px] text-slate-400">
-                <span>Quota: 8 / 30 Sent</span>
-                <span>Warmup: 100%</span>
-              </div>
-              <div class="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
-                <div class="bg-gradient-to-r from-cyan-500 to-blue-500 h-1.5 rounded-full" style="width: 27%"></div>
-              </div>
+          <!-- Dynamic Sender Accounts List Container -->
+          <div id="senders-health-list" class="space-y-2.5 min-h-[120px]">
+            <!-- Rendered dynamically by JavaScript -->
+            <div class="p-6 text-center text-slate-500 text-xs">
+              Fetching connected senders from database...
             </div>
           </div>
+
+          <!-- Add Sender Action Button -->
+          <button
+            type="button"
+            id="btn-add-sender-card"
+            class="w-full py-2.5 rounded-xl border border-dashed border-cyan-500/40 hover:border-cyan-400 text-cyan-300 hover:text-white text-xs font-bold transition flex items-center justify-center gap-2 bg-cyan-500/5 hover:bg-cyan-500/10 cursor-pointer"
+          >
+            <span>➕</span>
+            <span>Connect New SMTP Sender</span>
+          </button>
 
           <p class="text-[11px] text-slate-400 text-center">
             Senders automatically balance cold outreach load to protect sender score.
@@ -373,7 +345,6 @@ VisualSky Production Team</textarea>
           </div>
 
           <div id="recent-stream-list" class="space-y-2 text-xs divide-y divide-slate-800/40">
-            
             <div class="pt-2 first:pt-0 flex items-start justify-between gap-2">
               <div class="min-w-0">
                 <p class="font-bold text-white truncate">Lumos Video Production</p>
@@ -412,7 +383,6 @@ VisualSky Production Team</textarea>
                 <p class="text-[9px] text-slate-400 mt-0.5">12m ago</p>
               </div>
             </div>
-
           </div>
 
           <div class="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 text-[11px] text-slate-400 text-center flex items-center justify-center gap-1.5">
@@ -426,12 +396,143 @@ VisualSky Production Team</textarea>
 
   </main>
 
+  <!-- ========================================================================= -->
+  <!-- MODAL: CONNECT NEW CUSTOM SMTP SENDER -->
+  <!-- ========================================================================= -->
+  <div id="smtp-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 hidden">
+    <div class="w-full max-w-lg rounded-3xl bg-[#090e1c] border border-cyan-500/40 p-6 sm:p-7 shadow-2xl relative space-y-5 animate-in fade-in zoom-in-95 duration-200">
+      
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-bold">
+            ✉️
+          </div>
+          <div>
+            <h3 class="text-base font-black text-white">Connect New SMTP Sender</h3>
+            <p class="text-xs text-slate-400">Verifies live credentials via nodemailer.verify() before saving</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          id="btn-close-smtp-modal"
+          class="text-slate-400 hover:text-white p-1 text-lg font-bold"
+        >
+          &times;
+        </button>
+      </div>
+
+      <!-- Modal Form -->
+      <form id="smtp-form" class="space-y-3.5">
+        
+        <!-- Sender Email -->
+        <div class="space-y-1">
+          <label class="block text-xs font-bold uppercase tracking-wider text-slate-300">Sender Email Address *</label>
+          <input
+            type="email"
+            id="smtp-field-email"
+            required
+            placeholder="outreach@yourdomain.com"
+            class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500 transition"
+          >
+        </div>
+
+        <!-- Host and Port -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div class="sm:col-span-2 space-y-1">
+            <label class="block text-xs font-bold uppercase tracking-wider text-slate-300">SMTP Host *</label>
+            <input
+              type="text"
+              id="smtp-field-host"
+              required
+              placeholder="smtp.gmail.com or mail.yourdomain.com"
+              class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500 transition"
+            >
+          </div>
+
+          <div class="space-y-1">
+            <label class="block text-xs font-bold uppercase tracking-wider text-slate-300">Port *</label>
+            <input
+              type="number"
+              id="smtp-field-port"
+              required
+              value="587"
+              placeholder="587 or 465"
+              class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-cyan-300 font-bold focus:outline-none focus:border-cyan-500 transition"
+            >
+          </div>
+        </div>
+
+        <!-- Username and Password -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="space-y-1">
+            <label class="block text-xs font-bold uppercase tracking-wider text-slate-300">Username *</label>
+            <input
+              type="text"
+              id="smtp-field-user"
+              required
+              placeholder="Username or email"
+              class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500 transition"
+            >
+          </div>
+
+          <div class="space-y-1">
+            <label class="block text-xs font-bold uppercase tracking-wider text-slate-300">Password / App Password *</label>
+            <input
+              type="password"
+              id="smtp-field-pass"
+              required
+              placeholder="••••••••••••"
+              class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500 transition"
+            >
+          </div>
+        </div>
+
+        <!-- Daily Limit -->
+        <div class="space-y-1">
+          <label class="block text-xs font-bold uppercase tracking-wider text-slate-300">Daily Limit per Sender</label>
+          <input
+            type="number"
+            id="smtp-field-limit"
+            required
+            min="5"
+            max="200"
+            value="30"
+            class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-cyan-300 font-bold focus:outline-none focus:border-cyan-500 transition"
+          >
+          <p class="text-[11px] text-slate-400">Default 30 emails/day recommended for high inbox delivery.</p>
+        </div>
+
+        <!-- Modal Action Buttons -->
+        <div class="pt-3 flex items-center justify-end gap-2.5">
+          <button
+            type="button"
+            id="btn-cancel-smtp"
+            class="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold transition cursor-pointer"
+          >
+            Cancel
+          </button>
+
+          <button
+            type="submit"
+            id="btn-test-save-smtp"
+            class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+          >
+            <span>⚡</span>
+            <span id="btn-save-smtp-text">Test & Save SMTP</span>
+          </button>
+        </div>
+
+      </form>
+
+    </div>
+  </div>
+
   <!-- Client-Side JavaScript Logic -->
   <script>
-    // State Tracker
     let activePushSubscription = null;
 
-    // Toast Notification Utility
+    // Toast Utility
     function displayToast(msg, type = 'info') {
       const box = document.getElementById('push-feedback-message');
       box.classList.remove('hidden', 'border-rose-500/50', 'text-rose-300', 'border-emerald-500/50', 'text-emerald-300', 'border-cyan-500/50', 'text-cyan-300');
@@ -448,7 +549,151 @@ VisualSky Production Team</textarea>
       box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
-    // Helper: Convert base64 VAPID key to Uint8Array for PushManager
+    // Modal Controls
+    const modal = document.getElementById('smtp-modal');
+    const openModal = () => modal.classList.remove('hidden');
+    const closeModal = () => modal.classList.add('hidden');
+
+    document.getElementById('btn-open-smtp-modal').onclick = openModal;
+    document.getElementById('btn-add-sender-card').onclick = openModal;
+    document.getElementById('btn-close-smtp-modal').onclick = closeModal;
+    document.getElementById('btn-cancel-smtp').onclick = closeModal;
+
+    // Load & Render Connected Senders Health from Database
+    async function loadConnectedSenders() {
+      const listContainer = document.getElementById('senders-health-list');
+      try {
+        const res = await fetch('/api/auto-campaign/senders');
+        const data = await res.json();
+
+        if (data.success && Array.isArray(data.senders) && data.senders.length > 0) {
+          listContainer.innerHTML = data.senders.map(s => {
+            const limit = s.dailyLimit || 30;
+            const sent = s.sentToday || 0;
+            const pct = Math.min(100, Math.round((sent / limit) * 100));
+            return `
+              <div class="p-3 rounded-2xl bg-slate-950/90 border border-slate-800/80 space-y-1.5 transition hover:border-slate-700">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-xs font-bold text-white truncate">${s.email}</span>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <span class="px-2 py-0.5 rounded text-[9px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      ${s.status || 'Active 🟢'}
+                    </span>
+                    <button
+                      type="button"
+                      onclick="deleteSenderAccount('${s.email}')"
+                      class="px-1.5 py-0.5 rounded text-[10px] text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 font-bold transition"
+                      title="Disconnect sender"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between text-[11px] text-slate-400">
+                  <span>Quota: <strong class="text-slate-200">${sent} / ${limit}</strong> Sent</span>
+                  <span>Warmup: <strong class="text-cyan-400">${s.warmupScore || '100%'}</strong></span>
+                </div>
+                <div class="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
+                  <div class="bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-500 h-1.5 rounded-full transition-all" style="width: ${pct}%"></div>
+                </div>
+              </div>
+            `;
+          }).join('');
+        } else {
+          listContainer.innerHTML = `
+            <div class="p-6 text-center rounded-2xl bg-slate-950/50 border border-slate-800/60 space-y-2">
+              <p class="text-xs font-semibold text-slate-400">No Custom SMTP Senders Connected Yet</p>
+              <p class="text-[11px] text-slate-500">Connect your custom sending mailboxes to start the 7-day automated engine.</p>
+              <button
+                type="button"
+                onclick="document.getElementById('smtp-modal').classList.remove('hidden')"
+                class="px-3.5 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-bold transition"
+              >
+                + Connect First SMTP Sender
+              </button>
+            </div>
+          `;
+        }
+      } catch (err) {
+        listContainer.innerHTML = `
+          <div class="p-4 text-center text-rose-400 text-xs">Failed to load sender accounts from database.</div>
+        `;
+      }
+    }
+
+    // Delete Sender Account
+    async function deleteSenderAccount(email) {
+      if (!confirm(`Are you sure you want to disconnect and delete sender "${email}"?`)) return;
+      try {
+        const res = await fetch('/api/auto-campaign/delete-sender', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email })
+        });
+        const data = await res.json();
+        if (data.success) {
+          displayToast(`Sender "${email}" removed successfully.`, 'info');
+          loadConnectedSenders();
+        } else {
+          displayToast(data.error || 'Failed to remove sender.', 'error');
+        }
+      } catch {
+        displayToast('Network error removing sender.', 'error');
+      }
+    }
+
+    // Test & Save SMTP Form Submission
+    document.getElementById('smtp-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('btn-test-save-smtp');
+      const btnText = document.getElementById('btn-save-smtp-text');
+
+      try {
+        btn.disabled = true;
+        btnText.textContent = 'Verifying SMTP Connection...';
+
+        const senderEmail = document.getElementById('smtp-field-email').value.trim();
+        const smtpHost = document.getElementById('smtp-field-host').value.trim();
+        const smtpPort = Number(document.getElementById('smtp-field-port').value) || 587;
+        const smtpUser = document.getElementById('smtp-field-user').value.trim() || senderEmail;
+        const smtpPass = document.getElementById('smtp-field-pass').value.trim();
+        const dailyLimit = Number(document.getElementById('smtp-field-limit').value) || 30;
+
+        const payload = {
+          senderEmail,
+          smtpHost,
+          smtpPort,
+          smtpUser,
+          smtpPass,
+          dailyLimit
+        };
+
+        const res = await fetch('/api/auto-campaign/add-sender', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+
+        if (data.success) {
+          displayToast(data.message || `SMTP Sender "${senderEmail}" verified & saved!`, 'success');
+          closeModal();
+          document.getElementById('smtp-form').reset();
+          loadConnectedSenders();
+        } else {
+          displayToast(data.error || 'SMTP Verification failed. Please check host, port or password.', 'error');
+        }
+
+      } catch (err) {
+        displayToast('Network error while testing SMTP connection.', 'error');
+      } finally {
+        btn.disabled = false;
+        btnText.textContent = 'Test & Save SMTP';
+      }
+    };
+
+    // Helper: Convert base64 VAPID key
     function base64ToUint8Array(base64String) {
       const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
       const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
@@ -460,7 +705,7 @@ VisualSky Production Team</textarea>
       return outputArray;
     }
 
-    // Initialize Service Worker & Push Alerts
+    // Init Push System
     async function initPushNotificationSystem() {
       const badge = document.getElementById('push-status-badge');
       const btn = document.getElementById('btn-enable-push');
@@ -490,13 +735,12 @@ VisualSky Production Team</textarea>
           badge.textContent = '⚪ Push Inactive (Click button to enable)';
         }
       } catch (err) {
-        console.warn('Service worker check notice:', err);
         badge.className = 'px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-800 text-slate-300 border border-slate-700';
         badge.textContent = 'Ready to Subscribe';
       }
     }
 
-    // Subscribe User to Phone Push Alerts
+    // Subscribe to Push Alerts
     async function subscribeToPushAlerts() {
       const btn = document.getElementById('btn-enable-push');
       const btnText = document.getElementById('btn-push-text');
@@ -510,20 +754,18 @@ VisualSky Production Team</textarea>
         if (permission !== 'granted') {
           badge.className = 'px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30';
           badge.textContent = 'Permission Denied in Browser Settings';
-          displayToast('Notification permission was denied. Please allow notifications in your browser address bar.', 'error');
+          displayToast('Notification permission denied. Please allow notifications in browser settings.', 'error');
           return;
         }
 
         btnText.textContent = 'Connecting Push Keys...';
 
-        // 1. Fetch public VAPID key
         const keyRes = await fetch('/api/auto-engine/vapid-public-key');
         const keyData = await keyRes.json();
         if (!keyData.success || !keyData.publicKey) {
           throw new Error('VAPID public key unavailable from server.');
         }
 
-        // 2. Register Service Worker & Subscribe
         const registration = await navigator.serviceWorker.ready;
         const subscription = await registration.pushManager.subscribe({
           userVisibleOnly: true,
@@ -532,7 +774,6 @@ VisualSky Production Team</textarea>
 
         activePushSubscription = subscription;
 
-        // 3. Save subscription to Backend API
         const saveRes = await fetch('/api/auto-engine/save-subscription', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -547,13 +788,12 @@ VisualSky Production Team</textarea>
           badge.className = 'px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
           badge.textContent = '🟢 Mobile Push Active & Paired';
           btnText.textContent = 'Push Alerts Enabled';
-          displayToast('🔔 Success! Mobile Web Push is now paired with your device. You will receive real-time reply alerts.', 'success');
+          displayToast('🔔 Success! Mobile Web Push is paired with your device lock screen.', 'success');
         } else {
           throw new Error(saveData.error || 'Failed to save subscription.');
         }
 
       } catch (err) {
-        console.error('Push registration error:', err);
         displayToast('Subscription error: ' + (err.message || 'Could not enable push alerts.'), 'error');
       } finally {
         btn.disabled = false;
@@ -623,7 +863,7 @@ VisualSky Production Team</textarea>
 
         if (data.success) {
           displayToast('⚡ 7-Day Autonomous Engine successfully configured and deployed! Dispatches will begin according to sender quotas.', 'success');
-          // Add to recent stream
+          
           const streamList = document.getElementById('recent-stream-list');
           const firstNiche = niches.split(',')[0].trim();
           const firstCity = targetCities.split(',')[0].trim();
@@ -655,12 +895,15 @@ VisualSky Production Team</textarea>
       }
     };
 
-    // Event Listeners & On Load
+    // Event Listeners
     document.getElementById('btn-enable-push').onclick = subscribeToPushAlerts;
     document.getElementById('btn-test-push').onclick = sendTestPushAlert;
+    document.getElementById('btn-refresh-senders').onclick = loadConnectedSenders;
 
+    // Boot
     window.addEventListener('DOMContentLoaded', () => {
       initPushNotificationSystem();
+      loadConnectedSenders();
     });
   </script>
 

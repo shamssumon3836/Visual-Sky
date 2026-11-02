@@ -37,7 +37,7 @@ var import_path2 = __toESM(require("path"), 1);
 var import_fs2 = __toESM(require("fs"), 1);
 var import_dotenv = __toESM(require("dotenv"), 1);
 var import_genai = require("@google/genai");
-var import_nodemailer = __toESM(require("nodemailer"), 1);
+var import_nodemailer2 = __toESM(require("nodemailer"), 1);
 var import_imapflow = require("imapflow");
 var import_mailparser = require("mailparser");
 var import_crypto = __toESM(require("crypto"), 1);
@@ -50,6 +50,7 @@ var import_path = __toESM(require("path"), 1);
 var import_fs = __toESM(require("fs"), 1);
 var import_mongoose2 = __toESM(require("mongoose"), 1);
 var import_web_push = __toESM(require("web-push"), 1);
+var import_nodemailer = __toESM(require("nodemailer"), 1);
 
 // models/autoEngine.js
 var import_mongoose = __toESM(require("mongoose"), 1);
@@ -467,18 +468,124 @@ router.post("/api/auto-campaign/create-multi", async (req, res) => {
     return res.status(500).json({ success: false, error: err?.message || "Failed to create multi-campaign" });
   }
 });
-router.get("/api/auto-engine/senders-health", async (_req, res) => {
+router.post("/api/auto-campaign/add-sender", async (req, res) => {
   try {
-    const senders = readJsonFile(SENDERS_FILE, [
-      {
-        email: process.env.SMTP_USER || "dispatch@visualsky.pro",
-        host: process.env.SMTP_HOST || "mail.visualsky.pro",
-        dailyLimit: 30,
-        sentToday: 14,
-        warmupScore: "98%",
-        status: "Active (Healthy \u{1F7E2})"
+    const email = String(req.body?.senderEmail || req.body?.email || "").trim().toLowerCase();
+    const host = String(req.body?.smtpHost || req.body?.host || "").trim();
+    const port = Number(req.body?.smtpPort || req.body?.port) || 587;
+    const user = String(req.body?.smtpUser || req.body?.user || email).trim();
+    const pass = String(req.body?.smtpPass || req.body?.pass || req.body?.password || "").trim();
+    const dailyLimit = Number(req.body?.dailyLimit || req.body?.dailyQuota) || 30;
+    if (!email || !host || !pass) {
+      return res.status(400).json({
+        success: false,
+        error: "Sender Email, SMTP Host, and Password are required."
+      });
+    }
+    const transporter = import_nodemailer.default.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+      tls: {
+        rejectUnauthorized: false
+      },
+      connectionTimeout: 1e4
+    });
+    try {
+      await transporter.verify();
+    } catch (verifyErr) {
+      console.warn("[AutoEngine] SMTP verification failed for:", email, verifyErr?.message);
+      return res.status(400).json({
+        success: false,
+        error: `SMTP Connection Failed: ${verifyErr?.message || "Check host, port, username, or app password."}`
+      });
+    }
+    const senderDoc = {
+      _id: "snd_" + Date.now(),
+      email,
+      smtpConfig: {
+        host,
+        port,
+        user,
+        pass
+      },
+      dailyLimit,
+      sentToday: 0,
+      warmupScore: "100%",
+      status: "Active (Healthy \u{1F7E2})",
+      createdAt: /* @__PURE__ */ new Date(),
+      updatedAt: /* @__PURE__ */ new Date()
+    };
+    if (import_mongoose2.default.connection.readyState === 1) {
+      try {
+        await SenderAccount.findOneAndUpdate(
+          { email },
+          senderDoc,
+          { upsert: true, new: true }
+        );
+      } catch (dbErr) {
+        console.warn("[AutoEngine] Mongoose save sender fallback:", dbErr);
       }
-    ]);
+    }
+    const localSenders = readJsonFile(SENDERS_FILE, []);
+    const idx = localSenders.findIndex((s) => s.email?.toLowerCase() === email);
+    if (idx >= 0) {
+      localSenders[idx] = { ...localSenders[idx], ...senderDoc };
+    } else {
+      localSenders.unshift(senderDoc);
+    }
+    writeJsonFile(SENDERS_FILE, localSenders);
+    return res.json({
+      success: true,
+      message: `\u2705 SMTP Sender "${email}" successfully tested, verified, and saved!`,
+      sender: senderDoc
+    });
+  } catch (err) {
+    console.error("[AutoEngine] Add sender exception:", err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "Failed to verify and save SMTP sender."
+    });
+  }
+});
+router.delete(["/api/auto-campaign/delete-sender", "/api/auto-campaign/senders/:id"], async (req, res) => {
+  try {
+    const targetEmail = String(req.body?.email || req.query?.email || req.params?.id || "").trim().toLowerCase();
+    if (!targetEmail) {
+      return res.status(400).json({ success: false, error: "Sender email or ID required." });
+    }
+    if (import_mongoose2.default.connection.readyState === 1) {
+      try {
+        await SenderAccount.deleteOne({
+          $or: [{ email: targetEmail }, { _id: targetEmail }]
+        });
+      } catch {
+      }
+    }
+    let localSenders = readJsonFile(SENDERS_FILE, []);
+    localSenders = localSenders.filter((s) => s.email?.toLowerCase() !== targetEmail && s._id !== targetEmail);
+    writeJsonFile(SENDERS_FILE, localSenders);
+    return res.json({
+      success: true,
+      message: `Sender account removed successfully.`
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message });
+  }
+});
+router.get(["/api/auto-engine/senders-health", "/api/auto-campaign/senders"], async (_req, res) => {
+  try {
+    let senders = [];
+    if (import_mongoose2.default.connection.readyState === 1) {
+      try {
+        senders = await SenderAccount.find().sort({ createdAt: -1 });
+      } catch {
+      }
+    }
+    if (senders.length === 0) {
+      senders = readJsonFile(SENDERS_FILE, []);
+    }
     return res.json({ success: true, senders });
   } catch (err) {
     return res.status(500).json({ success: false, error: err?.message });
@@ -1381,7 +1488,7 @@ var sendOwnerManualBkashNotificationEmail = async (payload) => {
     </div>
   `;
   try {
-    const transporter = import_nodemailer.default.createTransport({
+    const transporter = import_nodemailer2.default.createTransport({
       host: sysHost,
       port: sysPort,
       secure: sysSecure,
@@ -1880,7 +1987,7 @@ This code will expire in 15 minutes. If you did not request this password reset,
     const sysSecure = process.env.SMTP_SECURE === "true" || sysPort === 465;
     const fromAddr = process.env.SMTP_FROM || sysUser;
     try {
-      const transporter = import_nodemailer.default.createTransport({
+      const transporter = import_nodemailer2.default.createTransport({
         host: sysHost,
         port: sysPort,
         secure: sysSecure,
@@ -1976,7 +2083,7 @@ This code will expire in 15 minutes. If you did not request this password reset,
           const customPort = Number(customSmtp.port) || 587;
           const customSecure = customSmtp.encryption === "SSL" || customPort === 465;
           const customFrom = customSmtp.fromEmail || customSmtp.username;
-          const customTransporter = import_nodemailer.default.createTransport({
+          const customTransporter = import_nodemailer2.default.createTransport({
             host: customSmtp.host,
             port: customPort,
             secure: customSecure,
@@ -2111,7 +2218,7 @@ var dispatchVerificationEmail = async (params) => {
   const sysDomain = fromAddr.split("@")[1] || "visualsky.pro";
   const msgId = `<${import_crypto.default.randomBytes(8).toString("hex")}.${Date.now()}@${sysDomain}>`;
   try {
-    const transporter = import_nodemailer.default.createTransport({
+    const transporter = import_nodemailer2.default.createTransport({
       host: sysHost,
       port: sysPort,
       secure: sysSecure,
@@ -2137,7 +2244,7 @@ var dispatchVerificationEmail = async (params) => {
     console.error("[Verification Mailer] Primary SMTP warning:", sysErr?.message);
     if (sysPort === 465) {
       try {
-        const fallback587 = import_nodemailer.default.createTransport({
+        const fallback587 = import_nodemailer2.default.createTransport({
           host: sysHost,
           port: 587,
           secure: false,
@@ -2222,7 +2329,7 @@ var dispatchVerificationEmail = async (params) => {
         const customPort = Number(customSmtp.port) || 587;
         const customSecure = customSmtp.encryption === "SSL" || customPort === 465;
         const customFrom = customSmtp.fromEmail || customSmtp.username;
-        const customTransporter = import_nodemailer.default.createTransport({
+        const customTransporter = import_nodemailer2.default.createTransport({
           host: customSmtp.host,
           port: customPort,
           secure: customSecure,
@@ -7506,7 +7613,7 @@ app.post("/api/smtp/test", async (req, res) => {
     }
     const smtpPort = Number(port) || 587;
     const isSecure = encryption === "SSL" || smtpPort === 465;
-    const transporter = import_nodemailer.default.createTransport({
+    const transporter = import_nodemailer2.default.createTransport({
       host,
       port: smtpPort,
       secure: isSecure,
@@ -8023,7 +8130,7 @@ ${textItems.join("\n")}`;
     }
     const primaryPort = Number(activeSmtp.port) || 465;
     const primarySecure = activeSmtp.encryption === "SSL" || primaryPort === 465;
-    const createSmtpTransporter = (targetPort, targetSecure) => import_nodemailer.default.createTransport({
+    const createSmtpTransporter = (targetPort, targetSecure) => import_nodemailer2.default.createTransport({
       host: activeSmtp.host,
       port: targetPort,
       secure: targetSecure,
@@ -8126,7 +8233,7 @@ ${textItems.join("\n")}`;
           const fallbackPort = Number(process.env.SMTP_PORT) || 465;
           const fallbackSecure = process.env.SMTP_SECURE === "true" || fallbackPort === 465;
           const fallbackSenderEmail = process.env.SMTP_FROM || process.env.SMTP_USER || "founder@visualsky.pro";
-          const fallbackTransporter = import_nodemailer.default.createTransport({
+          const fallbackTransporter = import_nodemailer2.default.createTransport({
             host: process.env.SMTP_HOST,
             port: fallbackPort,
             secure: fallbackSecure,
