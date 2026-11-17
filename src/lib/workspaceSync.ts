@@ -1065,3 +1065,236 @@ export function subscribeToAiCopilotSessions(
     } catch {}
   };
 }
+
+export async function hashPasswordForFirestore(email: string, password: string): Promise<string> {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  const raw = `${cleanEmail}:${String(password || '')}:visualsky-auth-v1`;
+  try {
+    if (typeof window !== 'undefined' && window.crypto?.subtle) {
+      const encoded = new TextEncoder().encode(raw);
+      const digest = await window.crypto.subtle.digest('SHA-256', encoded);
+      return Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+    }
+  } catch {}
+  // Fallback deterministic hash if crypto.subtle is unavailable
+  let h1 = 0x811c9dc5;
+  for (let i = 0; i < raw.length; i++) {
+    h1 ^= raw.charCodeAt(i);
+    h1 = Math.imul(h1, 0x01000193);
+  }
+  return `fnv-${(h1 >>> 0).toString(16)}`;
+}
+
+const AGENCY_REGISTRY_DOC_ID = 'ws_agency_accounts_registry';
+
+export async function fetchAgencyAccountsFromFirestore(): Promise<any[]> {
+  try {
+    const fb = await getFirebaseRuntime();
+    if (!fb) return [];
+    const docRef = fb.doc(fb.db, 'workspaces', AGENCY_REGISTRY_DOC_ID);
+    const snap = await Promise.race<any>([
+      fb.getDoc(docRef),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1800))
+    ]);
+    if (snap && snap.exists()) {
+      const data: any = snap.data();
+      if (Array.isArray(data?.accounts)) {
+        return data.accounts.filter((a: any) => a && a.email);
+      }
+    }
+  } catch {}
+  return [];
+}
+
+export async function lookupUserAccountInFirestore(email: string): Promise<{
+  exists: boolean;
+  account: any | null;
+}> {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes('@')) {
+    return { exists: false, account: null };
+  }
+
+  const docId = getCanonicalWorkspaceDocId(cleanEmail);
+  let wsData: any = null;
+  let agencyRegistryMatch: any = null;
+
+  try {
+    const fb = await getFirebaseRuntime();
+    if (!fb) return { exists: false, account: null };
+
+    const [wsSnap, regSnap] = await Promise.all([
+      docId
+        ? Promise.race<any>([
+            fb.getDoc(fb.doc(fb.db, 'workspaces', docId)),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 1800))
+          ]).catch(() => null)
+        : Promise.resolve(null),
+      Promise.race<any>([
+        fb.getDoc(fb.doc(fb.db, 'workspaces', AGENCY_REGISTRY_DOC_ID)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1800))
+      ]).catch(() => null)
+    ]);
+
+    if (wsSnap && wsSnap.exists()) {
+      wsData = wsSnap.data();
+    }
+    if (regSnap && regSnap.exists()) {
+      const regData = regSnap.data();
+      if (Array.isArray(regData?.accounts)) {
+        agencyRegistryMatch = regData.accounts.find(
+          (a: any) => String(a?.email || '').trim().toLowerCase() === cleanEmail
+        );
+      }
+    }
+  } catch {}
+
+  if (!wsData && !agencyRegistryMatch) {
+    return { exists: false, account: null };
+  }
+
+  const profile = (wsData?.userProfile && typeof wsData.userProfile === 'object' ? wsData.userProfile : {}) as any;
+  const role =
+    profile.role ||
+    agencyRegistryMatch?.role ||
+    (cleanEmail === 'rafiqulvisualsky@gmail.com' || cleanEmail === 'sojibdaridro123@gmail.com'
+      ? 'agency'
+      : 'client');
+  const isAgency = role === 'agency' || role === 'owner' || Boolean(profile.isOwner || agencyRegistryMatch?.isOwner);
+
+  return {
+    exists: true,
+    account: {
+      id: wsData?.userId || profile.id || agencyRegistryMatch?.id || `usr-${cleanEmail.replace(/[^a-z0-9]/g, '-')}`,
+      email: cleanEmail,
+      name: profile.name || agencyRegistryMatch?.name || cleanEmail.split('@')[0],
+      role: isAgency ? 'agency' : 'client',
+      isOwner: isAgency,
+      plan: profile.plan || agencyRegistryMatch?.plan || (isAgency ? 'Enterprise' : 'Pro'),
+      bdtPlanLabel:
+        profile.bdtPlanLabel ||
+        agencyRegistryMatch?.bdtPlanLabel ||
+        (isAgency ? 'Agency Master Admin (Free Unlimited)' : 'Starter Growth'),
+      phone: profile.phone || agencyRegistryMatch?.phone || '',
+      company: profile.company || (isAgency ? 'VisualSky Agency Platform' : 'Client Workspace'),
+      title: profile.title || (isAgency ? 'Agency Principal & Master Admin' : 'Workspace Owner'),
+      quotaLimit: Number(profile.quotaLimit) || (isAgency ? 100000 : 1500),
+      quotaUsed: Number(profile.quotaUsed) || 0,
+      aiCredits: Number(profile.aiCredits) || (isAgency ? 50000 : 500),
+      avatar: profile.avatar || agencyRegistryMatch?.avatar,
+      paymentInfo: profile.paymentInfo || wsData?.paymentInfo,
+      passwordHash: profile.passwordHash || agencyRegistryMatch?.passwordHash || '',
+      joinedAt: profile.joinedAt || agencyRegistryMatch?.joinedAt || new Date().toISOString().split('T')[0]
+    }
+  };
+}
+
+export async function syncAccountProfileToFirestore(params: {
+  user: any;
+  password?: string;
+}): Promise<void> {
+  const cleanEmail = String(params.user?.email || '').trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes('@')) return;
+
+  try {
+    const fb = await getFirebaseRuntime();
+    if (!fb) return;
+
+    const nowIso = new Date().toISOString();
+    const docId = getCanonicalWorkspaceDocId(cleanEmail);
+    const passwordHash = params.password ? await hashPasswordForFirestore(cleanEmail, params.password) : '';
+    const isAgency =
+      params.user?.role === 'agency' ||
+      params.user?.role === 'owner' ||
+      Boolean(params.user?.isOwner);
+
+    if (docId) {
+      try {
+        const wsRef = fb.doc(fb.db, 'workspaces', docId);
+        const snap = await Promise.race<any>([
+          fb.getDoc(wsRef),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))
+        ]).catch(() => null);
+        const existingData = snap && snap.exists() ? snap.data() : {};
+        const existingProfile =
+          existingData?.userProfile && typeof existingData.userProfile === 'object'
+            ? existingData.userProfile
+            : {};
+
+        const mergedProfile: any = {
+          ...existingProfile,
+          id: params.user?.id || existingProfile.id || existingData?.userId || `usr-${cleanEmail.replace(/[^a-z0-9]/g, '-')}`,
+          email: cleanEmail,
+          name: params.user?.name || existingProfile.name || cleanEmail.split('@')[0],
+          role: isAgency ? 'agency' : (params.user?.role || existingProfile.role || 'client'),
+          isOwner: isAgency || Boolean(existingProfile.isOwner),
+          plan: params.user?.plan || existingProfile.plan || (isAgency ? 'Enterprise' : 'Pro'),
+          bdtPlanLabel: params.user?.bdtPlanLabel || existingProfile.bdtPlanLabel || '',
+          phone: params.user?.phone || existingProfile.phone || '',
+          company: params.user?.company || existingProfile.company || '',
+          title: params.user?.title || existingProfile.title || '',
+          quotaLimit: Number(params.user?.quotaLimit || existingProfile.quotaLimit) || (isAgency ? 100000 : 1500),
+          aiCredits: Number(params.user?.aiCredits ?? existingProfile.aiCredits ?? (isAgency ? 50000 : 500)),
+          joinedAt: params.user?.joinedAt || existingProfile.joinedAt || nowIso.split('T')[0]
+        };
+        if (params.user?.paymentInfo || existingProfile.paymentInfo) {
+          mergedProfile.paymentInfo = params.user?.paymentInfo || existingProfile.paymentInfo;
+        }
+        if (passwordHash) {
+          mergedProfile.passwordHash = passwordHash;
+        }
+
+        await fb.setDoc(wsRef, {
+          ...existingData,
+          email: cleanEmail,
+          userId: mergedProfile.id,
+          userProfile: mergedProfile,
+          updatedAt: nowIso
+        });
+      } catch {}
+    }
+
+    // Keep global Agency Master Gmail directory synchronized (strictly capped at 3, no plaintext passwords)
+    if (isAgency && /^[a-z0-9._%+-]+@gmail\.com$/.test(cleanEmail)) {
+      try {
+        const regRef = fb.doc(fb.db, 'workspaces', AGENCY_REGISTRY_DOC_ID);
+        const regSnap = await Promise.race<any>([
+          fb.getDoc(regRef),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))
+        ]).catch(() => null);
+        const existingAccounts: any[] =
+          regSnap && regSnap.exists() && Array.isArray(regSnap.data()?.accounts)
+            ? regSnap.data().accounts
+            : [];
+
+        const filtered = existingAccounts.filter(
+          (a: any) => a && String(a.email || '').trim().toLowerCase() !== cleanEmail
+        );
+        const prevEntry = existingAccounts.find(
+          (a: any) => a && String(a.email || '').trim().toLowerCase() === cleanEmail
+        ) || {};
+
+        if (existingAccounts.length < 3 || prevEntry.email) {
+          const entry = {
+            id: params.user?.id || prevEntry.id || `usr-${cleanEmail.replace(/[^a-z0-9]/g, '-')}`,
+            email: cleanEmail,
+            name: params.user?.name || prevEntry.name || cleanEmail.split('@')[0],
+            role: 'agency',
+            isOwner: true,
+            plan: params.user?.plan || prevEntry.plan || 'Enterprise',
+            bdtPlanLabel: 'Agency Master Admin (Free Unlimited)',
+            passwordHash: passwordHash || prevEntry.passwordHash || '',
+            joinedAt: params.user?.joinedAt || prevEntry.joinedAt || nowIso.split('T')[0]
+          };
+          await fb.setDoc(regRef, {
+            accounts: [entry, ...filtered].slice(0, 3),
+            updatedAt: nowIso
+          });
+        }
+      } catch {}
+    }
+  } catch {}
+}
+

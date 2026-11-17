@@ -1449,6 +1449,261 @@ const getAgencyGmailUsers = (users: any[]): any[] => {
   return result;
 };
 
+let cachedFirebaseConfig: { projectId: string; apiKey: string; firestoreDatabaseId: string } | null | undefined;
+const getFirebaseConfigForServer = () => {
+  if (cachedFirebaseConfig !== undefined) return cachedFirebaseConfig;
+  try {
+    const cfgPath = path.join(process.cwd(), 'firebase-applet-config.json');
+    if (fs.existsSync(cfgPath)) {
+      const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+      if (parsed?.projectId && parsed?.apiKey && parsed?.firestoreDatabaseId) {
+        cachedFirebaseConfig = {
+          projectId: String(parsed.projectId),
+          apiKey: String(parsed.apiKey),
+          firestoreDatabaseId: String(parsed.firestoreDatabaseId)
+        };
+        return cachedFirebaseConfig;
+      }
+    }
+  } catch {}
+  cachedFirebaseConfig = null;
+  return null;
+};
+
+const hashPasswordServer = (email: string, password: string): string => {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  return crypto
+    .createHash('sha256')
+    .update(`${cleanEmail}:${String(password || '')}:visualsky-auth-v1`)
+    .digest('hex');
+};
+
+const fromFirestoreValue = (val: any): any => {
+  if (!val || typeof val !== 'object') return undefined;
+  if ('stringValue' in val) return val.stringValue;
+  if ('integerValue' in val) return Number(val.integerValue);
+  if ('doubleValue' in val) return Number(val.doubleValue);
+  if ('booleanValue' in val) return Boolean(val.booleanValue);
+  if ('nullValue' in val) return null;
+  if ('timestampValue' in val) return val.timestampValue;
+  if ('arrayValue' in val) {
+    const arr = val.arrayValue?.values;
+    return Array.isArray(arr) ? arr.map(fromFirestoreValue) : [];
+  }
+  if ('mapValue' in val) {
+    const out: Record<string, any> = {};
+    const fields = val.mapValue?.fields || {};
+    for (const [k, v] of Object.entries(fields)) {
+      out[k] = fromFirestoreValue(v);
+    }
+    return out;
+  }
+  return undefined;
+};
+
+const toFirestoreValue = (val: any): any => {
+  if (val === null || val === undefined) return { nullValue: null };
+  if (typeof val === 'string') return { stringValue: val };
+  if (typeof val === 'boolean') return { booleanValue: val };
+  if (typeof val === 'number') {
+    if (!Number.isFinite(val)) return { integerValue: '0' };
+    return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
+  }
+  if (Array.isArray(val)) {
+    return { arrayValue: { values: val.map((item) => toFirestoreValue(item)) } };
+  }
+  if (typeof val === 'object') {
+    const fields: Record<string, any> = {};
+    for (const [k, v] of Object.entries(val)) {
+      if (v !== undefined) {
+        fields[k] = toFirestoreValue(v);
+      }
+    }
+    return { mapValue: { fields } };
+  }
+  return { stringValue: String(val) };
+};
+
+const readFirestoreWorkspaceDocRest = async (docId: string): Promise<Record<string, any> | null> => {
+  const cfg = getFirebaseConfigForServer();
+  if (!cfg || !docId) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1600);
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(cfg.projectId)}/databases/${encodeURIComponent(cfg.firestoreDatabaseId)}/documents/workspaces/${encodeURIComponent(docId)}?key=${encodeURIComponent(cfg.apiKey)}`;
+    const resp = await fetch(url, { signal: controller.signal });
+    if (!resp.ok) return null;
+    const json: any = await resp.json();
+    if (!json?.fields) return null;
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(json.fields)) {
+      out[k] = fromFirestoreValue(v);
+    }
+    return out;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const writeFirestoreWorkspaceDocRest = async (docId: string, data: Record<string, any>): Promise<boolean> => {
+  const cfg = getFirebaseConfigForServer();
+  if (!cfg || !docId) return false;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2000);
+  try {
+    const fields: Record<string, any> = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (v !== undefined) fields[k] = toFirestoreValue(v);
+    }
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(cfg.projectId)}/databases/${encodeURIComponent(cfg.firestoreDatabaseId)}/documents/workspaces/${encodeURIComponent(docId)}?key=${encodeURIComponent(cfg.apiKey)}`;
+    const resp = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields }),
+      signal: controller.signal
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const getCanonicalWsDocIdServer = (email: string) =>
+  `ws_${String(email || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+
+const fetchAgencyAccountsFromFirestoreRest = async (): Promise<any[]> => {
+  const doc = await readFirestoreWorkspaceDocRest('ws_agency_accounts_registry');
+  if (doc && Array.isArray(doc.accounts)) {
+    return doc.accounts.filter((a: any) => a && a.email && isStrictGmailAddress(a.email));
+  }
+  return [];
+};
+
+const lookupUserInFirestoreRest = async (email: string): Promise<any | null> => {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes('@')) return null;
+
+  const [wsData, agencyRegAccounts] = await Promise.all([
+    readFirestoreWorkspaceDocRest(getCanonicalWsDocIdServer(cleanEmail)),
+    fetchAgencyAccountsFromFirestoreRest()
+  ]);
+
+  const agencyRegMatch = agencyRegAccounts.find(
+    (a: any) => String(a?.email || '').trim().toLowerCase() === cleanEmail
+  );
+  if (!wsData && !agencyRegMatch) return null;
+
+  const profile = (wsData?.userProfile && typeof wsData.userProfile === 'object' ? wsData.userProfile : {}) as any;
+  const role =
+    profile.role ||
+    agencyRegMatch?.role ||
+    (cleanEmail === 'rafiqulvisualsky@gmail.com' || cleanEmail === 'sojibdaridro123@gmail.com'
+      ? 'agency'
+      : 'client');
+  const isAgency = role === 'agency' || role === 'owner' || Boolean(profile.isOwner || agencyRegMatch?.isOwner);
+
+  return {
+    id: wsData?.userId || profile.id || agencyRegMatch?.id || `usr-${cleanEmail.replace(/[^a-z0-9]/g, '-')}`,
+    email: cleanEmail,
+    name: profile.name || agencyRegMatch?.name || cleanEmail.split('@')[0],
+    role: isAgency ? 'agency' : 'client',
+    isOwner: isAgency,
+    plan: profile.plan || agencyRegMatch?.plan || (isAgency ? 'Enterprise' : 'Pro'),
+    bdtPlanLabel:
+      profile.bdtPlanLabel ||
+      agencyRegMatch?.bdtPlanLabel ||
+      (isAgency ? 'Agency Master Admin (Free Unlimited)' : 'Starter Growth'),
+    phone: profile.phone || agencyRegMatch?.phone || '',
+    company: profile.company || (isAgency ? 'VisualSky Agency Platform' : 'Client Workspace'),
+    title: profile.title || (isAgency ? 'Agency Principal & Master Admin' : 'Workspace Owner'),
+    quotaLimit: Number(profile.quotaLimit) || (isAgency ? 100000 : 1500),
+    quotaUsed: Number(profile.quotaUsed) || 0,
+    aiCredits: Number(profile.aiCredits) || (isAgency ? 50000 : 500),
+    avatar: profile.avatar || agencyRegMatch?.avatar,
+    paymentInfo: profile.paymentInfo || wsData?.paymentInfo,
+    passwordHash: profile.passwordHash || agencyRegMatch?.passwordHash || '',
+    joinedAt: profile.joinedAt || agencyRegMatch?.joinedAt || new Date().toISOString().split('T')[0]
+  };
+};
+
+const syncAccountToFirestoreRest = async (user: any, plainPassword?: string): Promise<void> => {
+  const cleanEmail = String(user?.email || '').trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes('@')) return;
+  try {
+    const nowIso = new Date().toISOString();
+    const docId = getCanonicalWsDocIdServer(cleanEmail);
+    const passwordHash = plainPassword
+      ? hashPasswordServer(cleanEmail, plainPassword)
+      : (user?.password ? hashPasswordServer(cleanEmail, user.password) : (user?.passwordHash || ''));
+    const isAgency = user?.role === 'agency' || user?.role === 'owner' || Boolean(user?.isOwner);
+
+    const existingDoc = (await readFirestoreWorkspaceDocRest(docId)) || {};
+    const existingProfile =
+      existingDoc.userProfile && typeof existingDoc.userProfile === 'object' ? existingDoc.userProfile : {};
+    const mergedProfile: Record<string, any> = {
+      ...existingProfile,
+      id: user?.id || existingProfile.id || existingDoc.userId || `usr-${cleanEmail.replace(/[^a-z0-9]/g, '-')}`,
+      email: cleanEmail,
+      name: user?.name || existingProfile.name || cleanEmail.split('@')[0],
+      role: isAgency ? 'agency' : (user?.role || existingProfile.role || 'client'),
+      isOwner: isAgency || Boolean(existingProfile.isOwner),
+      plan: user?.plan || existingProfile.plan || (isAgency ? 'Enterprise' : 'Pro'),
+      bdtPlanLabel: user?.bdtPlanLabel || existingProfile.bdtPlanLabel || '',
+      phone: user?.phone || existingProfile.phone || '',
+      company: user?.company || existingProfile.company || '',
+      title: user?.title || existingProfile.title || '',
+      quotaLimit: Number(user?.quotaLimit || existingProfile.quotaLimit) || (isAgency ? 100000 : 1500),
+      aiCredits: Number(user?.aiCredits ?? existingProfile.aiCredits ?? (isAgency ? 50000 : 500)),
+      joinedAt: user?.joinedAt || existingProfile.joinedAt || nowIso.split('T')[0]
+    };
+    if (user?.paymentInfo || existingProfile.paymentInfo) {
+      mergedProfile.paymentInfo = user?.paymentInfo || existingProfile.paymentInfo;
+    }
+    if (passwordHash) {
+      mergedProfile.passwordHash = passwordHash;
+    }
+
+    await writeFirestoreWorkspaceDocRest(docId, {
+      ...existingDoc,
+      email: cleanEmail,
+      userId: mergedProfile.id,
+      userProfile: mergedProfile,
+      updatedAt: nowIso
+    });
+
+    if (isAgency && isStrictGmailAddress(cleanEmail)) {
+      const regDoc = (await readFirestoreWorkspaceDocRest('ws_agency_accounts_registry')) || {};
+      const existingAccounts: any[] = Array.isArray(regDoc.accounts) ? regDoc.accounts : [];
+      const prevEntry =
+        existingAccounts.find((a: any) => String(a?.email || '').trim().toLowerCase() === cleanEmail) || {};
+      const filtered = existingAccounts.filter(
+        (a: any) => a && String(a.email || '').trim().toLowerCase() !== cleanEmail
+      );
+      if (existingAccounts.length < MAX_AGENCY_GMAIL_ACCOUNTS || prevEntry.email) {
+        const entry = {
+          id: mergedProfile.id,
+          email: cleanEmail,
+          name: mergedProfile.name,
+          role: 'agency',
+          isOwner: true,
+          plan: mergedProfile.plan || 'Enterprise',
+          bdtPlanLabel: 'Agency Master Admin (Free Unlimited)',
+          passwordHash: passwordHash || prevEntry.passwordHash || '',
+          joinedAt: mergedProfile.joinedAt
+        };
+        await writeFirestoreWorkspaceDocRest('ws_agency_accounts_registry', {
+          accounts: [entry, ...filtered].slice(0, MAX_AGENCY_GMAIL_ACCOUNTS),
+          updatedAt: nowIso
+        });
+      }
+    }
+  } catch {}
+};
+
 const sanitizeLiveUsers = (list: any[]): any[] => {
   if (!Array.isArray(list)) return [];
   const seenAgencyGmails = new Set<string>();
@@ -1493,8 +1748,86 @@ const sanitizeLiveUsers = (list: any[]): any[] => {
   });
 };
 
+const loadLiveUsersFromDisk = (): any[] => {
+  let users: any[] = [];
+  if (fs.existsSync(USERS_LIST_FILE)) {
+    try {
+      users = sanitizeLiveUsers(JSON.parse(fs.readFileSync(USERS_LIST_FILE, 'utf-8')));
+    } catch {}
+  }
+
+  // Recover any missing accounts from workspace_*.json files on disk
+  try {
+    const byEmail = new Map<string, any>();
+    for (const u of users) {
+      if (u?.email) byEmail.set(String(u.email).trim().toLowerCase(), u);
+    }
+    const files = fs.readdirSync(DATA_DIR).filter((f) => f.startsWith('workspace_') && f.endsWith('.json'));
+    for (const f of files) {
+      try {
+        const ws = JSON.parse(fs.readFileSync(path.join(DATA_DIR, f), 'utf-8'));
+        const em = String(ws?.email || ws?.userProfile?.email || '').trim().toLowerCase();
+        if (!em || !em.includes('@') || byEmail.has(em)) continue;
+        const prof = ws?.userProfile && typeof ws.userProfile === 'object' ? ws.userProfile : {};
+        const isAgency =
+          prof.role === 'agency' ||
+          prof.role === 'owner' ||
+          Boolean(prof.isOwner) ||
+          ws?.lastActiveTab === 'owner' ||
+          em === 'rafiqulvisualsky@gmail.com' ||
+          em === 'sojibdaridro123@gmail.com';
+        if (isAgency && isStrictGmailAddress(em)) {
+          byEmail.set(em, {
+            id: ws.userId || prof.id || `usr-${em.replace(/[^a-z0-9]/g, '-')}`,
+            name: prof.name || em.split('@')[0],
+            email: em,
+            role: 'agency',
+            isOwner: true,
+            plan: prof.plan || 'Enterprise',
+            bdtPlanLabel: prof.bdtPlanLabel || 'Agency Master Admin (Free Unlimited)',
+            phone: prof.phone || '',
+            company: prof.company || 'VisualSky Agency Platform',
+            title: prof.title || 'Agency Principal & Master Admin',
+            quotaUsed: Number(prof.quotaUsed) || 0,
+            quotaLimit: Number(prof.quotaLimit) || 100000,
+            aiCredits: Number(prof.aiCredits) || 50000,
+            passwordHash: prof.passwordHash || '',
+            joinedAt: prof.joinedAt || new Date().toISOString().split('T')[0]
+          });
+        } else if (prof.paymentInfo?.trxId || ws?.paymentInfo?.trxId) {
+          byEmail.set(em, {
+            id: ws.userId || prof.id || `usr-${em.replace(/[^a-z0-9]/g, '-')}`,
+            name: prof.name || em.split('@')[0],
+            email: em,
+            role: 'client',
+            isOwner: false,
+            plan: prof.plan || 'Pro',
+            bdtPlanLabel: prof.bdtPlanLabel || 'Starter Growth',
+            phone: prof.phone || '',
+            quotaUsed: Number(prof.quotaUsed) || 0,
+            quotaLimit: Number(prof.quotaLimit) || 1500,
+            aiCredits: Number(prof.aiCredits) || 500,
+            paymentInfo: prof.paymentInfo || ws.paymentInfo,
+            passwordHash: prof.passwordHash || '',
+            joinedAt: prof.joinedAt || new Date().toISOString().split('T')[0]
+          });
+        }
+      } catch {}
+    }
+    const recovered = sanitizeLiveUsers(Array.from(byEmail.values()));
+    if (recovered.length > users.length) {
+      try {
+        fs.writeFileSync(USERS_LIST_FILE, JSON.stringify(recovered, null, 2), 'utf-8');
+      } catch {}
+    }
+    return recovered;
+  } catch {
+    return users;
+  }
+};
+
 // User Accounts & Data Sync Endpoints (Cross-Browser Persistence)
-app.get('/api/users/registry', (_req, res) => {
+app.get('/api/users/registry', async (_req, res) => {
   try {
     let subs: any[] = [];
     if (fs.existsSync(SUBSCRIPTIONS_FILE)) {
@@ -1502,22 +1835,41 @@ app.get('/api/users/registry', (_req, res) => {
         subs = JSON.parse(fs.readFileSync(SUBSCRIPTIONS_FILE, 'utf-8'));
       } catch {}
     }
-    if (fs.existsSync(USERS_LIST_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(USERS_LIST_FILE, 'utf-8'));
-      const liveUsers = sanitizeLiveUsers(raw);
-      if (liveUsers.length !== raw.length) {
-        fs.writeFileSync(USERS_LIST_FILE, JSON.stringify(liveUsers, null, 2), 'utf-8');
+    let liveUsers = loadLiveUsersFromDisk();
+
+    // Recover registered Agency Master Gmail accounts from Firestore if container restarted
+    try {
+      const fsAgencyAccounts = await fetchAgencyAccountsFromFirestoreRest();
+      if (fsAgencyAccounts.length > 0) {
+        const userMap = new Map<string, any>();
+        for (const u of liveUsers) {
+          if (u?.email) userMap.set(String(u.email).trim().toLowerCase(), u);
+        }
+        let changed = false;
+        for (const fa of fsAgencyAccounts) {
+          const em = String(fa?.email || '').trim().toLowerCase();
+          if (!em) continue;
+          const prev = userMap.get(em);
+          if (!prev) {
+            userMap.set(em, fa);
+            changed = true;
+          } else if (fa.passwordHash && !prev.passwordHash) {
+            userMap.set(em, { ...prev, passwordHash: fa.passwordHash });
+            changed = true;
+          }
+        }
+        if (changed) {
+          liveUsers = sanitizeLiveUsers(Array.from(userMap.values()));
+          try {
+            fs.writeFileSync(USERS_LIST_FILE, JSON.stringify(liveUsers, null, 2), 'utf-8');
+          } catch {}
+        }
       }
-      return res.json({
-        success: true,
-        users: liveUsers,
-        subscriptions: subs,
-        paymentSettings: getPaymentSettings()
-      });
-    }
+    } catch {}
+
     return res.json({
       success: true,
-      users: [],
+      users: liveUsers,
       subscriptions: subs,
       paymentSettings: getPaymentSettings()
     });
@@ -1535,12 +1887,7 @@ app.post('/api/users/sync', (req, res) => {
   try {
     const { users } = req.body;
     if (Array.isArray(users)) {
-      let existingUsers: any[] = [];
-      if (fs.existsSync(USERS_LIST_FILE)) {
-        try {
-          existingUsers = sanitizeLiveUsers(JSON.parse(fs.readFileSync(USERS_LIST_FILE, 'utf-8')));
-        } catch {}
-      }
+      const existingUsers = loadLiveUsersFromDisk();
       const incomingLive = sanitizeLiveUsers(users);
       const userMap = new Map<string, any>();
       for (const u of existingUsers) {
@@ -1550,11 +1897,23 @@ app.post('/api/users/sync', (req, res) => {
         if (u.email) {
           const key = u.email.trim().toLowerCase();
           const prev = userMap.get(key);
-          userMap.set(key, prev ? { ...prev, ...u } : u);
+          if (prev) {
+            const merged = { ...prev, ...u };
+            if (!u.password && prev.password) merged.password = prev.password;
+            if (!u.passwordHash && prev.passwordHash) merged.passwordHash = prev.passwordHash;
+            userMap.set(key, merged);
+          } else {
+            userMap.set(key, u);
+          }
         }
       }
-      const mergedUsers = Array.from(userMap.values());
+      const mergedUsers = sanitizeLiveUsers(Array.from(userMap.values()));
       fs.writeFileSync(USERS_LIST_FILE, JSON.stringify(mergedUsers, null, 2), 'utf-8');
+      for (const mu of mergedUsers) {
+        if (mu.role === 'agency' || mu.isOwner) {
+          syncAccountToFirestoreRest(mu).catch(() => {});
+        }
+      }
       return res.json({ success: true, count: mergedUsers.length, users: mergedUsers });
     }
     return res.status(400).json({ error: 'Invalid users array' });
@@ -1856,41 +2215,64 @@ app.post('/api/auth/reset-password', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid or expired 6-digit verification code. Please request a new code.' });
     }
 
-    // Update password in registry
-    let existingUsers: any[] = [];
-    if (fs.existsSync(USERS_LIST_FILE)) {
-      try {
-        existingUsers = JSON.parse(fs.readFileSync(USERS_LIST_FILE, 'utf-8'));
-      } catch {}
-    }
+    // Update password in registry (recovering from disk or Firestore if container restarted)
+    const requestedRole = req.body?.role === 'agency' ? 'agency' : 'client';
+    let existingUsers: any[] = loadLiveUsersFromDisk();
 
-    const userIndex = existingUsers.findIndex((u: any) => u.email?.toLowerCase() === cleanEmail);
+    let userIndex = existingUsers.findIndex((u: any) => u.email?.toLowerCase() === cleanEmail);
+    let updatedUserRecord: any = null;
+
     if (userIndex !== -1) {
       existingUsers[userIndex].password = newPassword;
-      fs.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), 'utf-8');
-    } else {
-      // Ephemeral / multi-instance container fallback: create or sync record once OTP is verified
-      const isAgency =
-        cleanEmail === 'rafiqulvisualsky@gmail.com' ||
-        cleanEmail === 'sojibdaridro123@gmail.com' ||
-        cleanEmail.includes('admin') ||
-        cleanEmail.includes('agency');
-      existingUsers.push({
-        id: `usr-${Date.now()}`,
-        name: cleanEmail.split('@')[0],
-        email: cleanEmail,
-        password: newPassword,
-        role: isAgency ? 'agency' : 'client',
-        isOwner: isAgency,
-        plan: isAgency ? 'Enterprise' : 'Pro',
-        quotaUsed: 0,
-        quotaLimit: isAgency ? 100000 : 5000,
-        aiCredits: isAgency ? 50000 : 2500,
-        joinedAt: new Date().toISOString().split('T')[0]
-      });
+      existingUsers[userIndex].passwordHash = hashPasswordServer(cleanEmail, newPassword);
+      if (requestedRole === 'agency' && isStrictGmailAddress(cleanEmail)) {
+        const agencyCount = getAgencyGmailUsers(existingUsers).length;
+        if (existingUsers[userIndex].role === 'agency' || existingUsers[userIndex].isOwner || agencyCount < MAX_AGENCY_GMAIL_ACCOUNTS) {
+          existingUsers[userIndex].role = 'agency';
+          existingUsers[userIndex].isOwner = true;
+          existingUsers[userIndex].plan = existingUsers[userIndex].plan || 'Enterprise';
+        }
+      }
+      updatedUserRecord = existingUsers[userIndex];
       try {
         fs.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), 'utf-8');
       } catch {}
+    } else {
+      const fsAccount = await lookupUserInFirestoreRest(cleanEmail);
+      const agencyCount = getAgencyGmailUsers(existingUsers).length;
+      const isAgency =
+        fsAccount?.role === 'agency' ||
+        Boolean(fsAccount?.isOwner) ||
+        cleanEmail === 'rafiqulvisualsky@gmail.com' ||
+        cleanEmail === 'sojibdaridro123@gmail.com' ||
+        cleanEmail.includes('admin') ||
+        cleanEmail.includes('agency') ||
+        (requestedRole === 'agency' && isStrictGmailAddress(cleanEmail) && agencyCount < MAX_AGENCY_GMAIL_ACCOUNTS);
+
+      updatedUserRecord = {
+        ...(fsAccount || {}),
+        id: fsAccount?.id || `usr-${Date.now()}`,
+        name: fsAccount?.name || cleanEmail.split('@')[0],
+        email: cleanEmail,
+        password: newPassword,
+        passwordHash: hashPasswordServer(cleanEmail, newPassword),
+        role: isAgency ? 'agency' : 'client',
+        isOwner: isAgency,
+        plan: fsAccount?.plan || (isAgency ? 'Enterprise' : 'Pro'),
+        bdtPlanLabel: fsAccount?.bdtPlanLabel || (isAgency ? 'Agency Master Admin (Free Unlimited)' : 'Starter Growth'),
+        quotaUsed: Number(fsAccount?.quotaUsed) || 0,
+        quotaLimit: Number(fsAccount?.quotaLimit) || (isAgency ? 100000 : 5000),
+        aiCredits: Number(fsAccount?.aiCredits) || (isAgency ? 50000 : 2500),
+        joinedAt: fsAccount?.joinedAt || new Date().toISOString().split('T')[0]
+      };
+      existingUsers.push(updatedUserRecord);
+      try {
+        fs.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), 'utf-8');
+      } catch {}
+    }
+
+    if (updatedUserRecord) {
+      syncAccountToFirestoreRest(updatedUserRecord, newPassword).catch(() => {});
     }
 
     // Also attempt Supabase admin update if service role key is present
@@ -1913,6 +2295,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
 
     return res.json({
       success: true,
+      user: updatedUserRecord ? { ...updatedUserRecord, password: '' } : undefined,
       message: `Password for ${cleanEmail} successfully updated.`
     });
   } catch (err: any) {
@@ -2521,6 +2904,9 @@ app.post('/api/auth/register', (req, res) => {
       fs.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), 'utf-8');
     } catch {}
 
+    // Persist newly registered account to Firestore immediately so restarts never lose it
+    syncAccountToFirestoreRest(newUser, String(password)).catch(() => {});
+
     if (paymentInfo && paymentInfo.trxId) {
       try {
         let subs: any[] = [];
@@ -2567,6 +2953,12 @@ app.post('/api/auth/register', (req, res) => {
           sentEmails: [],
           minedLeads: [],
           userProfile: {
+            id: newUser.id,
+            name: newUser.name,
+            email: cleanEmail,
+            role: newUser.role,
+            isOwner: newUser.isOwner,
+            passwordHash: hashPasswordServer(cleanEmail, String(password)),
             company: newUser.company,
             title: newUser.title,
             phone: newUser.phone,
@@ -2574,7 +2966,8 @@ app.post('/api/auth/register', (req, res) => {
             bdtPlanLabel: newUser.bdtPlanLabel,
             quotaLimit: newUser.quotaLimit,
             quotaUsed: 0,
-            aiCredits: newUser.aiCredits
+            aiCredits: newUser.aiCredits,
+            paymentInfo: newUser.paymentInfo
           },
           userId: newUser.id,
           email: cleanEmail,
@@ -2599,7 +2992,7 @@ app.post('/api/auth/register', (req, res) => {
 });
 
 // Endpoint: Google Account Sign-In / Registration sync with server registry
-app.post('/api/auth/google', (req, res) => {
+app.post('/api/auth/google', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   try {
     const { uid, email, name, avatar, phone, role = 'client', plan = 'Agency', bdtPlanLabel, quotaLimit, aiCredits, paymentInfo, checkOnly, forceClientPayment } = req.body || {};
@@ -2607,16 +3000,21 @@ app.post('/api/auth/google', (req, res) => {
       return res.status(400).json({ success: false, error: 'Valid Google email address is required.' });
     }
     const cleanEmail = String(email).trim().toLowerCase();
-    let existingUsers: any[] = [];
-    if (fs.existsSync(USERS_LIST_FILE)) {
-      try {
-        existingUsers = sanitizeLiveUsers(JSON.parse(fs.readFileSync(USERS_LIST_FILE, 'utf-8')));
-      } catch {}
-    }
+    let existingUsers: any[] = loadLiveUsersFromDisk();
 
     let user = existingUsers.find((u: any) => u.email?.toLowerCase() === cleanEmail);
-    // Strict Portal Enforcement: If role === 'client', NEVER bypass payment even if email is owner's email
     const isAgency = role === 'agency';
+
+    if (!user) {
+      const fsAccount = await lookupUserInFirestoreRest(cleanEmail);
+      if (fsAccount && (!isAgency || fsAccount.role === 'agency' || fsAccount.isOwner)) {
+        existingUsers.push(fsAccount);
+        user = fsAccount;
+        try {
+          fs.writeFileSync(USERS_LIST_FILE, JSON.stringify(sanitizeLiveUsers(existingUsers), null, 2), 'utf-8');
+        } catch {}
+      }
+    }
 
     if (isAgency) {
       if (!isStrictGmailAddress(cleanEmail)) {
@@ -2644,7 +3042,6 @@ app.post('/api/auth/google', (req, res) => {
       user?.paymentInfo?.status !== 'rejected'
     );
 
-    // If user is on Client Workspace and has NOT paid yet, require bKash payment first!
     if (!isAgency && (forceClientPayment || !hasValidPayment) && (!paymentInfo || !paymentInfo.trxId)) {
       return res.json({
         success: true,
@@ -2665,7 +3062,6 @@ app.post('/api/auth/google', (req, res) => {
     }
 
     if (!user) {
-      // Never bypass Password, Confirm Password, Terms & Conditions, and 6-Digit Email OTP for new account creation!
       return res.status(403).json({
         success: false,
         exists: false,
@@ -2703,6 +3099,8 @@ app.post('/api/auth/google', (req, res) => {
     try {
       fs.writeFileSync(USERS_LIST_FILE, JSON.stringify(existingUsers, null, 2), 'utf-8');
     } catch {}
+
+    syncAccountToFirestoreRest(user).catch(() => {});
 
     if (paymentInfo && paymentInfo.trxId) {
       try {
@@ -2748,8 +3146,8 @@ app.post('/api/auth/google', (req, res) => {
   }
 });
 
-// Endpoint: Verify credentials against server registry
-app.post('/api/auth/verify-credentials', (req, res) => {
+// Endpoint: Verify credentials against server registry (with disk workspace + Firestore recovery)
+app.post('/api/auth/verify-credentials', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   try {
     const { email, password, role = 'client' } = req.body || {};
@@ -2758,14 +3156,56 @@ app.post('/api/auth/verify-credentials', (req, res) => {
     }
     const cleanEmail = email.trim().toLowerCase();
 
-    let existingUsers: any[] = [];
-    if (fs.existsSync(USERS_LIST_FILE)) {
-      try {
-        existingUsers = sanitizeLiveUsers(JSON.parse(fs.readFileSync(USERS_LIST_FILE, 'utf-8')));
-      } catch {}
+    let existingUsers: any[] = loadLiveUsersFromDisk();
+    let user = existingUsers.find((u: any) => u.email?.toLowerCase() === cleanEmail);
+
+    // Recover from Firestore if not present in ephemeral .data/
+    if (!user) {
+      const [fsAccount, fsAgencyList] = await Promise.all([
+        lookupUserInFirestoreRest(cleanEmail),
+        role === 'agency' ? fetchAgencyAccountsFromFirestoreRest() : Promise.resolve([])
+      ]);
+      const userMap = new Map<string, any>();
+      for (const u of existingUsers) {
+        if (u?.email) userMap.set(String(u.email).trim().toLowerCase(), u);
+      }
+      for (const fa of fsAgencyList) {
+        if (fa?.email) {
+          const k = String(fa.email).trim().toLowerCase();
+          if (!userMap.has(k)) userMap.set(k, fa);
+        }
+      }
+      if (fsAccount && !userMap.has(cleanEmail)) {
+        userMap.set(cleanEmail, fsAccount);
+      }
+      existingUsers = sanitizeLiveUsers(Array.from(userMap.values()));
+      user = existingUsers.find((u: any) => u.email?.toLowerCase() === cleanEmail);
+
+      // Recognized platform owner email bootstrap if slot is available
+      if (
+        !user &&
+        role === 'agency' &&
+        (cleanEmail === 'rafiqulvisualsky@gmail.com' || cleanEmail === 'sojibdaridro123@gmail.com') &&
+        getAgencyGmailUsers(existingUsers).length < MAX_AGENCY_GMAIL_ACCOUNTS
+      ) {
+        user = {
+          id: cleanEmail === 'sojibdaridro123@gmail.com' ? 'user-agency-2' : 'user-agency-1',
+          name: cleanEmail === 'sojibdaridro123@gmail.com' ? 'RAFIQUL ISLAM' : 'Rafiqul VisualSky',
+          email: cleanEmail,
+          role: 'agency',
+          isOwner: true,
+          plan: 'Enterprise',
+          bdtPlanLabel: 'Agency Master Admin (Free Unlimited)',
+          quotaUsed: 0,
+          quotaLimit: 100000,
+          aiCredits: 50000,
+          phone: '+880 1712-345678',
+          joinedAt: new Date().toISOString().split('T')[0]
+        };
+        existingUsers.push(user);
+      }
     }
 
-    const user = existingUsers.find((u: any) => u.email?.toLowerCase() === cleanEmail);
     const agencyGmailAccounts = getAgencyGmailUsers(existingUsers);
     const isRegisteredAgencyGmail = agencyGmailAccounts.some(
       (u: any) => u.email?.toLowerCase() === cleanEmail
@@ -2787,6 +3227,7 @@ app.post('/api/auth/verify-credentials', (req, res) => {
         }
         return res.status(401).json({
           success: false,
+          userNotFoundOnServer: true,
           error: '❌ এই Gmail দিয়ে এখনো কোনো Agency Master একাউন্ট খোলা হয়নি। নতুন একাউন্ট খুলতে নিচে "Sign up"-এ ক্লিক করে রেজিস্ট্রেশন করুন।'
         });
       }
@@ -2797,6 +3238,7 @@ app.post('/api/auth/verify-credentials', (req, res) => {
     if (!user) {
       return res.status(401).json({
         success: false,
+        userNotFoundOnServer: true,
         requiresPayment: role === 'client',
         error: 'এই ইমেইলে কোনো একাউন্ট পাওয়া যায়নি। আগে Sign Up থেকে একাউন্ট রেজিস্ট্রেশন করুন।'
       });
@@ -2805,12 +3247,15 @@ app.post('/api/auth/verify-credentials', (req, res) => {
     let isPasswordValid = false;
     if (user.password) {
       isPasswordValid = user.password === password;
+    } else if (user.passwordHash) {
+      isPasswordValid = user.passwordHash === hashPasswordServer(cleanEmail, password);
     } else {
       isPasswordValid = password.length >= 6;
     }
 
     if (isPasswordValid) {
       if (!user.password) user.password = password;
+      user.passwordHash = hashPasswordServer(cleanEmail, password);
       if (!user.authProvider) user.authProvider = 'email';
       user.lastLoginAt = new Date().toISOString();
       if (isAgency) {
@@ -2823,6 +3268,8 @@ app.post('/api/auth/verify-credentials', (req, res) => {
       } catch {}
 
       const resolvedUser = user || existingUsers.find((u: any) => u.email?.toLowerCase() === cleanEmail);
+      syncAccountToFirestoreRest(resolvedUser, password).catch(() => {});
+
       return res.json({
         success: true,
         user: {
@@ -2852,9 +3299,8 @@ app.post('/api/auth/verify-credentials', (req, res) => {
 
     return res.status(401).json({
       success: false,
-      error: user
-        ? 'Incorrect password for this account. Please try again or click Forgot Password.'
-        : 'No account found with this email address. Please create an account first.'
+      wrongPassword: true,
+      error: 'Incorrect password for this account. Please try again or click Forgot Password.'
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: 'Authentication verification failed' });

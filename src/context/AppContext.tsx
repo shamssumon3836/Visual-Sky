@@ -34,6 +34,8 @@ import {
   persistAiCopilotSessionsNow,
   syncAiCopilotSessions,
   subscribeToAiCopilotSessions,
+  fetchAgencyAccountsFromFirestore,
+  syncAccountProfileToFirestore,
   WorkspaceData
 } from '../lib/workspaceSync';
 import { safeParseResponse } from '../lib/safeFetch';
@@ -498,7 +500,7 @@ interface AppContextType {
   updateUserProfile: (updates: Partial<UserAccount>) => void;
   changeUserPassword: (currentPass: string, newPass: string) => { success: boolean; message: string };
   deleteUserAccount: (userId: string) => void;
-  resetUserPasswordByEmail: (email: string, newPass: string) => boolean;
+  resetUserPasswordByEmail: (email: string, newPass: string, roleHint?: 'client' | 'agency') => boolean;
   deductAiTokens: (tokensUsed: number) => void;
   logout: () => void;
   isLogoutConfirmOpen: boolean;
@@ -930,6 +932,27 @@ const filterLiveUsersClient = (users: UserAccount[]): UserAccount[] => {
       return true;
     })
     .map((u) => normalizeUserAccount(u));
+};
+
+const mergeUserRegistries = (localUsers: UserAccount[], remoteUsers: UserAccount[]): UserAccount[] => {
+  const byEmail = new Map<string, any>();
+  for (const u of Array.isArray(localUsers) ? localUsers : []) {
+    if (u?.email) byEmail.set(u.email.trim().toLowerCase(), u);
+  }
+  for (const u of Array.isArray(remoteUsers) ? remoteUsers : []) {
+    if (!u?.email) continue;
+    const key = u.email.trim().toLowerCase();
+    const prev = byEmail.get(key);
+    if (prev) {
+      const merged: any = { ...prev, ...u };
+      if (!u.password && prev.password) merged.password = prev.password;
+      if (!(u as any).passwordHash && (prev as any).passwordHash) (merged as any).passwordHash = (prev as any).passwordHash;
+      byEmail.set(key, merged);
+    } else {
+      byEmail.set(key, u);
+    }
+  }
+  return filterLiveUsersClient(Array.from(byEmail.values()));
 };
 
 // Initial Email Templates & Categories
@@ -2236,17 +2259,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const registryLoadedRef = useRef<boolean>(false);
   useEffect(() => {
     return runAfterWindowLoad(() => {
-      fetch('/api/users/registry')
-        .then(r => safeParseResponse(r, 'Failed to fetch registry'))
-        .then(parsed => {
-          const d = parsed.data || {};
-          if (parsed.ok && d.success && Array.isArray(d.users)) {
-            const cleanServerUsers = filterLiveUsersClient(d.users);
-            setAllUsers(cleanServerUsers);
+      Promise.all([
+        fetch('/api/users/registry')
+          .then(r => safeParseResponse(r, 'Failed to fetch registry'))
+          .catch(() => ({ ok: false, data: {} as any })),
+        fetchAgencyAccountsFromFirestore().catch(() => [])
+      ])
+        .then(([parsed, fsAgencyAccounts]) => {
+          const d = (parsed as any).data || {};
+          const serverUsers = (parsed as any).ok && d.success && Array.isArray(d.users)
+            ? filterLiveUsersClient(d.users)
+            : [];
+          const fsUsers = filterLiveUsersClient(Array.isArray(fsAgencyAccounts) ? fsAgencyAccounts : []);
+          const remoteCombined = mergeUserRegistries(fsUsers, serverUsers);
+
+          setAllUsers(prev => {
+            const merged = mergeUserRegistries(prev, remoteCombined);
             try {
-              localStorage.setItem('visualsky_users', JSON.stringify(cleanServerUsers));
+              localStorage.setItem('visualsky_users', JSON.stringify(merged));
             } catch {}
-          }
+            if (merged.length > serverUsers.length) {
+              fetch('/api/users/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ users: merged })
+              }).catch(() => {});
+            }
+            return merged;
+          });
           registryLoadedRef.current = true;
         })
         .catch(() => {
@@ -2336,10 +2376,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const d = parsed.data || {};
           if (parsed.ok && d.success && Array.isArray(d.users)) {
             const cleanServerUsers = filterLiveUsersClient(d.users);
-            setAllUsers(cleanServerUsers);
-            try {
-              localStorage.setItem('visualsky_users', JSON.stringify(cleanServerUsers));
-            } catch {}
+            setAllUsers(prev => {
+              const merged = mergeUserRegistries(prev, cleanServerUsers);
+              try {
+                localStorage.setItem('visualsky_users', JSON.stringify(merged));
+              } catch {}
+              return merged;
+            });
           }
         })
         .catch(() => {});
@@ -5721,7 +5764,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const resetUserPasswordByEmail = (email: string, newPass: string): boolean => {
+  const resetUserPasswordByEmail = (email: string, newPass: string, roleHint?: 'client' | 'agency'): boolean => {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail) return false;
 
@@ -5735,43 +5778,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 2. Update user in state & localStorage
     setAllUsers(prev => {
       const existingIndex = prev.findIndex(u => u.email?.toLowerCase() === cleanEmail);
+      const existingRoleIsAgency = existingIndex >= 0 && (prev[existingIndex].role === 'agency' || Boolean(prev[existingIndex].isOwner));
+      const agencyCount = prev.filter(u => (u.role === 'agency' || Boolean(u.isOwner)) && isStrictGmailAddress(u.email)).length;
+      const shouldBeAgency =
+        existingRoleIsAgency ||
+        (roleHint === 'agency' && isStrictGmailAddress(cleanEmail) && agencyCount < MAX_AGENCY_GMAIL_ACCOUNTS) ||
+        cleanEmail.includes('admin') ||
+        cleanEmail.includes('agency') ||
+        cleanEmail === 'rafiqulvisualsky@gmail.com' ||
+        cleanEmail === 'sojibdaridro123@gmail.com';
+
+      let targetRecord: UserAccount;
       let updated: UserAccount[];
       if (existingIndex >= 0) {
-        updated = prev.map((u, i) => (i === existingIndex ? { ...u, password: newPass } : u));
+        targetRecord = {
+          ...prev[existingIndex],
+          password: newPass,
+          role: shouldBeAgency ? 'agency' : prev[existingIndex].role,
+          isOwner: shouldBeAgency ? true : prev[existingIndex].isOwner
+        };
+        updated = prev.map((u, i) => (i === existingIndex ? targetRecord : u));
       } else {
-        const isAgency = cleanEmail.includes('admin') || cleanEmail.includes('agency') || cleanEmail === 'rafiqulvisualsky@gmail.com' || cleanEmail === 'sojibdaridro123@gmail.com';
-        const newUser: UserAccount = {
+        targetRecord = {
           id: `usr-${Date.now()}`,
           name: cleanEmail.split('@')[0],
           email: cleanEmail,
-          avatar: isAgency 
+          avatar: shouldBeAgency
             ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
             : 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
           password: newPass,
-          role: isAgency ? 'agency' : 'client',
-          isOwner: isAgency,
-          plan: isAgency ? 'Enterprise' : 'Pro',
-          bdtPlanLabel: isAgency ? 'Agency Master Admin (Free Unlimited)' : 'Scale Business (BDT 4,999/mo)',
+          role: shouldBeAgency ? 'agency' : 'client',
+          isOwner: shouldBeAgency,
+          plan: shouldBeAgency ? 'Enterprise' : 'Pro',
+          bdtPlanLabel: shouldBeAgency ? 'Agency Master Admin (Free Unlimited)' : 'Scale Business (BDT 4,999/mo)',
           quotaUsed: 0,
-          quotaLimit: isAgency ? 50000 : 5000,
-          aiCredits: isAgency ? 10000 : 2500,
-          company: isAgency ? 'Visual Sky' : 'Client Workspace',
-          title: isAgency ? 'Agency Master User' : 'Client Member',
+          quotaLimit: shouldBeAgency ? 50000 : 5000,
+          aiCredits: shouldBeAgency ? 10000 : 2500,
+          company: shouldBeAgency ? 'Visual Sky' : 'Client Workspace',
+          title: shouldBeAgency ? 'Agency Master User' : 'Client Member',
           joinedAt: new Date().toISOString().split('T')[0]
         };
-        updated = [...prev, newUser];
+        updated = [...prev, targetRecord];
       }
       try {
         localStorage.setItem('visualsky_users', JSON.stringify(updated));
       } catch {}
 
-      // 3. Sync to server backend
+      // 3. Sync to server backend and Firestore
       try {
         fetch('/api/users/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ users: updated })
         }).catch(() => {});
+        syncAccountProfileToFirestore({ user: targetRecord, password: newPass }).catch(() => {});
       } catch {}
 
       return updated;

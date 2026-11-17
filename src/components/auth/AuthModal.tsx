@@ -3,6 +3,11 @@ import { useApp, MAX_AGENCY_GMAIL_ACCOUNTS, isStrictGmailAddress } from '../../c
 import { safeParseResponse } from '../../lib/safeFetch';
 import { signInWithGooglePopup } from '../../lib/firebase';
 import {
+  hashPasswordForFirestore,
+  lookupUserAccountInFirestore,
+  syncAccountProfileToFirestore
+} from '../../lib/workspaceSync';
+import {
   Lock,
   Mail,
   ArrowRight,
@@ -404,29 +409,49 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
       }
 
-      const localExisting = allUsers.find((u) => u.email?.toLowerCase() === cleanEmail);
+      let localExisting = allUsers.find((u) => u.email?.toLowerCase() === cleanEmail);
+      let recoveredFromFirestore: any = null;
 
-      // If user is in Sign-Up mode OR does not yet have an account -> pre-fill Name & Email and require Password + Confirm Password + Terms (✓) + 6-Digit Email OTP!
+      // If user is in Sign-Up mode OR does not yet have an account locally -> check Firestore & server before forcing Sign-Up
       if (authMode === 'signup' || !localExisting) {
-        // Double-check on server if user already exists when in signin mode
         let serverExists = false;
         if (authMode === 'signin') {
           try {
-            const checkRes = await fetch('/api/auth/google', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                uid: googleUser.uid,
-                email: cleanEmail,
-                name: cleanName,
-                avatar: googleUser.photoURL || undefined,
-                role: isAgencyPortal ? 'agency' : 'client',
-                checkOnly: true
-              })
-            });
-            const checkParsed = await safeParseResponse(checkRes, 'Google check failed');
-            if (checkParsed.ok && checkParsed.data?.exists) {
-              serverExists = true;
+            const [checkRes, fsRes] = await Promise.all([
+              fetch('/api/auth/google', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  uid: googleUser.uid,
+                  email: cleanEmail,
+                  name: cleanName,
+                  avatar: googleUser.photoURL || undefined,
+                  role: isAgencyPortal ? 'agency' : 'client',
+                  checkOnly: true
+                })
+              }).catch(() => null),
+              lookupUserAccountInFirestore(cleanEmail).catch(() => ({ exists: false, account: null }))
+            ]);
+
+            if (checkRes) {
+              const checkParsed = await safeParseResponse(checkRes, 'Google check failed');
+              if (checkParsed.ok && checkParsed.data?.exists) {
+                serverExists = true;
+              }
+            }
+            if (!serverExists && fsRes?.exists && fsRes?.account) {
+              const fsAcc = fsRes.account;
+              const portalAllowed = !isAgencyPortal || fsAcc.role === 'agency' || Boolean(fsAcc.isOwner);
+              if (portalAllowed) {
+                recoveredFromFirestore = fsAcc;
+                localExisting = fsAcc;
+                serverExists = true;
+                await fetch('/api/users/sync', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ users: [fsAcc] })
+                }).catch(() => {});
+              }
             }
           } catch {}
         }
@@ -455,7 +480,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const isAgency = isAgencyPortal;
 
       // Existing verified paid client or existing Agency Admin -> Sign in directly
-      const res = await fetch('/api/auth/google', {
+      let res = await fetch('/api/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -467,7 +492,33 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         })
       });
 
-      const parsed = await safeParseResponse(res, 'Google sign-in failed');
+      let parsed = await safeParseResponse(res, 'Google sign-in failed');
+
+      // If container restarted and .data/ lost the local/Firestore-known account, sync it once and retry
+      if (parsed.data?.requiresSignupVerification && (localExisting || recoveredFromFirestore)) {
+        const knownUser = localExisting || recoveredFromFirestore;
+        const canRestoreForPortal = !isAgency || knownUser.role === 'agency' || Boolean(knownUser.isOwner);
+        if (canRestoreForPortal) {
+          await fetch('/api/users/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ users: [knownUser] })
+          }).catch(() => {});
+          res = await fetch('/api/auth/google', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              uid: googleUser.uid,
+              email: cleanEmail,
+              name: cleanName,
+              avatar: googleUser.photoURL || undefined,
+              role: isAgency ? 'agency' : 'client'
+            })
+          });
+          parsed = await safeParseResponse(res, 'Google sign-in failed');
+        }
+      }
+
       if (parsed.data?.requiresSignupVerification) {
         setIsGoogleLoading(false);
         setFullName(cleanName);
@@ -515,6 +566,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           ...prev.filter((u) => u.email.toLowerCase() !== serverUser.email.toLowerCase())
         ]);
       }
+
+      syncAccountProfileToFirestore({ user: serverUser }).catch(() => {});
 
       try {
         if (rememberMe) {
@@ -593,7 +646,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       let authenticatedUser: UserAccount | null = null;
       let serverError = '';
       let serverRequiresPayment = false;
-      let serverRejectedAgency = false;
+      let serverRejectedAuth = false;
+      let foundKnownAccount = allUsers.some((u) => u.email?.toLowerCase() === cleanEmail);
 
       try {
         const res = await fetch('/api/auth/verify-credentials', {
@@ -605,8 +659,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         if (parsed.ok && parsed.data?.success && parsed.data?.user) {
           authenticatedUser = parsed.data.user;
         } else {
-          if (res.status === 403 || (portalType === 'agency' && !parsed.ok)) {
-            serverRejectedAgency = true;
+          if (res.status === 403 || parsed.data?.wrongPassword) {
+            serverRejectedAuth = true;
           }
           if (parsed.data?.requiresPayment) {
             serverRequiresPayment = true;
@@ -617,7 +671,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
       } catch {}
 
-      if (!authenticatedUser && !serverRejectedAgency) {
+      if (!authenticatedUser && !serverRejectedAuth) {
         const localMatch = allUsers.find((u) => u.email?.toLowerCase() === cleanEmail);
         let resetPassMatch = false;
         try {
@@ -627,14 +681,77 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           }
         } catch {}
 
-        if (localMatch && (localMatch.password === password || resetPassMatch)) {
-          if (portalType !== 'agency' || localMatch.role === 'agency' || localMatch.isOwner) {
-            authenticatedUser = { ...localMatch, password };
+        const fsRes = await lookupUserAccountInFirestore(cleanEmail).catch(() => ({
+          exists: false,
+          account: null
+        }));
+        const fsAccount = fsRes?.exists ? fsRes.account : null;
+        const candidateUser: any = localMatch || fsAccount;
+
+        if (candidateUser) {
+          foundKnownAccount = true;
+          const isCandidateAgency =
+            candidateUser.role === 'agency' ||
+            Boolean(candidateUser.isOwner) ||
+            (portalType === 'agency' && isStrictGmailAddress(cleanEmail) && agencyGmailAccounts.length < MAX_AGENCY_GMAIL_ACCOUNTS);
+          const roleAllowed = portalType !== 'agency' || isCandidateAgency;
+
+          if (roleAllowed) {
+            let fsPassMatch = false;
+            if (candidateUser.passwordHash) {
+              const hashed = await hashPasswordForFirestore(cleanEmail, password);
+              fsPassMatch = hashed === candidateUser.passwordHash;
+            }
+            const hasStoredSecret = Boolean(candidateUser.password || candidateUser.passwordHash);
+            const passwordValid =
+              (candidateUser.password && candidateUser.password === password) ||
+              resetPassMatch ||
+              fsPassMatch ||
+              (!hasStoredSecret && password.length >= 6);
+
+            if (passwordValid) {
+              authenticatedUser = {
+                ...candidateUser,
+                password,
+                role: portalType === 'agency' ? 'agency' : (candidateUser.role || 'client'),
+                isOwner: portalType === 'agency' ? true : Boolean(candidateUser.isOwner)
+              };
+              fetch('/api/users/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ users: [authenticatedUser] })
+              }).catch(() => {});
+            } else {
+              serverRejectedAuth = true;
+              serverError = 'Incorrect password for this account. Please try again or click Forgot Password.';
+            }
           }
+        } else if (resetPassMatch && portalType === 'agency' && isStrictGmailAddress(cleanEmail) && agencyGmailAccounts.length < MAX_AGENCY_GMAIL_ACCOUNTS) {
+          foundKnownAccount = true;
+          authenticatedUser = {
+            id: `usr-${Date.now()}`,
+            name: cleanEmail.split('@')[0],
+            email: cleanEmail,
+            avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+            password,
+            role: 'agency',
+            isOwner: true,
+            plan: 'Enterprise',
+            bdtPlanLabel: 'Agency Master Admin (Free Unlimited)',
+            quotaUsed: 0,
+            quotaLimit: 100000,
+            aiCredits: 50000,
+            joinedAt: new Date().toISOString().split('T')[0]
+          };
+          fetch('/api/users/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ users: [authenticatedUser] })
+          }).catch(() => {});
         }
       }
 
-      if (!authenticatedUser && serverRequiresPayment && portalType === 'client') {
+      if (!authenticatedUser && serverRequiresPayment && !foundKnownAccount && portalType === 'client') {
         setIsLoading(false);
         setFullName(cleanEmail.split('@')[0]);
         setAuthMode('signup');
@@ -644,10 +761,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       if (!authenticatedUser) {
         setIsLoading(false);
-        const existsInRegistry = allUsers.some((u) => u.email?.toLowerCase() === cleanEmail);
-        if (!existsInRegistry && !serverRejectedAgency) {
+        if (!foundKnownAccount && !serverRejectedAuth) {
           setErrorMessage(
-            `❌ "${cleanEmail}" দিয়ে এখনো কোনো একাউন্ট খোলা হয়নি! নতুন একাউন্ট তৈরি করতে উপরে "Create Account" ট্যাবে গিয়ে Password, Confirm Password, Terms & Conditions (✓) পূরণ করে ইমেইল ভেরিফিকেশন কোড (OTP) দিন।`
+            serverError ||
+              `❌ "${cleanEmail}" দিয়ে এখনো কোনো একাউন্ট খোলা হয়নি! নতুন একাউন্ট তৈরি করতে উপরে "Sign up" ট্যাবে গিয়ে Password, Confirm Password, Terms & Conditions (✓) পূরণ করে ইমেইল ভেরিফিকেশন কোড (OTP) দিন অথবা Forgot Password থেকে একাউন্ট রিকভার করুন।`
           );
           return;
         }
@@ -698,6 +815,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         finalUser,
         ...prev.filter((u) => u.email.toLowerCase() !== finalUser.email.toLowerCase())
       ]);
+
+      syncAccountProfileToFirestore({ user: finalUser, password }).catch(() => {});
 
       loginUser(finalUser, isAgency ? 'owner' : 'dashboard');
 
@@ -1016,6 +1135,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         ]);
       }
 
+      syncAccountProfileToFirestore({ user: newUser, password }).catch(() => {});
+
       try {
         if (rememberMe) {
           localStorage.setItem(REMEMBER_EMAIL_KEY, newUser.email);
@@ -1129,6 +1250,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           ...prev.filter((u) => u.email.toLowerCase() !== serverUser.email.toLowerCase())
         ]);
       }
+
+      syncAccountProfileToFirestore({ user: serverUser }).catch(() => {});
 
       try {
         localStorage.setItem(REMEMBER_EMAIL_KEY, serverUser.email);
@@ -1316,7 +1439,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           otp: finalOtp,
           newPassword: newResetPassword,
           confirmPassword: confirmResetPassword,
-          otpToken
+          otpToken,
+          role: portalType
         })
       });
 
@@ -1329,7 +1453,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         await supabase.auth.updateUser({ password: newResetPassword }).catch(() => {});
       }
 
-      resetUserPasswordByEmail(targetEmail, newResetPassword);
+      resetUserPasswordByEmail(targetEmail, newResetPassword, portalType);
+      await syncAccountProfileToFirestore({
+        user: {
+          ...(parsed.data?.user || {}),
+          email: targetEmail,
+          role: parsed.data?.user?.role || portalType,
+          isOwner: parsed.data?.user?.isOwner ?? (portalType === 'agency')
+        },
+        password: newResetPassword
+      }).catch(() => {});
 
       setIsLoading(false);
       setEmail(targetEmail);
