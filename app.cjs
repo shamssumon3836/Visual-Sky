@@ -124,20 +124,39 @@ try {
   if (timer && typeof timer.unref === 'function') timer.unref();
 } catch (_e) {}
 
-function buildWithEsbuild() {
-  try {
-    if (fs.existsSync(runtimeAppJs)) fs.unlinkSync(runtimeAppJs);
-  } catch (_e) {}
-  try {
-    if (fs.existsSync(runtimeServer)) fs.unlinkSync(runtimeServer);
-  } catch (_e) {}
+const prebuiltFirebaseRuntime = path.join(prebuiltDir, 'firebase-runtime.js');
+const runtimeFirebaseRuntime = path.join(dataDir, 'firebase-runtime.js');
 
+function getNewestMtimeMs(targetPath) {
+  try {
+    if (!fs.existsSync(targetPath)) return 0;
+    const stat = fs.statSync(targetPath);
+    if (stat.isFile()) return stat.mtimeMs;
+    if (!stat.isDirectory()) return 0;
+    let maxMtime = 0;
+    const entries = fs.readdirSync(targetPath);
+    for (const entry of entries) {
+      if (entry === 'node_modules' || entry === '.git' || entry === '.data' || entry === 'dist') continue;
+      const childMtime = getNewestMtimeMs(path.join(targetPath, entry));
+      if (childMtime > maxMtime) maxMtime = childMtime;
+    }
+    return maxMtime;
+  } catch (_e) {
+    return 0;
+  }
+}
+
+function buildWithEsbuild(options) {
+  const opts = options || { buildClient: true, buildServer: true, buildFirebase: true };
   const esbuild = require('esbuild');
   fs.mkdirSync(dataDir, { recursive: true });
 
-  // 1. Always compile latest src/main.tsx -> untracked .data/runtime-app.js so git pulls take effect immediately without dirtying tracked Git files
+  // 1. Compile latest src/main.tsx -> untracked .data/runtime-app.js when needed
   const mainEntry = path.join(__dirname, 'src', 'main.tsx');
-  if (fs.existsSync(mainEntry)) {
+  if (opts.buildClient && fs.existsSync(mainEntry)) {
+    try {
+      if (fs.existsSync(runtimeAppJs)) fs.unlinkSync(runtimeAppJs);
+    } catch (_e) {}
     esbuild.buildSync({
       entryPoints: [mainEntry],
       bundle: true,
@@ -183,9 +202,31 @@ function buildWithEsbuild() {
     }
   }
 
-  // 2. Always compile latest server.ts -> untracked .data/server.runtime.cjs so tracked Git files stay 100% clean
+  // 2. Compile deferred firebaseRuntimeEntry.ts -> .data/firebase-runtime.js if missing
+  const fbEntry = path.join(__dirname, 'src', 'lib', 'firebaseRuntimeEntry.ts');
+  if (opts.buildFirebase && fs.existsSync(fbEntry)) {
+    esbuild.buildSync({
+      entryPoints: [fbEntry],
+      bundle: true,
+      minify: true,
+      treeShaking: true,
+      legalComments: 'none',
+      format: 'esm',
+      platform: 'browser',
+      target: ['es2020'],
+      outfile: runtimeFirebaseRuntime,
+      define: {
+        'process.env.NODE_ENV': '"production"'
+      }
+    });
+  }
+
+  // 3. Compile latest server.ts -> untracked .data/server.runtime.cjs when needed
   const serverEntry = path.join(__dirname, 'server.ts');
-  if (fs.existsSync(serverEntry)) {
+  if (opts.buildServer && fs.existsSync(serverEntry)) {
+    try {
+      if (fs.existsSync(runtimeServer)) fs.unlinkSync(runtimeServer);
+    } catch (_e) {}
     esbuild.buildSync({
       entryPoints: [serverEntry],
       bundle: true,
@@ -197,21 +238,48 @@ function buildWithEsbuild() {
   }
 }
 
-// Heal git locks/dirty build files and start prebuilt server immediately (only run esbuild if prebuilt is missing)
+// Heal git locks/dirty build files and ensure runtime bundles reflect the newest source/prebuilt files
 try {
   healCpanelGitRepo();
   const prebuiltAppJs = path.join(prebuiltDir, 'app.js');
-  // Remove stale runtime overrides so prebuilt/app.js and prebuilt/server.cjs take effect immediately
-  try {
-    if (fs.existsSync(runtimeAppJs)) fs.unlinkSync(runtimeAppJs);
-  } catch (_e) {}
-  try {
-    if (fs.existsSync(runtimeServer)) fs.unlinkSync(runtimeServer);
-  } catch (_e) {}
 
-  if (!fs.existsSync(prebuiltServer) || !fs.existsSync(prebuiltAppJs)) {
-    console.log('[Bootstrap] Prebuilt bundle missing, compiling runtime server...');
-    buildWithEsbuild();
+  const prebuiltServerMtime = getNewestMtimeMs(prebuiltServer);
+  const distServerMtime = getNewestMtimeMs(distServer);
+  const runtimeServerMtime = getNewestMtimeMs(runtimeServer);
+  const serverSrcMtime = getNewestMtimeMs(path.join(__dirname, 'server.ts'));
+
+  const prebuiltAppMtime = getNewestMtimeMs(prebuiltAppJs);
+  const runtimeAppMtime = getNewestMtimeMs(runtimeAppJs);
+  const clientSrcMtime = Math.max(
+    getNewestMtimeMs(path.join(__dirname, 'src')),
+    getNewestMtimeMs(path.join(__dirname, 'index.html'))
+  );
+
+  // If prebuilt is strictly newer than an old runtime override, clean up the old override
+  if (prebuiltAppMtime > 0 && runtimeAppMtime > 0 && prebuiltAppMtime >= runtimeAppMtime) {
+    try { fs.unlinkSync(runtimeAppJs); } catch (_e) {}
+  }
+  if (prebuiltServerMtime > 0 && runtimeServerMtime > 0 && prebuiltServerMtime >= runtimeServerMtime) {
+    try { fs.unlinkSync(runtimeServer); } catch (_e) {}
+  }
+
+  const latestBuiltServerMtime = Math.max(prebuiltServerMtime, distServerMtime, getNewestMtimeMs(runtimeServer));
+  const latestBuiltAppMtime = Math.max(prebuiltAppMtime, getNewestMtimeMs(runtimeAppJs));
+  const needsServerBuild = latestBuiltServerMtime === 0 || serverSrcMtime > latestBuiltServerMtime + 1500;
+  const needsClientBuild = latestBuiltAppMtime === 0 || clientSrcMtime > latestBuiltAppMtime + 1500;
+  const needsFirebaseBuild = !fs.existsSync(prebuiltFirebaseRuntime) && !fs.existsSync(runtimeFirebaseRuntime);
+
+  if (needsServerBuild || needsClientBuild || needsFirebaseBuild) {
+    console.log('[Bootstrap] Detected newer source or missing bundle, rebuilding runtime...', {
+      needsServerBuild,
+      needsClientBuild,
+      needsFirebaseBuild
+    });
+    buildWithEsbuild({
+      buildClient: needsClientBuild,
+      buildServer: needsServerBuild,
+      buildFirebase: needsFirebaseBuild
+    });
     console.log('[Bootstrap] Runtime compilation complete.');
   }
 } catch (buildErr) {
@@ -222,12 +290,14 @@ try {
 }
 
 try {
-  const candidates = [prebuiltServer, runtimeServer, distServer].filter((p) => fs.existsSync(p));
+  const candidates = [prebuiltServer, runtimeServer, distServer]
+    .filter((p) => fs.existsSync(p))
+    .sort((a, b) => getNewestMtimeMs(b) - getNewestMtimeMs(a));
   if (candidates.length === 0) {
     throw new Error('Neither prebuilt/server.cjs, runtimeServer, nor dist/server.cjs exists.');
   }
-  const primaryBundle = fs.existsSync(prebuiltServer) ? prebuiltServer : candidates[0];
-  console.log('[Bootstrap] Starting server bundle:', primaryBundle);
+  const primaryBundle = candidates[0];
+  console.log('[Bootstrap] Starting newest server bundle:', primaryBundle);
   require(primaryBundle);
 } catch (startErr) {
   console.error('[Bootstrap] Server startup error:', startErr);

@@ -4612,14 +4612,35 @@ function ensureFreshPrebuiltBundle() {
 // Health check endpoint
 app.get('/api/health', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.json({ status: 'ok', version: '20260928-v6', timestamp: new Date().toISOString() });
+  res.setHeader('X-LiteSpeed-Cache-Control', 'no-cache');
+  const pbJs = path.join(process.cwd(), 'prebuilt', 'app.js');
+  const rtJs = path.join(DATA_DIR, 'runtime-app.js');
+  let bundleVersion = 'unknown';
+  try {
+    const pbM = fs.existsSync(pbJs) ? fs.statSync(pbJs).mtimeMs : 0;
+    const rtM = fs.existsSync(rtJs) ? fs.statSync(rtJs).mtimeMs : 0;
+    const newest = Math.max(pbM, rtM);
+    if (newest > 0) bundleVersion = Math.floor(newest).toString(36);
+  } catch {}
+  res.json({
+    status: 'ok',
+    version: '20261117-cpanel-sync-v7',
+    bundleVersion,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Serve guaranteed-fresh client bundle through Passenger API route
 app.get('/api/client-app.js', (_req, res) => {
   res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.sendFile(path.join(process.cwd(), 'prebuilt', 'app.js'));
+  res.setHeader('X-LiteSpeed-Cache-Control', 'no-cache');
+  const pbJs = path.join(process.cwd(), 'prebuilt', 'app.js');
+  const rtJs = path.join(DATA_DIR, 'runtime-app.js');
+  const target = fs.existsSync(rtJs) && (!fs.existsSync(pbJs) || fs.statSync(rtJs).mtimeMs > fs.statSync(pbJs).mtimeMs)
+    ? rtJs
+    : pbJs;
+  res.sendFile(target);
 });
 
 // Initialize Google Gemini SDK
@@ -10725,22 +10746,35 @@ async function startServer() {
     }
   }
 
-  const getActiveAppJsPath = () => {
-    const hasPrebuilt = fs.existsSync(prebuiltAppJsPath);
-    const hasRuntime = fs.existsSync(runtimeAppJsCandidate);
-    if (hasPrebuilt && hasRuntime) {
+  const runtimeFirebaseRuntimePath = path.join(DATA_DIR, 'firebase-runtime.js');
+  const distPrebuiltAppJsPath = path.join(process.cwd(), 'dist', 'prebuilt', 'app.js');
+  const distPrebuiltAppCssPath = path.join(process.cwd(), 'dist', 'prebuilt', 'app.css');
+
+  const pickNewestExistingFile = (candidates: string[]): string => {
+    let bestPath = candidates[0];
+    let bestMtime = -1;
+    for (const candidate of candidates) {
       try {
-        const prebuiltMtime = fs.statSync(prebuiltAppJsPath).mtimeMs;
-        const runtimeMtime = fs.statSync(runtimeAppJsCandidate).mtimeMs;
-        return prebuiltMtime >= runtimeMtime ? prebuiltAppJsPath : runtimeAppJsCandidate;
-      } catch {
-        return prebuiltAppJsPath;
-      }
+        if (fs.existsSync(candidate)) {
+          const m = fs.statSync(candidate).mtimeMs;
+          if (m > bestMtime) {
+            bestMtime = m;
+            bestPath = candidate;
+          }
+        }
+      } catch {}
     }
-    if (hasPrebuilt) return prebuiltAppJsPath;
-    if (hasRuntime) return runtimeAppJsCandidate;
-    return prebuiltAppJsPath;
+    return bestPath;
   };
+
+  const getActiveAppJsPath = () =>
+    pickNewestExistingFile([prebuiltAppJsPath, runtimeAppJsCandidate, distPrebuiltAppJsPath]);
+
+  const getActiveAppCssPath = () =>
+    pickNewestExistingFile([prebuiltAppCssPath, distPrebuiltAppCssPath]);
+
+  const getActiveFirebaseRuntimePath = () =>
+    pickNewestExistingFile([prebuiltFirebaseRuntimePath, runtimeFirebaseRuntimePath]);
 
   // Ultra-fast in-memory RAM cache for bundles (raw + pre-compressed Gzip)
   const memoryAssetCache = new Map<
@@ -10799,6 +10833,9 @@ async function startServer() {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
+      res.setHeader('X-LiteSpeed-Cache-Control', 'no-cache');
+      res.setHeader('Surrogate-Control', 'no-store');
+      res.setHeader('CDN-Cache-Control', 'no-store');
       if (req.headers['if-none-match'] === asset.etag) {
         return res.status(304).end();
       }
@@ -10832,20 +10869,22 @@ async function startServer() {
   });
 
   app.get(['/prebuilt/bundle.css', '/prebuilt/app.css', '/prebuilt/bundle-:ver.css', '/prebuilt/app-:ver.css'], (req, res) => {
-    return sendMemoryCachedAsset(req, res, prebuiltAppCssPath, 'text/css; charset=utf-8');
+    return sendMemoryCachedAsset(req, res, getActiveAppCssPath(), 'text/css; charset=utf-8');
   });
 
   app.get('/prebuilt/firebase-runtime.js', (req, res) => {
-    if (fs.existsSync(prebuiltFirebaseRuntimePath)) {
+    const activeFbPath = getActiveFirebaseRuntimePath();
+    if (fs.existsSync(activeFbPath)) {
       return sendMemoryCachedAsset(
         req,
         res,
-        prebuiltFirebaseRuntimePath,
+        activeFbPath,
         'application/javascript; charset=utf-8'
       );
     }
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('X-LiteSpeed-Cache-Control', 'no-cache');
     return res.status(200).end('export {};\n');
   });
 
@@ -10855,6 +10894,7 @@ async function startServer() {
       : path.join(publicCandidate, 'sw.js');
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('X-LiteSpeed-Cache-Control', 'no-cache');
     res.setHeader('Service-Worker-Allowed', '/');
     if (fs.existsSync(swPath)) {
       return res.status(200).send(fs.readFileSync(swPath, 'utf8'));
@@ -10862,9 +10902,17 @@ async function startServer() {
     return res.status(404).end();
   });
 
-  app.use('/prebuilt', express.static(prebuiltCandidate, { etag: true, maxAge: 0 }));
+  const setNoCacheHeaders = (res: express.Response) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('X-LiteSpeed-Cache-Control', 'no-cache');
+    res.setHeader('Surrogate-Control', 'no-store');
+  };
+
+  app.use('/prebuilt', express.static(prebuiltCandidate, { etag: true, maxAge: 0, setHeaders: setNoCacheHeaders }));
   if (fs.existsSync(publicCandidate)) {
-    app.use(express.static(publicCandidate, { index: false, etag: true, maxAge: '1d' }));
+    app.use(express.static(publicCandidate, { index: false, etag: true, maxAge: 0, setHeaders: setNoCacheHeaders }));
   }
 
   let cachedHtmlVersion = '';
@@ -10873,16 +10921,15 @@ async function startServer() {
 
   const sendFreshIndexHtml = (req: express.Request, res: express.Response) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
+    setNoCacheHeaders(res);
+    res.setHeader('CDN-Cache-Control', 'no-store');
     res.setHeader('Vary', 'Accept-Encoding');
     const distCandidate = path.join(process.cwd(), 'dist');
-    const htmlPath = fs.existsSync(path.join(prebuiltCandidate, 'index.html'))
-      ? path.join(prebuiltCandidate, 'index.html')
-      : fs.existsSync(path.join(distCandidate, 'index.html'))
-      ? path.join(distCandidate, 'index.html')
-      : path.join(process.cwd(), 'index.html');
+    const htmlPath = pickNewestExistingFile([
+      path.join(prebuiltCandidate, 'index.html'),
+      path.join(distCandidate, 'index.html'),
+      path.join(process.cwd(), 'index.html')
+    ]);
     try {
       const v = getDynamicAssetVersion();
       if (!cachedHtmlRaw || !cachedHtmlGzip || cachedHtmlVersion !== v) {
@@ -10914,7 +10961,7 @@ async function startServer() {
   };
 
   app.get(['/', '/index.html'], (req, res, next) => {
-    if (fs.existsSync(prebuiltAppJsPath) && fs.existsSync(path.join(prebuiltCandidate, 'index.html'))) {
+    if (fs.existsSync(getActiveAppJsPath()) && fs.existsSync(path.join(prebuiltCandidate, 'index.html'))) {
       return sendFreshIndexHtml(req, res);
     }
     return next();
@@ -10924,7 +10971,8 @@ async function startServer() {
     express.static(prebuiltCandidate, {
       index: false,
       etag: true,
-      maxAge: '1h'
+      maxAge: 0,
+      setHeaders: setNoCacheHeaders
     })
   );
 
