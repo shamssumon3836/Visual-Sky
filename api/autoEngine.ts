@@ -1,8 +1,7 @@
 import express, { Request, Response, Router } from 'express';
 import path from 'path';
 import fs from 'fs';
-import mongoose from 'mongoose';
-import webpush from 'web-push';
+import { createRequire } from 'module';
 import nodemailer from 'nodemailer';
 import {
   AutoCampaign,
@@ -11,6 +10,22 @@ import {
   PushSubscription
 } from '../models/autoEngine.js';
 import { findLeadsForMatrix } from '../services/autoEngineLeadFinder.js';
+
+const safeRequire = (mod: string): any => {
+  try {
+    if (typeof require === 'function') return require(mod);
+  } catch {}
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.url) {
+      return createRequire(import.meta.url)(mod);
+    }
+  } catch {}
+  return null;
+};
+
+const mongoose = safeRequire('mongoose');
+const webpush = safeRequire('web-push');
+const isMongoReady = () => Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
 
 const router = Router();
 
@@ -64,19 +79,21 @@ const getOrGenerateVapidKeys = () => {
   } catch {}
 
   try {
-    const generated = webpush.generateVAPIDKeys();
-    fs.writeFileSync(VAPID_KEYS_FILE, JSON.stringify(generated, null, 2), 'utf-8');
-    return generated;
-  } catch {
-    return {
-      publicKey: 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U',
-      privateKey: ''
-    };
-  }
+    if (webpush && typeof webpush.generateVAPIDKeys === 'function') {
+      const generated = webpush.generateVAPIDKeys();
+      fs.writeFileSync(VAPID_KEYS_FILE, JSON.stringify(generated, null, 2), 'utf-8');
+      return generated;
+    }
+  } catch {}
+
+  return {
+    publicKey: 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U',
+    privateKey: ''
+  };
 };
 
 const vapidKeys = getOrGenerateVapidKeys();
-if (vapidKeys.publicKey && vapidKeys.privateKey) {
+if (webpush && vapidKeys.publicKey && vapidKeys.privateKey) {
   try {
     webpush.setVapidDetails(
       'mailto:founder@visualsky.pro',
@@ -90,6 +107,7 @@ if (vapidKeys.publicKey && vapidKeys.privateKey) {
 
 // Optional MongoDB connection helper
 const initMongoConnection = async () => {
+  if (!mongoose || !mongoose.connection) return;
   if (mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) return;
   const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URL;
   if (!mongoUri) return;
@@ -211,7 +229,7 @@ router.post('/api/auto-engine/save-subscription', async (req: Request, res: Resp
     };
 
     // Save to Mongoose if connected
-    if (mongoose.connection.readyState === 1) {
+    if (isMongoReady() && PushSubscription) {
       try {
         await (PushSubscription as any).findOneAndUpdate(
           { endpoint: rawSub.endpoint },
@@ -273,7 +291,7 @@ router.post('/api/auto-engine/test-push', async (req: Request, res: Response) =>
       ? localSubs.find(s => s.endpoint === targetEndpoint)
       : localSubs[localSubs.length - 1];
 
-    if (!targetSub && mongoose.connection.readyState === 1) {
+    if (!targetSub && isMongoReady() && PushSubscription) {
       targetSub = await (PushSubscription as any).findOne().sort({ createdAt: -1 });
     }
 
@@ -281,6 +299,13 @@ router.post('/api/auto-engine/test-push', async (req: Request, res: Response) =>
       return res.status(404).json({
         success: false,
         error: 'No active push subscriptions registered. Click "Enable Mobile Push Notifications" first!'
+      });
+    }
+
+    if (!webpush) {
+      return res.status(503).json({
+        success: false,
+        error: 'Web Push module (web-push) is not installed on this server yet. Run NPM Install in cPanel to enable push alerts.'
       });
     }
 
@@ -315,9 +340,9 @@ router.post('/api/auto-engine/test-push', async (req: Request, res: Response) =>
 router.get('/api/auto-engine/campaigns', async (req: Request, res: Response) => {
   try {
     let campaigns: any[] = [];
-    if (mongoose.connection.readyState === 1) {
+    if (isMongoReady() && AutoCampaign) {
       try {
-        campaigns = await AutoCampaign.find().sort({ createdAt: -1 });
+        campaigns = await (AutoCampaign as any).find().sort({ createdAt: -1 });
       } catch {}
     }
     if (campaigns.length === 0) {
@@ -365,9 +390,9 @@ router.post('/api/auto-engine/campaigns', async (req: Request, res: Response) =>
 
     let savedCampaign: any = null;
 
-    if (mongoose.connection.readyState === 1) {
+    if (isMongoReady() && AutoCampaign) {
       try {
-        savedCampaign = await AutoCampaign.create(campaignData);
+        savedCampaign = await (AutoCampaign as any).create(campaignData);
       } catch (err) {
         console.warn('[AutoEngine] Mongoose create error, writing to file store:', err);
       }
@@ -435,7 +460,7 @@ router.post('/api/auto-campaign/create-multi', async (req: Request, res: Respons
       updatedAt: new Date()
     };
 
-    if (mongoose.connection.readyState === 1) {
+    if (isMongoReady() && AutoCampaign) {
       try {
         await (AutoCampaign as any).create(campaignRecord);
       } catch {}
@@ -512,7 +537,7 @@ router.post('/api/auto-campaign/add-sender', async (req: Request, res: Response)
     };
 
     // Save to Mongoose if connected
-    if (mongoose.connection.readyState === 1) {
+    if (isMongoReady() && SenderAccount) {
       try {
         await (SenderAccount as any).findOneAndUpdate(
           { email },
@@ -556,7 +581,7 @@ router.delete(['/api/auto-campaign/delete-sender', '/api/auto-campaign/senders/:
       return res.status(400).json({ success: false, error: 'Sender email or ID required.' });
     }
 
-    if (mongoose.connection.readyState === 1) {
+    if (isMongoReady() && SenderAccount) {
       try {
         await (SenderAccount as any).deleteOne({
           $or: [{ email: targetEmail }, { _id: targetEmail }]
@@ -581,7 +606,7 @@ router.delete(['/api/auto-campaign/delete-sender', '/api/auto-campaign/senders/:
 router.get(['/api/auto-engine/senders-health', '/api/auto-campaign/senders'], async (_req: Request, res: Response) => {
   try {
     let senders: any[] = [];
-    if (mongoose.connection.readyState === 1) {
+    if (isMongoReady() && SenderAccount) {
       try {
         senders = await (SenderAccount as any).find().sort({ createdAt: -1 });
       } catch {}

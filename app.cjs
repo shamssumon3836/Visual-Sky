@@ -246,7 +246,12 @@ try {
   const prebuiltServerMtime = getNewestMtimeMs(prebuiltServer);
   const distServerMtime = getNewestMtimeMs(distServer);
   const runtimeServerMtime = getNewestMtimeMs(runtimeServer);
-  const serverSrcMtime = getNewestMtimeMs(path.join(__dirname, 'server.ts'));
+  const serverSrcMtime = Math.max(
+    getNewestMtimeMs(path.join(__dirname, 'server.ts')),
+    getNewestMtimeMs(path.join(__dirname, 'api')),
+    getNewestMtimeMs(path.join(__dirname, 'models')),
+    getNewestMtimeMs(path.join(__dirname, 'services'))
+  );
 
   const prebuiltAppMtime = getNewestMtimeMs(prebuiltAppJs);
   const runtimeAppMtime = getNewestMtimeMs(runtimeAppJs);

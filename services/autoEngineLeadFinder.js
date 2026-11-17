@@ -1,10 +1,24 @@
-import axios from 'axios';
-import * as cheerio from 'cheerio';
 import { GoogleGenAI } from '@google/genai';
 import fs from 'fs';
 import path from 'path';
-import mongoose from 'mongoose';
+import { createRequire } from 'module';
 import { GlobalLeadLedger } from '../models/autoEngine.js';
+
+const safeRequire = (mod) => {
+  try {
+    if (typeof require === 'function') return require(mod);
+  } catch {}
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.url) {
+      return createRequire(import.meta.url)(mod);
+    }
+  } catch {}
+  return null;
+};
+
+const axios = safeRequire('axios');
+const cheerio = safeRequire('cheerio');
+const mongoose = safeRequire('mongoose');
 
 let isGeminiAvailable = true;
 let geminiClientInstance = null;
@@ -128,7 +142,7 @@ export const isDomainAlreadyContacted = async (domain) => {
   if (!domain) return true;
 
   // 1. Check MongoDB GlobalLeadLedger
-  if (mongoose.connection && mongoose.connection.readyState === 1) {
+  if (mongoose?.connection?.readyState === 1 && GlobalLeadLedger) {
     try {
       const match = await GlobalLeadLedger.findOne({
         website: { $regex: domain, $options: 'i' }
@@ -304,24 +318,63 @@ export const searchOrganicWeb = async (query) => {
     'Cache-Control': 'no-cache'
   };
 
-  // 1. Bing Organic Search
+  // 1. Bing Organic Search (with native fetch + regex fallback if axios/cheerio are absent)
   try {
     const bingUrl = `https://www.bing.com/search?q=${encodedQuery}&setlang=en`;
-    const res = await axios.get(bingUrl, { headers, timeout: 2500 });
+    let html = '';
 
-    if (res.status === 200 && res.data) {
-      const $ = cheerio.load(res.data);
-      $('li.b_algo').each((_i, el) => {
-        const link = $(el).find('h2 a');
-        const title = link.text().trim();
-        let rawHref = link.attr('href') || '';
-        const snippet = $(el).find('.b_caption p, .b_snippet').text().trim();
-
-        const realUrl = decodeBingRedirectUrl(rawHref);
-        if (realUrl && (realUrl.startsWith('http://') || realUrl.startsWith('https://'))) {
-          candidates.push({ url: realUrl, title, snippet });
+    if (axios && typeof axios.get === 'function') {
+      const res = await axios.get(bingUrl, { headers, timeout: 2500 });
+      if (res.status === 200 && res.data) {
+        html = typeof res.data === 'string' ? res.data : String(res.data);
+      }
+    } else if (typeof fetch === 'function') {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2500);
+      try {
+        const res = await fetch(bingUrl, { headers, signal: controller.signal });
+        if (res.ok) {
+          html = await res.text();
         }
-      });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    if (html) {
+      if (cheerio && typeof cheerio.load === 'function') {
+        const $ = cheerio.load(html);
+        $('li.b_algo').each((_i, el) => {
+          const link = $(el).find('h2 a');
+          const title = link.text().trim();
+          const rawHref = link.attr('href') || '';
+          const snippet = $(el).find('.b_caption p, .b_snippet').text().trim();
+
+          const realUrl = decodeBingRedirectUrl(rawHref);
+          if (realUrl && (realUrl.startsWith('http://') || realUrl.startsWith('https://'))) {
+            candidates.push({ url: realUrl, title, snippet });
+          }
+        });
+      } else {
+        const algoRegex = /<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>([\s\S]*?)<\/li>/gi;
+        let match;
+        while ((match = algoRegex.exec(html)) !== null) {
+          const block = match[1] || '';
+          const linkMatch = block.match(/<h2[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+          if (linkMatch) {
+            const rawHref = linkMatch[1].replace(/&amp;/g, '&');
+            const title = linkMatch[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+            const snippet = snippetMatch
+              ? snippetMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+              : '';
+            const realUrl = decodeBingRedirectUrl(rawHref);
+            if (realUrl && (realUrl.startsWith('http://') || realUrl.startsWith('https://'))) {
+              candidates.push({ url: realUrl, title, snippet });
+            }
+          }
+        }
+      }
     }
   } catch (err) {
     console.warn('[LeadFinder] Search engine notice:', err?.message || err);
