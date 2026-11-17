@@ -1,7 +1,6 @@
 ---
 deployment:
   tasks:
-    - /bin/rm -f ./prebuilt/*.br ./prebuilt/*.gz ./.data/runtime-app.js ./.data/server.runtime.cjs
-    - /bin/bash -lc 'DEPLOYPATH="/home/visualsk/cold.visualsky.pro"; if [ -d "$DEPLOYPATH" ] && [ "$(cd "$PWD" && pwd -P)" != "$(cd "$DEPLOYPATH" && pwd -P)" ]; then /bin/cp -rf ./src ./server.ts ./app.cjs ./package.json ./index.html ./vite.config.ts ./tsconfig.json ./firebase-applet-config.json ./firebase-blueprint.json ./firestore.rules ./metadata.json ./public ./prebuilt ./scripts ./services ./api ./views ./models ./data "$DEPLOYPATH"/ 2>/dev/null || true; /bin/rm -f "$DEPLOYPATH"/.data/runtime-app.js "$DEPLOYPATH"/.data/server.runtime.cjs "$DEPLOYPATH"/prebuilt/*.br "$DEPLOYPATH"/prebuilt/*.gz; /bin/mkdir -p "$DEPLOYPATH/tmp"; /bin/touch "$DEPLOYPATH/tmp/restart.txt"; fi'
-    - /bin/mkdir -p ./tmp
-    - /bin/touch ./tmp/restart.txt
+    - /bin/mkdir -p tmp
+    - /bin/rm -f .data/runtime-app.js .data/server.runtime.cjs .data/firebase-runtime.js
+    - /bin/touch tmp/restart.txt

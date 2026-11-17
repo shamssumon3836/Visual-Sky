@@ -111,9 +111,13 @@ export const decodeBingRedirectUrl = (url) => {
 // Helper: Read local ledger for duplicate check fallback
 const readLocalLedger = () => {
   try {
-    const filePath = path.join(process.cwd(), 'data', 'auto_engine_ledger.json');
-    if (fs.existsSync(filePath)) {
-      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const runtimePath = path.join(process.cwd(), '.data', 'auto_engine_ledger.json');
+    if (fs.existsSync(runtimePath)) {
+      return JSON.parse(fs.readFileSync(runtimePath, 'utf-8'));
+    }
+    const seedPath = path.join(process.cwd(), 'data', 'auto_engine_ledger.json');
+    if (fs.existsSync(seedPath)) {
+      return JSON.parse(fs.readFileSync(seedPath, 'utf-8'));
     }
   } catch {}
   return [];

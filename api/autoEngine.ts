@@ -14,10 +14,30 @@ import { findLeadsForMatrix } from '../services/autoEngineLeadFinder.js';
 
 const router = Router();
 
-// Storage paths for file-backed resilience
-const DATA_DIR = path.join(process.cwd(), 'data');
+// Storage paths for file-backed resilience (stored in gitignored .data/ so cPanel Git deploys stay clean)
+const SEED_DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = process.env.VERCEL ? path.join('/tmp', '.data') : path.join(process.cwd(), '.data');
 if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch {}
+}
+
+for (const seedName of [
+  'auto_engine_campaigns.json',
+  'auto_engine_subscriptions.json',
+  'auto_engine_ledger.json',
+  'auto_engine_senders.json',
+  'vapid_keys.json',
+  'push_subscriptions.json'
+]) {
+  try {
+    const targetPath = path.join(DATA_DIR, seedName);
+    const seedPath = path.join(SEED_DATA_DIR, seedName);
+    if (!fs.existsSync(targetPath) && fs.existsSync(seedPath)) {
+      fs.copyFileSync(seedPath, targetPath);
+    }
+  } catch {}
 }
 
 const CAMPAIGNS_FILE = path.join(DATA_DIR, 'auto_engine_campaigns.json');
