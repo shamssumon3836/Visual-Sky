@@ -1638,9 +1638,9 @@ app.post('/api/auth/send-otp', async (req, res) => {
           secure: sysSecure,
           auth: { user: sysUser, pass: sysPass },
           tls: { rejectUnauthorized: false },
-          connectionTimeout: 4500,
-          greetingTimeout: 4000,
-          socketTimeout: 6000
+          connectionTimeout: 3500,
+          greetingTimeout: 3000,
+          socketTimeout: 4500
         });
 
         const sendResult = await transporter.sendMail({
@@ -1665,9 +1665,9 @@ app.post('/api/auth/send-otp', async (req, res) => {
               requireTLS: true,
               auth: { user: sysUser, pass: sysPass },
               tls: { rejectUnauthorized: false },
-              connectionTimeout: 4000,
-              greetingTimeout: 3500,
-              socketTimeout: 5000
+              connectionTimeout: 3000,
+              greetingTimeout: 2500,
+              socketTimeout: 4000
             });
             await fallback587.sendMail({
               from: `"VisualSky Security" <${fromAddr}>`,
@@ -1782,10 +1782,10 @@ app.post('/api/auth/send-otp', async (req, res) => {
       return sent;
     };
 
-    // Enforce hard 8-second deadline so reverse proxies never return 502/504
+    // Enforce hard 5.5-second deadline so reverse proxies and serverless gateways never return 502/504
     const sentViaRealSmtp = await Promise.race<boolean>([
-      attemptAllRelays(),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 8000))
+      attemptAllRelays().catch(() => false),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5500))
     ]);
 
     return res.json({
@@ -10328,7 +10328,7 @@ async function startServer() {
   const getDynamicAssetVersion = () => {
     try {
       const targetJs = getActiveAppJsPath();
-      const cached = memoryAssetCache.get(targetJs) || getCachedAsset(targetJs);
+      const cached = getCachedAsset(targetJs);
       if (cached) {
         return Math.floor(cached.mtimeMs).toString(36);
       }

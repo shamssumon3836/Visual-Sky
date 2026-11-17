@@ -1178,54 +1178,46 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     setIsLoading(true);
-    let sanitizedSmtpList: any[] = [];
-    try {
-      const stored = localStorage.getItem('visualsky_smtp');
-      const parsedStored = stored ? JSON.parse(stored) : [];
-      if (Array.isArray(parsedStored)) {
-        sanitizedSmtpList = parsedStored
-          .filter((s: any) => s && !s.isTrash && s.host && s.username && s.password)
-          .slice(0, 3)
-          .map((s: any) => ({
-            host: s.host,
-            port: s.port,
-            username: s.username,
-            password: s.password,
-            fromEmail: s.fromEmail,
-            encryption: s.encryption
-          }));
-      }
-    } catch {}
 
-    const sendOtpRequest = async (includeSmtp: boolean) => {
+    const sendOtpRequest = async () => {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
       try {
         const res = await fetch('/api/auth/send-otp', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          cache: 'no-store',
           signal: controller.signal,
-          body: JSON.stringify(
-            includeSmtp && sanitizedSmtpList.length > 0
-              ? { email: targetEmail, smtpAccounts: sanitizedSmtpList }
-              : { email: targetEmail }
-          )
+          body: JSON.stringify({ email: targetEmail })
         });
-        return await safeParseResponse(res, 'Failed to send code');
+        return await safeParseResponse(res, `Verification endpoint error (HTTP ${res.status})`);
       } finally {
         clearTimeout(timeoutId);
       }
     };
 
     try {
-      let parsed = await sendOtpRequest(true);
-      if ((!parsed.ok || !parsed.data?.success) && sanitizedSmtpList.length > 0) {
-        // Retry once cleanly without workspace SMTP payload
-        parsed = await sendOtpRequest(false);
+      let parsed = await sendOtpRequest().catch(async (firstErr) => {
+        if (firstErr?.name === 'AbortError') throw firstErr;
+        await new Promise((r) => setTimeout(r, 400));
+        return await sendOtpRequest();
+      });
+
+      if (!parsed.ok || !parsed.data?.success) {
+        // Retry once cleanly if the server had a transient error
+        await new Promise((r) => setTimeout(r, 400));
+        parsed = await sendOtpRequest();
       }
 
       if (!parsed.ok || !parsed.data?.success) {
-        throw new Error(safeString(parsed.data?.error, 'Failed to send code. Please try again.'));
+        const diagnostic = safeString(
+          parsed.data?.error || parsed.data?.message,
+          `Could not dispatch recovery code (HTTP ${parsed.status || 'unknown'}). Please refresh the page and try again.`
+        );
+        throw new Error(diagnostic);
       }
 
       if (parsed.data?.otpToken) setOtpToken(parsed.data.otpToken);
@@ -1245,9 +1237,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     } catch (err: any) {
       setIsLoading(false);
       if (err?.name === 'AbortError') {
-        setErrorMessage('Server request timed out. Please try again.');
+        setErrorMessage('Server request timed out. Please refresh and try again.');
       } else {
-        setErrorMessage(safeString(err, 'Unable to send reset code.'));
+        setErrorMessage(safeString(err, 'Unable to send reset code. Please refresh and try again.'));
       }
     }
   };
@@ -1912,8 +1904,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setForgotEmail(email);
+                        let initialForgot = email;
+                        if (!initialForgot) {
+                          try {
+                            initialForgot = localStorage.getItem(REMEMBER_EMAIL_KEY) || '';
+                          } catch {}
+                        }
+                        setErrorMessage('');
+                        setSuccessMessage('');
+                        setForgotEmail(initialForgot);
                         setForgotPhase('request');
+                        setFallbackOtpCode('');
                         setAuthMode('forgot_password');
                       }}
                       className="text-xs text-cyan-400 hover:text-cyan-300 font-medium transition cursor-pointer"

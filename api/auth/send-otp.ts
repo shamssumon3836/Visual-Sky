@@ -37,7 +37,7 @@ export default async function handler(req: any, res: any) {
     const cleanEmail = email.trim().toLowerCase();
 
     // Generate random 6-digit numeric OTP code
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpCode = crypto.randomInt(100000, 999999).toString();
     const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutes validity
 
     // Create secure cryptographic HMAC token so verification works across serverless lambdas
@@ -84,9 +84,9 @@ export default async function handler(req: any, res: any) {
           secure: smtpPort === 465 || process.env.SMTP_SECURE === 'true',
           auth: { user: smtpUser, pass: smtpPass },
           tls: { rejectUnauthorized: false },
-          connectionTimeout: 4000,
-          greetingTimeout: 3500,
-          socketTimeout: 5000
+          connectionTimeout: 3500,
+          greetingTimeout: 3000,
+          socketTimeout: 4500
         });
 
         const sendResult = await transporter.sendMail({
@@ -111,9 +111,9 @@ export default async function handler(req: any, res: any) {
               requireTLS: true,
               auth: { user: smtpUser, pass: smtpPass },
               tls: { rejectUnauthorized: false },
-              connectionTimeout: 3500,
-              greetingTimeout: 3000,
-              socketTimeout: 4500
+              connectionTimeout: 3000,
+              greetingTimeout: 2500,
+              socketTimeout: 4000
             });
             await fallback587.sendMail({
               from: `"VisualSky Security" <${smtpFrom}>`,
@@ -166,9 +166,9 @@ export default async function handler(req: any, res: any) {
               secure: cSecure,
               auth: { user: customSmtp.username, pass: customSmtp.password },
               tls: { rejectUnauthorized: false },
-              connectionTimeout: 3500,
-              greetingTimeout: 3000,
-              socketTimeout: 4500
+              connectionTimeout: 3000,
+              greetingTimeout: 2500,
+              socketTimeout: 4000
             });
             await cTransporter.sendMail({
               from: `"VisualSky Security" <${cFrom}>`,
@@ -187,8 +187,8 @@ export default async function handler(req: any, res: any) {
     };
 
     const sentViaRealSmtp = await Promise.race<boolean>([
-      attemptRelays(),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 7500))
+      attemptRelays().catch(() => false),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5500))
     ]);
 
     return res.status(200).json({
