@@ -286,6 +286,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setSignupStep('form');
       setSignupOtpDigits(['', '', '', '', '', '']);
       setSignupFallbackOtp('');
+      setForgotPhase('request');
+      setFallbackOtpCode('');
 
       fetch('/api/settings/payment')
         .then((r) => r.json())
@@ -320,6 +322,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setSignupStep('form');
     setSignupOtpDigits(['', '', '', '', '', '']);
     setSignupFallbackOtp('');
+    setForgotPhase('request');
+    setFallbackOtpCode('');
   }, [portalType, authMode]);
 
   useEffect(() => {
@@ -1174,22 +1178,54 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     setIsLoading(true);
-    let localSmtpList: any[] = [];
+    let sanitizedSmtpList: any[] = [];
     try {
       const stored = localStorage.getItem('visualsky_smtp');
-      if (stored) localSmtpList = JSON.parse(stored);
+      const parsedStored = stored ? JSON.parse(stored) : [];
+      if (Array.isArray(parsedStored)) {
+        sanitizedSmtpList = parsedStored
+          .filter((s: any) => s && !s.isTrash && s.host && s.username && s.password)
+          .slice(0, 3)
+          .map((s: any) => ({
+            host: s.host,
+            port: s.port,
+            username: s.username,
+            password: s.password,
+            fromEmail: s.fromEmail,
+            encryption: s.encryption
+          }));
+      }
     } catch {}
 
-    try {
-      const res = await fetch('/api/auth/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: targetEmail, smtpAccounts: localSmtpList })
-      });
+    const sendOtpRequest = async (includeSmtp: boolean) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      try {
+        const res = await fetch('/api/auth/send-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify(
+            includeSmtp && sanitizedSmtpList.length > 0
+              ? { email: targetEmail, smtpAccounts: sanitizedSmtpList }
+              : { email: targetEmail }
+          )
+        });
+        return await safeParseResponse(res, 'Failed to send code');
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
 
-      const parsed = await safeParseResponse(res, 'Failed to send code');
+    try {
+      let parsed = await sendOtpRequest(true);
+      if ((!parsed.ok || !parsed.data?.success) && sanitizedSmtpList.length > 0) {
+        // Retry once cleanly without workspace SMTP payload
+        parsed = await sendOtpRequest(false);
+      }
+
       if (!parsed.ok || !parsed.data?.success) {
-        throw new Error(safeString(parsed.data?.error, 'Failed to send code.'));
+        throw new Error(safeString(parsed.data?.error, 'Failed to send code. Please try again.'));
       }
 
       if (parsed.data?.otpToken) setOtpToken(parsed.data.otpToken);
@@ -1199,12 +1235,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setResendCooldown(60);
       setForgotPhase('verify');
       setIsLoading(false);
-      setSuccessMessage(`6-digit reset code sent to ${targetEmail}.`);
+      setSuccessMessage(
+        parsed.data?.emergencyOtp
+          ? `6-digit recovery code generated for ${targetEmail}. Use the code below.`
+          : `6-digit reset code sent to ${targetEmail}. Please check Inbox & Spam.`
+      );
 
       setTimeout(() => otpInputRefs.current[0]?.focus(), 100);
     } catch (err: any) {
       setIsLoading(false);
-      setErrorMessage(err?.message || 'Unable to send reset code.');
+      if (err?.name === 'AbortError') {
+        setErrorMessage('Server request timed out. Please try again.');
+      } else {
+        setErrorMessage(safeString(err, 'Unable to send reset code.'));
+      }
     }
   };
 

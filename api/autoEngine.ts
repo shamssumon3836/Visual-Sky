@@ -10,6 +10,7 @@ import {
   SenderAccount,
   PushSubscription
 } from '../models/autoEngine.js';
+import { findLeadsForMatrix } from '../services/autoEngineLeadFinder.js';
 
 const router = Router();
 
@@ -639,6 +640,40 @@ router.get('/api/auto-engine/stats', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// 9. POST /api/auto-campaign/test-scrape — Test Lead Finder Scraper for Niche & City (Day 2 Lead Miner)
+router.post('/api/auto-campaign/test-scrape', async (req: Request, res: Response) => {
+  console.log('[AutoEngine] Received POST /api/auto-campaign/test-scrape', req.body);
+  console.time('test-scrape-duration');
+  try {
+    const niche = String(req.body?.niche || 'Videographer').trim();
+    const city = String(req.body?.city || 'London').trim();
+    const batchSize = Math.min(Number(req.body?.batchSize) || 3, 10);
+
+    const leads = await (findLeadsForMatrix as any)({
+      niches: [niche],
+      cities: [city],
+      batchSize
+    });
+    console.timeEnd('test-scrape-duration');
+    console.log('[AutoEngine] Finished test-scrape, leads found:', leads.length);
+
+    return res.json({
+      success: true,
+      message: `Successfully discovered and AI-verified ${leads.length} leads for "${niche}" in "${city}"! 🚀`,
+      niche,
+      city,
+      count: leads.length,
+      leads
+    });
+  } catch (err: any) {
+    console.error('[AutoEngine] Test scrape error:', err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to execute lead scraper test'
+    });
   }
 });
 

@@ -390,6 +390,45 @@ VisualSky Production Team</textarea>
           </div>
         </div>
 
+        <!-- CARD 3: Day 2 AI Lead Miner Test -->
+        <div class="glass-panel p-5 rounded-3xl border border-cyan-500/30 space-y-4">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div>
+              <h4 class="text-sm font-black text-white flex items-center gap-2">
+                <span>🔍 Day 2: Lead Miner & AI Gatekeeper</span>
+              </h4>
+              <p class="text-[11px] text-slate-400">Mine organic prospects with Gemini 2.0 Flash</p>
+            </div>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+              Live
+            </span>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-[10px] font-bold uppercase text-slate-400 mb-1">Target Niche</label>
+              <input type="text" id="test-scrape-niche" value="Videographer" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-cyan-500">
+            </div>
+            <div>
+              <label class="block text-[10px] font-bold uppercase text-slate-400 mb-1">Target City</label>
+              <input type="text" id="test-scrape-city" value="London" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-cyan-500">
+            </div>
+          </div>
+
+          <button
+            type="button"
+            id="btn-run-test-scrape"
+            class="w-full py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-cyan-500/20"
+          >
+            <span>⚡</span>
+            <span id="btn-scrape-text">Run 3-Lead Scraper Test</span>
+          </button>
+
+          <div id="test-scrape-results" class="space-y-2 text-xs hidden">
+            <!-- Scraped leads preview injected here -->
+          </div>
+        </div>
+
       </div>
 
     </div>
@@ -895,10 +934,59 @@ VisualSky Production Team</textarea>
       }
     };
 
+    // Day 2 Test Scraper & AI Gatekeeper
+    async function runTestScraper() {
+      const niche = document.getElementById('test-scrape-niche').value.trim() || 'Videographer';
+      const city = document.getElementById('test-scrape-city').value.trim() || 'London';
+      const btn = document.getElementById('btn-run-test-scrape');
+      const btnText = document.getElementById('btn-scrape-text');
+      const resultsContainer = document.getElementById('test-scrape-results');
+
+      try {
+        btn.disabled = true;
+        btnText.textContent = 'Mining & AI Gatekeeping...';
+        resultsContainer.classList.remove('hidden');
+        resultsContainer.innerHTML = '<div class="p-3 text-center text-slate-400 text-xs">Querying search engine & running Gemini 2.0 Flash AI Gatekeeper... ⏳</div>';
+
+        const res = await fetch('/api/auto-campaign/test-scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ niche, city, batchSize: 3 })
+        });
+
+        const data = await res.json();
+
+        if (data.success && data.leads && data.leads.length > 0) {
+          displayToast(`✅ Found & verified ${data.leads.length} leads for ${niche}!`, 'success');
+          resultsContainer.innerHTML = data.leads.map((lead, idx) => `
+            <div class="p-2.5 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-white text-xs">${idx + 1}. ${lead.businessName}</span>
+                <span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">AI Verified</span>
+              </div>
+              <a href="${lead.websiteUrl}" target="_blank" rel="noopener noreferrer" class="text-[11px] text-cyan-400 hover:underline flex items-center gap-1 truncate">
+                <span>🌐</span><span>${lead.websiteUrl}</span>
+              </a>
+              <p class="text-[10px] text-slate-400 line-clamp-2">${lead.snippet || lead.pageTitle || ''}</p>
+            </div>
+          `).join('');
+        } else {
+          resultsContainer.innerHTML = `<div class="p-3 text-center text-rose-400 text-xs">${data.error || 'No verified leads found.'}</div>`;
+        }
+      } catch (err) {
+        resultsContainer.innerHTML = '<div class="p-3 text-center text-rose-400 text-xs">Network error while running test scraper.</div>';
+      } finally {
+        btn.disabled = false;
+        btnText.textContent = 'Run 3-Lead Scraper Test';
+      }
+    }
+
     // Event Listeners
     document.getElementById('btn-enable-push').onclick = subscribeToPushAlerts;
     document.getElementById('btn-test-push').onclick = sendTestPushAlert;
     document.getElementById('btn-refresh-senders').onclick = loadConnectedSenders;
+    const btnScrape = document.getElementById('btn-run-test-scrape');
+    if (btnScrape) btnScrape.onclick = runTestScraper;
 
     // Boot
     window.addEventListener('DOMContentLoaded', () => {

@@ -1,5 +1,23 @@
 [
   {
+    "_id": "camp_1793635987978",
+    "campaignName": "Videographer Multi-Niche 7-Day Auto Campaign",
+    "niches": [
+      "Videographer"
+    ],
+    "targetCities": [
+      "London"
+    ],
+    "daysDuration": 7,
+    "currentDay": 1,
+    "dailyQuotaPerSender": 30,
+    "emailPitchTemplate": "",
+    "portfolioLinks": [],
+    "status": "Active",
+    "createdAt": "2026-11-02T16:13:07.978Z",
+    "updatedAt": "2026-11-02T16:13:07.978Z"
+  },
+  {
     "_id": "camp_1793540781880",
     "campaignName": "Videographer Multi-Niche 7-Day Auto Campaign",
     "niches": [
